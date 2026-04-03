@@ -61,6 +61,9 @@ class TaskActivity : AppCompatActivity(), FolderSelectorCallback{
     private lateinit var onSuccessDropdown: Spinner
 
 
+    private lateinit var onSuccessCommand: EditText
+    private lateinit var onFailureCommand: EditText
+
     private lateinit var filterOptionsButton: ImageButton
 
 
@@ -134,6 +137,8 @@ class TaskActivity : AppCompatActivity(), FolderSelectorCallback{
         fab = findViewById(R.id.saveButton)
         switchWifi = findViewById(R.id.task_wifionly)
         switchMD5sum = findViewById(R.id.task_md5sum)
+        onSuccessCommand = findViewById(R.id.task_on_success_command)
+        onFailureCommand = findViewById(R.id.task_on_failure_command)
 
         rcloneInstance = Rclone(this)
         dbHandler = DatabaseHandler(this)
@@ -176,6 +181,8 @@ class TaskActivity : AppCompatActivity(), FolderSelectorCallback{
         switchWifi.isChecked = existingTask?.wifionly ?: false
         switchMD5sum.isChecked = existingTask?.md5sum ?: false
         switchDeleteExcluded.isChecked = existingTask?.deleteExcluded ?: false
+        onSuccessCommand.setText(existingTask?.onSuccessCommand ?: "")
+        onFailureCommand.setText(existingTask?.onFailureCommand ?: "")
         prepareSyncDirectionDropdown()
         prepareLocal()
         prepareRemote()
@@ -254,6 +261,8 @@ class TaskActivity : AppCompatActivity(), FolderSelectorCallback{
         taskToPopulate.filterId = if(filterDropdown.selectedItemPosition == 0 || filterDropdown.selectedItemPosition == -1) null else filterItems[filterDropdown.selectedItemPosition - 1].id
         taskToPopulate.onFailFollowup = (onFailDropdown.selectedItem as TaskNameIdPair).id
         taskToPopulate.onSuccessFollowup = (onSuccessDropdown.selectedItem as TaskNameIdPair).id
+        taskToPopulate.onSuccessCommand = onSuccessCommand.text.toString()
+        taskToPopulate.onFailureCommand = onFailureCommand.text.toString()
 
         // Verify if data is completed
         if (localPath.text.toString() == "") {

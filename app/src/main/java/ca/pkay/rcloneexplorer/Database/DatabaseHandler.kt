@@ -17,6 +17,8 @@ import ca.pkay.rcloneexplorer.Database.DatabaseInfo.Companion.SQL_UPDATE_TASK_AD
 import ca.pkay.rcloneexplorer.Database.DatabaseInfo.Companion.SQL_UPDATE_TASK_ADD_FILTER_ID
 import ca.pkay.rcloneexplorer.Database.DatabaseInfo.Companion.SQL_UPDATE_TASK_ADD_FOLLOWUPS_FAIL
 import ca.pkay.rcloneexplorer.Database.DatabaseInfo.Companion.SQL_UPDATE_TASK_ADD_FOLLOWUPS_SUCCESS
+import ca.pkay.rcloneexplorer.Database.DatabaseInfo.Companion.SQL_UPDATE_TASK_ADD_ON_SUCCESS_COMMAND
+import ca.pkay.rcloneexplorer.Database.DatabaseInfo.Companion.SQL_UPDATE_TASK_ADD_ON_FAILURE_COMMAND
 import ca.pkay.rcloneexplorer.Database.DatabaseInfo.Companion.SQL_UPDATE_TRIGGER_ADD_TYPE
 import ca.pkay.rcloneexplorer.Items.Filter
 import ca.pkay.rcloneexplorer.Items.Task
@@ -37,6 +39,8 @@ class DatabaseHandler(context: Context?) :
         sqLiteDatabase.execSQL(SQL_UPDATE_TASK_ADD_DELETE_EXCLUDED)
         sqLiteDatabase.execSQL(SQL_UPDATE_TASK_ADD_FOLLOWUPS_FAIL)
         sqLiteDatabase.execSQL(SQL_UPDATE_TASK_ADD_FOLLOWUPS_SUCCESS)
+        sqLiteDatabase.execSQL(SQL_UPDATE_TASK_ADD_ON_SUCCESS_COMMAND)
+        sqLiteDatabase.execSQL(SQL_UPDATE_TASK_ADD_ON_FAILURE_COMMAND)
     }
 
     override fun onUpgrade(sqLiteDatabase: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -58,6 +62,12 @@ class DatabaseHandler(context: Context?) :
         if (oldVersion < 6) {
             sqLiteDatabase.execSQL(SQL_UPDATE_TASK_ADD_FOLLOWUPS_FAIL)
             sqLiteDatabase.execSQL(SQL_UPDATE_TASK_ADD_FOLLOWUPS_SUCCESS)
+        }
+        if (oldVersion < 7) {
+            sqLiteDatabase.execSQL(SQL_UPDATE_TASK_ADD_ON_SUCCESS_COMMAND)
+        }
+        if (oldVersion < 8) {
+            sqLiteDatabase.execSQL(SQL_UPDATE_TASK_ADD_ON_FAILURE_COMMAND)
         }
     }
 
@@ -143,7 +153,9 @@ class DatabaseHandler(context: Context?) :
             Task.COLUMN_NAME_FILTER_ID,
             Task.COLUMN_NAME_DELETE_EXCLUDED,
             Task.COLUMN_NAME_ONFAIL_FOLLOWUP,
-            Task.COLUMN_NAME_ONSUCCESS_FOLLOWUP
+            Task.COLUMN_NAME_ONSUCCESS_FOLLOWUP,
+            Task.COLUMN_NAME_ON_SUCCESS_COMMAND,
+            Task.COLUMN_NAME_ON_FAILURE_COMMAND
         )
 
     private fun taskFromCursor(cursor: Cursor): Task {
@@ -160,6 +172,8 @@ class DatabaseHandler(context: Context?) :
         task.deleteExcluded = getBoolean(cursor, 10)
         task.onFailFollowup = cursor.getLong(11)
         task.onSuccessFollowup = cursor.getLong(12)
+        task.onSuccessCommand = cursor.getString(13) ?: ""
+        task.onFailureCommand = cursor.getString(14) ?: ""
         return task
     }
 
@@ -192,6 +206,8 @@ class DatabaseHandler(context: Context?) :
         values.put(Task.COLUMN_NAME_DELETE_EXCLUDED, task.deleteExcluded)
         values.put(Task.COLUMN_NAME_ONFAIL_FOLLOWUP, task.onFailFollowup)
         values.put(Task.COLUMN_NAME_ONSUCCESS_FOLLOWUP, task.onSuccessFollowup)
+        values.put(Task.COLUMN_NAME_ON_SUCCESS_COMMAND, task.onSuccessCommand)
+        values.put(Task.COLUMN_NAME_ON_FAILURE_COMMAND, task.onFailureCommand)
         return values
     }
 

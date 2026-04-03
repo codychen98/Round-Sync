@@ -21,6 +21,8 @@ data class Task(var id: Long) {
     var deleteExcluded = false
     var onFailFollowup: Long? = null
     var onSuccessFollowup: Long? = null
+    var onSuccessCommand: String = ""
+    var onFailureCommand: String = ""
 
     override fun toString(): String {
         return "$title: $remoteId: $remoteType: $remotePath: $localPath: $direction"
@@ -41,6 +43,8 @@ data class Task(var id: Long) {
         var COLUMN_NAME_DELETE_EXCLUDED = "task_delete_excluded"
         var COLUMN_NAME_ONFAIL_FOLLOWUP = "task_onFailFollowupTask"
         var COLUMN_NAME_ONSUCCESS_FOLLOWUP = "task_onSuccessFollowupTask"
+        var COLUMN_NAME_ON_SUCCESS_COMMAND = "task_on_complete_command"
+        var COLUMN_NAME_ON_FAILURE_COMMAND = "task_on_failure_command"
 
         const val TASK_MD5SUM_DEFAULT = false
         const val TASK_WIFIONLY_DEFAULT = false

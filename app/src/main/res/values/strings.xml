@@ -364,6 +364,12 @@
     <string name="task_edit_description_filter">Select a filter to filter file/folder patterns. You can only select one filter at a time! To select no filter, choose "no filter" in the dropdown.</string>
     <string name="task_edit_exclude_delete_toggle_text">Delete excluded files from destination</string>
     <string name="task_edit_filter_options_button">Filter Options</string>
+    <string name="task_edit_label_on_success">Broadcast on Success</string>
+    <string name="task_edit_hint_on_success_command">e.g. action.intent.action.MangaSync</string>
+    <string name="task_edit_description_on_success">Broadcast intent action to send when sync succeeds. Leave empty to skip.</string>
+    <string name="task_edit_label_on_failure">Broadcast on Failure</string>
+    <string name="task_edit_hint_on_failure_command">e.g. action.intent.action.SyncFailed</string>
+    <string name="task_edit_description_on_failure">Broadcast intent action to send when sync fails. Leave empty to skip.</string>
     <string name="filter_edit_label_name">General Information</string>
     <string name="filter_edit_label_filters">Filters</string>
     <string name="filter_edit_hint_title">Title</string>

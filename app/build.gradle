@@ -8,6 +8,12 @@ android {
             keyAlias 'fdroid'
             storeFile file('.config/android/roundsync.keystore')
         }
+        debug {
+            storeFile file("${System.getProperty('user.home')}/.android/debug.keystore")
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
     }
     ndkVersion project.properties['de.felixnuesse.extract.ndkVersion']
     defaultConfig {
@@ -37,6 +43,7 @@ android {
 
     buildTypes {
         debug {
+            signingConfig signingConfigs.debug
             minifyEnabled false
             shrinkResources false
             manifestPlaceholders = [
@@ -76,10 +83,16 @@ android {
 
     splits {
         abi {
+            def buildAll = gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') }
             enable true
             reset()
-            include 'x86', 'x86_64', 'armeabi-v7a', 'arm64-v8a'
-            universalApk true
+            if (buildAll) {
+                include 'x86', 'x86_64', 'armeabi-v7a', 'arm64-v8a'
+                universalApk true
+            } else {
+                include 'arm64-v8a'
+                universalApk false
+            }
         }
     }
 
@@ -117,11 +130,10 @@ android {
 
     buildTypes {
         getByName("debug") {
-            applicationIdSuffix = ".debug"
             versionNameSuffix = "-DEBUG"
-            buildConfigField "java.lang.String", "VCP_AUTHORITY", "\"" + defaultConfig.applicationId + ".debug.vcp\"";
-            resValue("string", "app_name", "RS Debug")
-            resValue("string", "app_short_name", "RS Debug")
+            buildConfigField "java.lang.String", "VCP_AUTHORITY", "\"" + defaultConfig.applicationId + ".vcp\"";
+            resValue("string", "app_name", "RoundSync")
+            resValue("string", "app_short_name", "RoundSync")
         }
     }
 
@@ -133,7 +145,13 @@ android {
     }
 
     gradle.projectsEvaluated {
-        preBuild.dependsOn(':rclone:buildAll')
+        // Only build arm64 rclone for debug, all architectures for release
+        tasks.matching { it.name.contains('Debug') && it.name.startsWith('pre') }.configureEach {
+            dependsOn(':rclone:buildArm64')
+        }
+        tasks.matching { it.name.contains('Release') && it.name.startsWith('pre') }.configureEach {
+            dependsOn(':rclone:buildAll')
+        }
     }
 
     namespace 'ca.pkay.rcloneexplorer'

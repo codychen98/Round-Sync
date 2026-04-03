@@ -184,14 +184,11 @@ class SyncWorker (private var mContext: Context, workerParams: WorkerParameters)
                     try {
                         val logline = JSONObject(line)
                         //todo: migrate this to StatusObject, so that we can handle everything properly.
-                        if (logline.getString("level") == "error") {
-                            if (sIsLoggingEnabled) {
-                                log2File?.log(line)
-                            }
-                            statusObject.parseLoglineToStatusObject(logline)
-                        } else if (logline.getString("level") == "warning") {
-                            statusObject.parseLoglineToStatusObject(logline)
+                        val level = logline.getString("level")
+                        if (level == "error" && sIsLoggingEnabled) {
+                            log2File?.log(line)
                         }
+                        statusObject.parseLoglineToStatusObject(logline)
 
                         updateForegroundNotification(mNotificationManager.updateSyncNotification(
                             title,
@@ -235,6 +232,7 @@ class SyncWorker (private var mContext: Context, workerParams: WorkerParameters)
         when (failureReason) {
             FAILURE_REASON.NO_FAILURE -> {
                 showSuccessNotification(notificationId)
+                runOnSuccessCommand()
                 followupTask(mTask.onSuccessFollowup)
                 return
             }
@@ -259,6 +257,7 @@ class SyncWorker (private var mContext: Context, workerParams: WorkerParameters)
                 content = mContext.getString(R.string.operation_failed_unknown_rclone_error, mTitle)
             }
         }
+        runOnFailureCommand()
         followupTask(mTask.onFailFollowup)
         showFailNotification(notificationId, content)
         endNotificationAlreadyPosted = true
@@ -433,6 +432,28 @@ class SyncWorker (private var mContext: Context, workerParams: WorkerParameters)
                 failureReason = FAILURE_REASON.CONNECTIVITY_CHANGED
             }
         }
+
+    private fun runOnSuccessCommand() {
+        val action = mTask.onSuccessCommand
+        if (action.isBlank()) return
+        try {
+            FLog.i(TAG, "Sending on-success broadcast: $action")
+            mContext.sendBroadcast(Intent(action))
+        } catch (e: Exception) {
+            FLog.e(TAG, "On-success broadcast failed", e)
+        }
+    }
+
+    private fun runOnFailureCommand() {
+        val action = mTask.onFailureCommand
+        if (action.isBlank()) return
+        try {
+            FLog.i(TAG, "Sending on-failure broadcast: $action")
+            mContext.sendBroadcast(Intent(action))
+        } catch (e: Exception) {
+            FLog.e(TAG, "On-failure broadcast failed", e)
+        }
+    }
 
     private fun followupTask(followUpTaskID: Long?) {
         if (followUpTaskID == null || followUpTaskID == -1L) {

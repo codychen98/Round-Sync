@@ -702,14 +702,15 @@ public class MainActivity extends AppCompatActivity
                 try {
                     String json = rclone.readDatabaseJson(uris[0]);
                     Importer.importJson(json, context);
-                    json = rclone.readSharedPrefs(uris[0]);
-                    SharedPreferencesBackup.importJson(json, context);
-                } catch (JSONException e) {
-                    statusCode = FAILURE_ZIP_INVALID_JSON;
-                    return false;
                 } catch (Exception e) {
-                    statusCode = FAILURE_ZIP_NO_JSON;
-                    return false;
+                    // rcx.json missing or invalid - not fatal, old backups may not have it
+                }
+
+                try {
+                    String json = rclone.readSharedPrefs(uris[0]);
+                    SharedPreferencesBackup.importJson(json, context);
+                } catch (Exception e) {
+                    // rcx.prefs missing or invalid - not fatal, old backups may not have it
                 }
                 return true;
             }
