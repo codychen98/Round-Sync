@@ -105,30 +105,37 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         }
 
         if (showThumbnails && !item.isDir()) {
-            String server = "http://127.0.0.1:29179/";
             boolean localLoad = item.getRemote().getType() == RemoteItem.SAFW;
             String mimeType = item.getMimeType();
-            if ((mimeType.startsWith("image/") || mimeType.startsWith("video/")) && item.getSize() <= sizeLimit) {
+
+            if (mimeType.startsWith("image/") && item.getSize() <= sizeLimit) {
                 holder.fileIcon.setImageTintList(null);
                 RequestOptions glideOption = new RequestOptions()
                         .centerCrop()
                         .diskCacheStrategy(DiskCacheStrategy.ALL)
                         .placeholder(R.drawable.ic_file);
-                if(localLoad) {
+                if (localLoad) {
                     bindSafFile(holder, item, glideOption);
                 } else {
-                    String[] serverParams = listener.getThumbnailServerParams();
-                    String hiddenPath = serverParams[0];
-                    int serverPort = Integer.parseInt(serverParams[1]);
-                    String url = "http://127.0.0.1:" + serverPort + "/" + hiddenPath + '/' + item.getPath();
-                    Glide
-                            .with(context)
+                    String url = buildThumbnailUrl(item);
+                    Glide.with(context)
                             .load(new PersistentGlideUrl(url))
                             .apply(glideOption)
                             .thumbnail(0.1f)
                             .into(holder.fileIcon);
                 }
-
+            } else if (mimeType.startsWith("video/") && !localLoad) {
+                holder.fileIcon.setImageTintList(null);
+                String url = buildThumbnailUrl(item);
+                RequestOptions glideOption = new RequestOptions()
+                        .centerCrop()
+                        .diskCacheStrategy(DiskCacheStrategy.ALL)
+                        .placeholder(R.drawable.ic_file);
+                Glide.with(context)
+                        .asBitmap()
+                        .load(Uri.parse(url))
+                        .apply(glideOption)
+                        .into(holder.fileIcon);
             } else {
                 Glide.with(context).clear(holder.fileIcon);
                 holder.fileIcon.setImageTintList(holder.defaultIconTint);
@@ -203,6 +210,21 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 onLongClickAction(item, holder);
             }
         });
+    }
+
+    private String buildThumbnailUrl(FileItem item) {
+        String[] serverParams = listener.getThumbnailServerParams();
+        String hiddenPath = serverParams[0];
+        int serverPort = Integer.parseInt(serverParams[1]);
+        Uri.Builder builder = Uri.parse("http://127.0.0.1:" + serverPort)
+                .buildUpon()
+                .appendEncodedPath(hiddenPath);
+        for (String seg : item.getPath().split("/")) {
+            if (!seg.isEmpty()) {
+                builder.appendPath(seg);
+            }
+        }
+        return builder.build().toString();
     }
 
     private void bindSafFile(@NonNull ViewHolder holder, FileItem item, RequestOptions glideOption) {

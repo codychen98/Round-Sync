@@ -237,7 +237,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
 
         SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
         sortOrder = sharedPreferences.getInt(SHARED_PREFS_SORT_ORDER, SortDialog.ALPHA_ASCENDING);
-        showThumbnails = sharedPreferences.getBoolean(getString(R.string.pref_key_show_thumbnails), false);
+        showThumbnails = sharedPreferences.getBoolean(getString(R.string.pref_key_show_thumbnails), true);
         isDarkTheme = ActivityHelper.isDarkTheme(this.getActivity());
         goToDefaultSet = sharedPreferences.getBoolean(getString(R.string.pref_key_go_to_default_set), false);
         String wrapFilenamesKey = getString(R.string.pref_key_wrap_filenames);
