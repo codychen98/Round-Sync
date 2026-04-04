@@ -27,6 +27,7 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 
+import ca.pkay.rcloneexplorer.Glide.VideoThumbnailUrl;
 import ca.pkay.rcloneexplorer.Items.FileItem;
 import ca.pkay.rcloneexplorer.Items.RemoteItem;
 import ca.pkay.rcloneexplorer.R;
@@ -132,8 +133,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         .diskCacheStrategy(DiskCacheStrategy.ALL)
                         .placeholder(R.drawable.ic_file);
                 Glide.with(context)
-                        .asBitmap()
-                        .load(Uri.parse(url))
+                        .load(new VideoThumbnailUrl(url))
                         .apply(glideOption)
                         .into(holder.fileIcon);
             } else {
