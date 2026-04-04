@@ -28,7 +28,6 @@
             android:id="@+id/file_explorer_list"
             android:clipToPadding="false"
             android:paddingBottom="54dp"
-            app:layoutManager="LinearLayoutManager"
             tools:listitem="@layout/fragment_file_explorer_item" />
     </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 

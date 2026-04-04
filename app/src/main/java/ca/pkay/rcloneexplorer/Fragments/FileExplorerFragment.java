@@ -7,6 +7,7 @@ import static ca.pkay.rcloneexplorer.util.ActivityHelper.tryStartService;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.BroadcastReceiver;
+import android.content.res.Configuration;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -45,6 +46,7 @@ import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentActivity;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import androidx.preference.PreferenceManager;
+import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
@@ -144,7 +146,10 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     private String remoteName;
     private FileExplorerRecyclerViewAdapter recyclerViewAdapter;
     private LinearLayoutManager recyclerViewLinearLayoutManager;
+    private RecyclerView recyclerView;
     private SwipeRefreshLayout swipeRefreshLayout;
+    private MenuItem menuToggleViewMode;
+    private boolean isGridMode = false;
     private View searchBar;
     private View searchButton;
     private View searchClear;
@@ -278,16 +283,16 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
 
         Context context = view.getContext();
 
-        RecyclerView recyclerView = view.findViewById(R.id.file_explorer_list);
-        recyclerViewLinearLayoutManager = new LinearLayoutManager(context);
+        recyclerView = view.findViewById(R.id.file_explorer_list);
+        isGridMode = loadViewModeForCurrentFolder();
         recyclerView.setItemAnimator(new LandingAnimator());
-        recyclerView.setLayoutManager(recyclerViewLinearLayoutManager);
         View emptyFolderView = view.findViewById(R.id.empty_folder_view);
         View noSearchResultsView = view.findViewById(R.id.no_search_results_view);
         recyclerViewAdapter = new FileExplorerRecyclerViewAdapter(context, emptyFolderView, noSearchResultsView, this);
         recyclerViewAdapter.showThumbnails(showThumbnails);
         recyclerViewAdapter.setWrapFileNames(wrapFilenames);
         recyclerView.setAdapter(recyclerViewAdapter);
+        applyViewMode(false);
 
         if (remote.isRemoteType(RemoteItem.SFTP) && !goToDefaultSet & savedInstanceState == null) {
             showSFTPgoToDialog();
@@ -588,6 +593,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         menuLink = menu.findItem(R.id.action_link);
         menuHttpServe = menu.findItem(R.id.action_serve);
         menuEmptyTrash = menu.findItem(R.id.action_empty_trash);
+        menuToggleViewMode = menu.findItem(R.id.action_toggle_view_mode);
+        updateToggleMenuIcon();
 
         if (!remote.hasTrashCan()) {
             menu.findItem(R.id.action_empty_trash).setVisible(false);
@@ -612,6 +619,9 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             return;
         }
 
+        if (menuToggleViewMode != null) {
+            menuToggleViewMode.setVisible(setVisible);
+        }
         menuHttpServe.setVisible(setVisible);
         if (!setVisible && isInMoveMode) {
             menuSelectAll.setVisible(false);
@@ -634,6 +644,10 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         int id = item.getItemId();
 
         switch (id) {
+            case R.id.action_toggle_view_mode:
+                isGridMode = !isGridMode;
+                applyViewMode(true);
+                return true;
             case R.id.action_sort:
                 showSortMenu();
                 return true;
@@ -762,6 +776,75 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             }
         }
         throw new IllegalStateException("No port available");
+    }
+
+    private String getViewModeKey() {
+        return getString(R.string.pref_key_view_mode_prefix)
+                + remote.getName() + ":" + directoryObject.getCurrentPath();
+    }
+
+    private boolean loadViewModeForCurrentFolder() {
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+        String mode = prefs.getString(getViewModeKey(), "list");
+        return "grid".equals(mode);
+    }
+
+    private void saveViewModeForCurrentFolder(boolean gridMode) {
+        PreferenceManager.getDefaultSharedPreferences(context)
+                .edit()
+                .putString(getViewModeKey(), gridMode ? "grid" : "list")
+                .apply();
+    }
+
+    private void applyViewMode(boolean save) {
+        if (isGridMode) {
+            int spanCount = calculateSpanCount();
+            GridLayoutManager glm = new GridLayoutManager(context, spanCount);
+            recyclerViewLinearLayoutManager = glm;
+            recyclerView.setLayoutManager(glm);
+            recyclerViewAdapter.setViewMode(
+                    FileExplorerRecyclerViewAdapter.VIEW_MODE_GRID);
+        } else {
+            recyclerViewLinearLayoutManager = new LinearLayoutManager(context);
+            recyclerView.setLayoutManager(recyclerViewLinearLayoutManager);
+            recyclerViewAdapter.setViewMode(
+                    FileExplorerRecyclerViewAdapter.VIEW_MODE_LIST);
+        }
+        updateToggleMenuIcon();
+        if (save) {
+            saveViewModeForCurrentFolder(isGridMode);
+        }
+    }
+
+    private int calculateSpanCount() {
+        float screenWidthDp = getResources().getDisplayMetrics().widthPixels
+                / getResources().getDisplayMetrics().density;
+        int columnWidthDp = 120;
+        int spanCount = (int) (screenWidthDp / columnWidthDp);
+        return Math.max(2, spanCount);
+    }
+
+    private void updateToggleMenuIcon() {
+        if (menuToggleViewMode == null) return;
+        if (isGridMode) {
+            menuToggleViewMode.setIcon(R.drawable.ic_round_list_24);
+            menuToggleViewMode.setTitle(R.string.view_mode_list);
+        } else {
+            menuToggleViewMode.setIcon(R.drawable.ic_grid_view);
+            menuToggleViewMode.setTitle(R.string.view_mode_grid);
+        }
+    }
+
+    @Override
+    public void onConfigurationChanged(@NonNull Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (isGridMode && recyclerView != null) {
+            int newSpanCount = calculateSpanCount();
+            RecyclerView.LayoutManager lm = recyclerView.getLayoutManager();
+            if (lm instanceof GridLayoutManager) {
+                ((GridLayoutManager) lm).setSpanCount(newSpanCount);
+            }
+        }
     }
 
     private void searchClicked() {
@@ -1171,6 +1254,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             directoryObject.setPath(path);
             fetchDirectoryTask = new FetchDirectoryContent().execute();
         }
+        isGridMode = loadViewModeForCurrentFolder();
+        applyViewMode(false);
         return true;
     }
 
@@ -1220,6 +1305,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             recyclerViewAdapter.clear();
             fetchDirectoryTask = new FetchDirectoryContent().execute();
         }
+        isGridMode = loadViewModeForCurrentFolder();
+        applyViewMode(false);
     }
 
     @Override
@@ -1404,6 +1491,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         } else {
             fetchDirectoryTask = new FetchDirectoryContent().execute();
         }
+        isGridMode = loadViewModeForCurrentFolder();
+        applyViewMode(false);
     }
 
     private void showSyncDialog(String path) {

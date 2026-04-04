@@ -25,4 +25,7 @@
 
     <dimen name="settingsIconSize">38dp</dimen>
     <dimen name="settingsIconMargin">16dp</dimen>
+
+    <dimen name="grid_item_padding">2dp</dimen>
+    <dimen name="grid_column_width">120dp</dimen>
 </resources>

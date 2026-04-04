@@ -38,6 +38,9 @@ import io.github.x0b.safdav.file.FileAccessError;
 public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileExplorerRecyclerViewAdapter.ViewHolder> {
 
     private static final String TAG = "FileExplorerRVA";
+    public static final int VIEW_MODE_LIST = 0;
+    public static final int VIEW_MODE_GRID = 1;
+
     private List<FileItem> files;
     private View emptyView;
     private View noSearchResultsView;
@@ -52,6 +55,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     private boolean wrapFileNames;
     private Context context;
     private long sizeLimit;
+    private int viewMode = VIEW_MODE_LIST;
 
     public interface OnClickListener {
         void onFileClicked(FileItem fileItem);
@@ -80,10 +84,18 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         context.getResources().getInteger(R.integer.default_thumbnail_size_limit));
     }
 
+    @Override
+    public int getItemViewType(int position) {
+        return viewMode;
+    }
+
     @NonNull
     @Override
     public ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        View view = LayoutInflater.from(parent.getContext()).inflate(R.layout.fragment_file_explorer_item, parent, false);
+        int layoutRes = (viewType == VIEW_MODE_GRID)
+                ? R.layout.fragment_file_explorer_grid_item
+                : R.layout.fragment_file_explorer_item;
+        View view = LayoutInflater.from(parent.getContext()).inflate(layoutRes, parent, false);
         return new ViewHolder(view);
     }
 
@@ -92,17 +104,33 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         final FileItem item = files.get(position);
 
         holder.fileItem = item;
+
+        if (holder.gridThumbnailContainer != null) {
+            holder.gridThumbnailContainer.post(() -> {
+                int width = holder.gridThumbnailContainer.getWidth();
+                if (width > 0) {
+                    ViewGroup.LayoutParams lp = holder.gridThumbnailContainer.getLayoutParams();
+                    if (lp.height != width) {
+                        lp.height = width;
+                        holder.gridThumbnailContainer.setLayoutParams(lp);
+                    }
+                }
+            });
+        }
+
         if (item.isDir()) {
             holder.dirIcon.setVisibility(View.VISIBLE);
             holder.fileIcon.setVisibility(View.GONE);
-            holder.fileSize.setVisibility(View.GONE);
-            holder.interpunct.setVisibility(View.GONE);
+            if (holder.fileSize != null) holder.fileSize.setVisibility(View.GONE);
+            if (holder.interpunct != null) holder.interpunct.setVisibility(View.GONE);
         } else {
             holder.fileIcon.setVisibility(View.VISIBLE);
             holder.dirIcon.setVisibility(View.GONE);
-            holder.fileSize.setText(item.getHumanReadableSize());
-            holder.fileSize.setVisibility(View.VISIBLE);
-            holder.interpunct.setVisibility(View.VISIBLE);
+            if (holder.fileSize != null) {
+                holder.fileSize.setText(item.getHumanReadableSize());
+                holder.fileSize.setVisibility(View.VISIBLE);
+            }
+            if (holder.interpunct != null) holder.interpunct.setVisibility(View.VISIBLE);
         }
 
         if (showThumbnails && !item.isDir()) {
@@ -143,12 +171,14 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             }
         }
 
-        RemoteItem itemRemote = item.getRemote();
-        if (!itemRemote.isDirectoryModifiedTimeSupported() && item.isDir()) {
-            holder.fileModTime.setVisibility(View.GONE);
-        } else {
-            holder.fileModTime.setVisibility(View.VISIBLE);
-            holder.fileModTime.setText(item.getHumanReadableModTime());
+        if (holder.fileModTime != null) {
+            RemoteItem itemRemote = item.getRemote();
+            if (!itemRemote.isDirectoryModifiedTimeSupported() && item.isDir()) {
+                holder.fileModTime.setVisibility(View.GONE);
+            } else {
+                holder.fileModTime.setVisibility(View.VISIBLE);
+                holder.fileModTime.setText(item.getHumanReadableModTime());
+            }
         }
         
         holder.fileName.setText(item.getName());
@@ -205,11 +235,13 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             return true;
         });
 
-        holder.icons.setOnClickListener(v -> {
-            if (!isInMoveMode && canSelect) {
-                onLongClickAction(item, holder);
-            }
-        });
+        if (holder.icons != null) {
+            holder.icons.setOnClickListener(v -> {
+                if (!isInMoveMode && canSelect) {
+                    onLongClickAction(item, holder);
+                }
+            });
+        }
     }
 
     private String buildThumbnailUrl(FileItem item) {
@@ -398,6 +430,15 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         return isInMoveMode;
     }
 
+    public void setViewMode(int viewMode) {
+        this.viewMode = viewMode;
+        notifyDataSetChanged();
+    }
+
+    public int getViewMode() {
+        return viewMode;
+    }
+
     public void setWrapFileNames(boolean wrapFileNames) {
         this.wrapFileNames = wrapFileNames;
         refreshData();
@@ -488,6 +529,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         public final TextView fileSize;
         public final TextView interpunct;
         public final ImageButton fileOptions;
+        public final View gridThumbnailContainer;
         public FileItem fileItem;
         public final ColorStateList defaultIconTint;
 
@@ -502,6 +544,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             this.fileSize = view.findViewById(R.id.file_size);
             this.fileOptions = view.findViewById(R.id.file_options);
             this.interpunct = view.findViewById(R.id.interpunct);
+            this.gridThumbnailContainer = view.findViewById(R.id.grid_thumbnail_container);
             this.defaultIconTint = ImageViewCompat.getImageTintList(this.fileIcon);
         }
     }

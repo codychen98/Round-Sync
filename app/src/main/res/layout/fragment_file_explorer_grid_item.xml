@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="2dp"
+    android:theme="@style/FileListItem"
+    style="@style/FileListItem">
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:id="@+id/grid_thumbnail_container"
+        android:background="?attr/colorSurfaceVariant">
+
+        <ImageView
+            android:id="@+id/file_icon"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="centerCrop"
+            android:src="@drawable/ic_file"
+            android:contentDescription="@string/file_icon" />
+
+        <ImageView
+            android:id="@+id/dir_icon"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="center"
+            android:src="@drawable/ic_folder"
+            android:contentDescription="@string/file_icon"
+            android:visibility="gone" />
+
+        <ImageButton
+            android:id="@+id/file_options"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:layout_gravity="top|end"
+            android:background="?selectableItemBackgroundBorderless"
+            android:contentDescription="@string/file_options_content_description"
+            android:src="@drawable/ic_more_vert"
+            android:padding="4dp" />
+    </FrameLayout>
+
+    <TextView
+        android:id="@+id/file_name"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:maxLines="2"
+        android:paddingStart="4dp"
+        android:paddingEnd="4dp"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp"
+        android:textSize="12sp"
+        android:gravity="center_horizontal"
+        tools:text="video_file.mp4" />
+</LinearLayout>
