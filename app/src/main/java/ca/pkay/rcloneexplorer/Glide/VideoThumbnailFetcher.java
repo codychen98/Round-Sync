@@ -71,37 +71,41 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
         long[] timestamps;
         if (durationMs > 0) {
             timestamps = new long[]{
-                    2_000_000,          // 2 seconds (in microseconds)
-                    durationMs * 100,   // 10% into the video
-                    durationMs * 200,   // 20% into the video
+                    durationMs * 100,   // 10% into the video (microseconds)
+                    durationMs * 250,   // 25% into the video
+                    durationMs * 500,   // 50% into the video
+                    2_000_000,          // 2 seconds
                     0                   // fallback: first frame
             };
         } else {
             timestamps = new long[]{2_000_000, 5_000_000, 0};
         }
 
-        Bitmap bestFrame = null;
+        Bitmap brightestFrame = null;
+        double brightestScore = -1;
+
         for (long ts : timestamps) {
             if (cancelled) break;
             Bitmap frame = mmr.getFrameAtTime(ts,
                     MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
             if (frame == null) continue;
-            if (!isMostlyBlack(frame)) {
-                if (bestFrame != null) {
-                    bestFrame.recycle();
-                }
+            double brightness = averageBrightness(frame);
+            if (brightness >= 30) {
+                if (brightestFrame != null) brightestFrame.recycle();
                 return frame;
             }
-            if (bestFrame == null) {
-                bestFrame = frame;
+            if (brightness > brightestScore) {
+                if (brightestFrame != null) brightestFrame.recycle();
+                brightestFrame = frame;
+                brightestScore = brightness;
             } else {
                 frame.recycle();
             }
         }
-        return bestFrame;
+        return brightestFrame;
     }
 
-    private static boolean isMostlyBlack(Bitmap bitmap) {
+    private static double averageBrightness(Bitmap bitmap) {
         int sampleSize = 8;
         int w = bitmap.getWidth();
         int h = bitmap.getHeight();
@@ -120,8 +124,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                 samples++;
             }
         }
-        double avgBrightness = (double) totalBrightness / (samples * 3);
-        return avgBrightness < 10;
+        return (double) totalBrightness / (samples * 3);
     }
 
     @Override
