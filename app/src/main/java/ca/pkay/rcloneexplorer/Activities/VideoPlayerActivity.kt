@@ -24,7 +24,7 @@ class VideoPlayerActivity : AppCompatActivity() {
     private lateinit var episodeCounter: TextView
     private lateinit var btnScaleMode: ImageButton
     private var player: ExoPlayer? = null
-    private var scaleIndex = 0
+    private var scaleIndex = 1
 
     private val scaleModes = intArrayOf(
         AspectRatioFrameLayout.RESIZE_MODE_FIT,
@@ -44,6 +44,7 @@ class VideoPlayerActivity : AppCompatActivity() {
         episodeCounter = findViewById(R.id.episode_counter)
         btnScaleMode = findViewById(R.id.btn_scale_mode)
 
+        playerView.resizeMode = scaleModes[scaleIndex]
         topBar.visibility = View.GONE
 
         playerView.setControllerVisibilityListener(

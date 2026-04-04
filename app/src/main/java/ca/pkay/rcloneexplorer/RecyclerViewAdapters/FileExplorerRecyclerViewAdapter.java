@@ -130,6 +130,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 }
 
             } else {
+                Glide.with(context).clear(holder.fileIcon);
                 holder.fileIcon.setImageTintList(holder.defaultIconTint);
                 holder.fileIcon.setImageResource(R.drawable.ic_file);
             }
