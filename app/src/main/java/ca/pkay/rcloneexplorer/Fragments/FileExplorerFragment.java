@@ -65,6 +65,7 @@ import java.util.Map;
 import java.util.Stack;
 
 import ca.pkay.rcloneexplorer.Activities.MainActivity;
+import ca.pkay.rcloneexplorer.Activities.VideoPlayerActivity;
 import ca.pkay.rcloneexplorer.BuildConfig;
 import ca.pkay.rcloneexplorer.Dialogs.Dialogs;
 import ca.pkay.rcloneexplorer.Dialogs.FilePropertiesDialog;
@@ -808,7 +809,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
 
     @Override
     public void onClickVideo(FileItem fileItem) {
-        new StreamTask(StreamTask.OPEN_AS_VIDEO).execute(fileItem);
+        new VideoStreamTask().execute(fileItem);
     }
 
     @Override
@@ -1176,11 +1177,11 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     @Override
     public void onFileClicked(FileItem fileItem) {
         String type = fileItem.getMimeType();
-        if (type.startsWith("video/") || type.startsWith("audio/")) {
-            // stream video or audio
+        if (type.startsWith("video/")) {
+            new VideoStreamTask().execute(fileItem);
+        } else if (type.startsWith("audio/")) {
             new StreamTask().execute(fileItem);
         } else {
-            // download and open
             new DownloadAndOpen().execute(fileItem);
         }
     }
@@ -1883,6 +1884,140 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     }
 
     @SuppressLint("StaticFieldLeak")
+    private String getParentPath(FileItem fileItem) {
+        String filePath = fileItem.getPath();
+        int lastSlash = filePath.lastIndexOf('/');
+        if (lastSlash > 0) {
+            return filePath.substring(0, lastSlash);
+        }
+        return "//" + remoteName;
+    }
+
+    private void launchVideoPlayer(FileItem clickedVideo, int port) {
+        List<FileItem> allFiles = directoryObject.getDirectoryContent();
+        List<FileItem> videoFiles = new ArrayList<>();
+        for (FileItem file : allFiles) {
+            if (!file.isDir() && file.getMimeType() != null
+                    && file.getMimeType().startsWith("video/")) {
+                videoFiles.add(file);
+            }
+        }
+        Collections.sort(videoFiles,
+                (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+
+        List<String> videoUrls = new ArrayList<>();
+        List<String> videoNames = new ArrayList<>();
+        int startIndex = 0;
+        for (int i = 0; i < videoFiles.size(); i++) {
+            FileItem vf = videoFiles.get(i);
+            Uri uri = Uri.parse("http://127.0.0.1:" + port)
+                    .buildUpon()
+                    .appendPath(vf.getName())
+                    .build();
+            videoUrls.add(uri.toString());
+            videoNames.add(vf.getName());
+            if (vf.getPath().equals(clickedVideo.getPath())) {
+                startIndex = i;
+            }
+        }
+
+        Intent intent = new Intent(getContext(), VideoPlayerActivity.class);
+        intent.putExtra("video_urls", videoUrls.toArray(new String[0]));
+        intent.putExtra("video_names", videoNames.toArray(new String[0]));
+        intent.putExtra("start_index", startIndex);
+        Activity activity = getActivity();
+        if (activity != null) {
+            tryStartActivityForResult(activity, intent, STREAMING_INTENT_RESULT);
+        }
+    }
+
+    @SuppressLint("StaticFieldLeak")
+    private class VideoStreamTask extends AsyncTask<FileItem, Void, Boolean> {
+
+        private static final String TAG = "VideoStreamTask";
+        private LoadingDialog loadingDialog;
+        private Intent serveIntent;
+        private FileItem fileItem;
+        private int port;
+
+        @Override
+        protected void onPreExecute() {
+            super.onPreExecute();
+            loadingDialog = new LoadingDialog()
+                    .setCanCancel(false)
+                    .setTitle(R.string.loading);
+            if (getFragmentManager() != null) {
+                loadingDialog.show(getChildFragmentManager(), "loading dialog");
+            }
+        }
+
+        @Override
+        protected Boolean doInBackground(FileItem... fileItems) {
+            if (context == null) {
+                FLog.w(TAG, "doInBackground: could not start stream, context is invalid");
+                return false;
+            }
+            fileItem = fileItems[0];
+            port = allocatePort(8080, true);
+            serveIntent = new Intent(context, StreamingService.class);
+            serveIntent.putExtra(StreamingService.SERVE_PATH_ARG, getParentPath(fileItem));
+            serveIntent.putExtra(StreamingService.REMOTE_ARG, remote);
+            serveIntent.putExtra(StreamingService.SHOW_NOTIFICATION_TEXT, false);
+            serveIntent.putExtra(StreamingService.SERVE_PORT, port);
+            context.stopService(new Intent(context, StreamingService.class));
+            tryStartService(context, serveIntent);
+
+            Uri probeUri = Uri.parse("http://127.0.0.1:" + port)
+                    .buildUpon()
+                    .appendPath(fileItem.getName())
+                    .build();
+
+            OkHttpClient client = new OkHttpClient.Builder().build();
+            Request request = new Request.Builder().url(probeUri.toString()).head().build();
+            int code = -1;
+
+            long waitTime = 30 * 1000;
+            boolean available = false;
+            while (waitTime > 0) {
+                long waitStart = System.nanoTime();
+                try {
+                    FLog.v(TAG, "doInBackground: HEAD %s", probeUri.toString());
+                    Response response = client.newCall(request).execute();
+                    code = response.code();
+                } catch (IOException e) {
+                    FLog.v(TAG, "doInBackground: Server not (yet) online");
+                }
+                if (code == 200) {
+                    available = true;
+                    break;
+                }
+                try {
+                    Thread.sleep(250);
+                } catch (InterruptedException e) {
+                    // ignored
+                }
+                long waitEnd = System.nanoTime();
+                waitTime -= (waitEnd - waitStart) / 1000000;
+            }
+            return available;
+        }
+
+        @Override
+        protected void onPostExecute(Boolean success) {
+            if (!isRunning) {
+                FLog.w(TAG, "Streaming failed: user navigated away before stream could load");
+                return;
+            }
+            Dialogs.dismissSilently(loadingDialog);
+            if (success) {
+                launchVideoPlayer(fileItem, port);
+            } else {
+                Toasty.error(context, getString(R.string.streaming_task_failed), Toast.LENGTH_LONG, true).show();
+                context.stopService(serveIntent);
+            }
+        }
+    }
+
     private class StreamTask extends AsyncTask<FileItem, Void, Boolean> {
 
         private static final String TAG = "StreamTask";

@@ -1,6 +1,7 @@
 package ca.pkay.rcloneexplorer.RecyclerViewAdapters;
 
 import android.content.Context;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.net.Uri;
 import android.text.TextUtils;
@@ -12,6 +13,7 @@ import android.widget.ImageView;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
+import androidx.core.widget.ImageViewCompat;
 import androidx.preference.PreferenceManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -107,6 +109,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             boolean localLoad = item.getRemote().getType() == RemoteItem.SAFW;
             String mimeType = item.getMimeType();
             if ((mimeType.startsWith("image/") || mimeType.startsWith("video/")) && item.getSize() <= sizeLimit) {
+                holder.fileIcon.setImageTintList(null);
                 RequestOptions glideOption = new RequestOptions()
                         .centerCrop()
                         .diskCacheStrategy(DiskCacheStrategy.ALL)
@@ -127,6 +130,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 }
 
             } else {
+                holder.fileIcon.setImageTintList(holder.defaultIconTint);
                 holder.fileIcon.setImageResource(R.drawable.ic_file);
             }
         }
@@ -211,6 +215,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                     .into(holder.fileIcon);
         } catch (FileAccessError e) {
             FLog.e(TAG, "onBindViewHolder: SAF error", e);
+            holder.fileIcon.setImageTintList(holder.defaultIconTint);
             holder.fileIcon.setImageResource(R.drawable.ic_file);
         }
     }
@@ -461,6 +466,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         public final TextView interpunct;
         public final ImageButton fileOptions;
         public FileItem fileItem;
+        public final ColorStateList defaultIconTint;
 
         ViewHolder(View itemView) {
             super(itemView);
@@ -473,6 +479,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             this.fileSize = view.findViewById(R.id.file_size);
             this.fileOptions = view.findViewById(R.id.file_options);
             this.interpunct = view.findViewById(R.id.interpunct);
+            this.defaultIconTint = ImageViewCompat.getImageTintList(this.fileIcon);
         }
     }
 }

@@ -223,6 +223,13 @@
             android:label="@string/title_activity_filter"
             android:theme="@style/AppTheme.NoActionBar" />
 
+        <activity
+            android:name=".Activities.VideoPlayerActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:theme="@style/Theme.RoundSync.VideoPlayer"
+            android:launchMode="singleTop"
+            android:exported="false" />
+
         <!-- Auto Language Generation -->
         <service
             android:name="androidx.appcompat.app.AppLocalesMetadataHolderService"
