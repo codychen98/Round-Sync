@@ -15,6 +15,7 @@ import io.github.x0b.safdav.file.ItemNotFoundException;
 import io.github.x0b.safdav.file.SafException;
 
 import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
@@ -166,7 +167,21 @@ public class DocumentsContractAccess implements ItemAccess<SafFastItem> {
 
     @Override
     public InputStream readFileRange(SafFastItem documentUri, long start, long end) {
-        return sfa.readFileRange(documentUri, start, end);
+        try {
+            ContentResolver resolver = context.getContentResolver();
+            InputStream inputStream = resolver.openInputStream(documentUri.getUri());
+            if (inputStream == null) {
+                throw new FileAccessError();
+            }
+            long skipped = inputStream.skip(start);
+            if (skipped != start) {
+                throw new FileAccessError();
+            }
+            long length = end - start + 1;
+            return new BoundedInputStream(inputStream, length);
+        } catch (Exception e) {
+            throw new FileAccessError(e);
+        }
     }
 
     @Override
@@ -346,5 +361,45 @@ public class DocumentsContractAccess implements ItemAccess<SafFastItem> {
             }
         }
         return subFolder;
+    }
+
+    private static class BoundedInputStream extends InputStream {
+        private final InputStream source;
+        private long remaining;
+
+        BoundedInputStream(InputStream source, long maxBytes) {
+            this.source = source;
+            this.remaining = maxBytes;
+        }
+
+        @Override
+        public int read() throws java.io.IOException {
+            if (remaining <= 0) {
+                return -1;
+            }
+            int b = source.read();
+            if (b != -1) {
+                remaining--;
+            }
+            return b;
+        }
+
+        @Override
+        public int read(byte[] buffer, int offset, int length) throws java.io.IOException {
+            if (remaining <= 0) {
+                return -1;
+            }
+            int toRead = (int) Math.min(length, remaining);
+            int read = source.read(buffer, offset, toRead);
+            if (read > 0) {
+                remaining -= read;
+            }
+            return read;
+        }
+
+        @Override
+        public void close() throws java.io.IOException {
+            source.close();
+        }
     }
 }
