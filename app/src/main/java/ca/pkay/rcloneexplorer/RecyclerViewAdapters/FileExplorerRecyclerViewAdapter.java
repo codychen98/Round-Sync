@@ -141,13 +141,13 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 holder.fileIcon.setImageTintList(null);
                 RequestOptions glideOption = new RequestOptions()
                         .centerCrop()
-                        .diskCacheStrategy(DiskCacheStrategy.ALL)
+                        .diskCacheStrategy(DiskCacheStrategy.DATA)
                         .placeholder(R.drawable.ic_file);
                 if (localLoad) {
                     bindSafFile(holder, item, glideOption);
                 } else {
                     String url = buildThumbnailUrl(item);
-                    Glide.with(context)
+                    Glide.with(context.getApplicationContext())
                             .load(new PersistentGlideUrl(url))
                             .apply(glideOption)
                             .thumbnail(0.1f)
@@ -158,14 +158,14 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 String url = buildThumbnailUrl(item);
                 RequestOptions glideOption = new RequestOptions()
                         .centerCrop()
-                        .diskCacheStrategy(DiskCacheStrategy.ALL)
+                        .diskCacheStrategy(DiskCacheStrategy.DATA)
                         .placeholder(R.drawable.ic_file);
-                Glide.with(context)
+                Glide.with(context.getApplicationContext())
                         .load(new VideoThumbnailUrl(url))
                         .apply(glideOption)
                         .into(holder.fileIcon);
             } else {
-                Glide.with(context).clear(holder.fileIcon);
+                Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
                 holder.fileIcon.setImageTintList(holder.defaultIconTint);
                 holder.fileIcon.setImageResource(R.drawable.ic_file);
             }
@@ -263,7 +263,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         try {
             Uri contentUri = SafAccessProvider.getDirectServer(context).getDocumentUri('/'+ item.getPath());
             Glide
-                    .with(context)
+                    .with(context.getApplicationContext())
                     .load(contentUri)
                     .apply(glideOption)
                     .thumbnail(0.1f)

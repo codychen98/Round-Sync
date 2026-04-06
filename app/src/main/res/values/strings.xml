@@ -631,4 +631,12 @@
     <string name="scale_mode">Scale mode</string>
     <string name="view_mode_grid">Grid view</string>
     <string name="view_mode_list">List view</string>
+
+    <string name="video_error_network">Network error. Check your connection and try again.</string>
+    <string name="video_error_seeking">Error seeking video. The video may not support seeking.</string>
+    <string name="video_error_format">Unsupported video format or codec.</string>
+    <string name="video_error_server">Server error. Please check if the file is accessible.</string>
+    <string name="video_error_unknown">An unknown error occurred during playback.</string>
+    <string name="video_error_retry">Retrying playback (%1$d/%2$d)…</string>
+    <string name="video_error_max_retries">Maximum retry attempts reached. Please try again later.</string>
 </resources>

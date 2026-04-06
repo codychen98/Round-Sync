@@ -165,6 +165,11 @@ public class DocumentsContractAccess implements ItemAccess<SafFastItem> {
     }
 
     @Override
+    public InputStream readFileRange(SafFastItem documentUri, long start, long end) {
+        return sfa.readFileRange(documentUri, start, end);
+    }
+
+    @Override
     public SafFastItem readMeta(Uri uri) {
         ContentResolver contentResolver = context.getContentResolver();
         Uri docUri = buildHierarchicalDocumentsUri(uri);

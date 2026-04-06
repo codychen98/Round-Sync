@@ -10,11 +10,13 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import ca.pkay.rcloneexplorer.R
+import java.io.IOException
 
 class VideoPlayerActivity : AppCompatActivity() {
 
@@ -32,6 +34,11 @@ class VideoPlayerActivity : AppCompatActivity() {
         AspectRatioFrameLayout.RESIZE_MODE_ZOOM
     )
     private val scaleModeLabels = arrayOf("Fit", "Stretch", "Crop")
+
+    private var retryCount = 0
+    private val maxRetries = 3
+    private val retryWindowMs = 10000L
+    private var lastErrorTime = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -73,6 +80,10 @@ class VideoPlayerActivity : AppCompatActivity() {
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                     updateUI(names)
                 }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    handlePlaybackError(error)
+                }
             })
 
             exo.prepare()
@@ -102,6 +113,50 @@ class VideoPlayerActivity : AppCompatActivity() {
             it.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
+    }
+
+    private fun handlePlaybackError(error: PlaybackException) {
+        val currentTime = System.currentTimeMillis()
+        
+        if (currentTime - lastErrorTime > retryWindowMs) {
+            retryCount = 0
+        }
+        lastErrorTime = currentTime
+
+        val errorType = classifyError(error)
+        val message = when (errorType) {
+            ErrorType.NETWORK -> getString(R.string.video_error_network)
+            ErrorType.SEEKING -> getString(R.string.video_error_seeking)
+            ErrorType.FORMAT -> getString(R.string.video_error_format)
+            ErrorType.SERVER -> getString(R.string.video_error_server)
+            ErrorType.UNKNOWN -> getString(R.string.video_error_unknown)
+        }
+
+        if (retryCount < maxRetries && (errorType == ErrorType.NETWORK || errorType == ErrorType.SEEKING || errorType == ErrorType.SERVER)) {
+            retryCount++
+            Toast.makeText(this, getString(R.string.video_error_retry, retryCount, maxRetries), Toast.LENGTH_SHORT).show()
+            player?.prepare()
+        } else {
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun classifyError(error: PlaybackException): ErrorType {
+        val cause = error.cause
+        return when {
+            cause is IOException -> ErrorType.NETWORK
+            error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> ErrorType.NETWORK
+            error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> ErrorType.SERVER
+            error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
+            error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED -> ErrorType.FORMAT
+            error.message?.contains("seek", ignoreCase = true) == true ||
+            error.message?.contains("range", ignoreCase = true) == true -> ErrorType.SEEKING
+            else -> ErrorType.UNKNOWN
+        }
+    }
+
+    private enum class ErrorType {
+        NETWORK, SEEKING, FORMAT, SERVER, UNKNOWN
     }
 
     override fun onPause() {

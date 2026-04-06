@@ -87,4 +87,13 @@ public interface ItemAccess<T extends SafItem> {
      * @param target target item Uri
      */
     void renameItem(Uri item, Uri target);
+
+    /**
+     * Read a range of bytes from a file
+     * @param documentUri document style file {@link Uri}
+     * @param start starting byte position (inclusive)
+     * @param end ending byte position (inclusive)
+     * @return file range content as {@link InputStream}
+     */
+    InputStream readFileRange(T documentUri, long start, long end);
 }

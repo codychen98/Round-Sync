@@ -169,8 +169,16 @@ public class SafDAVServer extends NanoHTTPD {
      *         <td>OK</td>
      *     </tr>
      *     <tr>
+     *         <td>206</td>
+     *         <td>Partial Content</td>
+     *     </tr>
+     *     <tr>
      *         <td>400</td>
      *         <td>Bad Request</td>
+     *     </tr>
+     *     <tr>
+     *         <td>416</td>
+     *         <td>Range Not Satisfiable</td>
      *     </tr>
      * </table>
      */
@@ -183,9 +191,59 @@ public class SafDAVServer extends NanoHTTPD {
         } catch (ItemNotFoundException e) {
             return notFound("onGet");
         }
-        InputStream stream = itemAccess.readFile(file);
+
+        String rangeHeader = session.getHeaders().get("range");
+        InputStream stream;
+        Response response;
+
+        if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+            long fileSize = file.getLength();
+            String rangeValue = rangeHeader.substring(6);
+            
+            long start = 0;
+            long end = fileSize - 1;
+            
+            try {
+                if (rangeValue.startsWith("-")) {
+                    long suffix = Long.parseLong(rangeValue.substring(1));
+                    start = Math.max(0, fileSize - suffix);
+                } else if (rangeValue.endsWith("-")) {
+                    start = Long.parseLong(rangeValue.substring(0, rangeValue.length() - 1));
+                } else {
+                    String[] parts = rangeValue.split("-");
+                    start = Long.parseLong(parts[0]);
+                    if (parts.length > 1 && !parts[1].isEmpty()) {
+                        end = Long.parseLong(parts[1]);
+                    }
+                }
+                
+                if (start < 0 || start >= fileSize || end < start || end >= fileSize) {
+                    Response rangeNotSatisfiable = newFixedLengthResponse(Response.Status.RANGE_NOT_SATISFIABLE, null, null);
+                    rangeNotSatisfiable.addHeader("Content-Range", "bytes */" + fileSize);
+                    Log.d(TAG, "onGet: 416 Range Not Satisfiable");
+                    return rangeNotSatisfiable;
+                }
+                
+                stream = itemAccess.readFileRange(file, start, end);
+                long contentLength = end - start + 1;
+                
+                response = newFixedLengthResponse(Response.Status.PARTIAL_CONTENT, file.getContentType(), stream, contentLength);
+                response.addHeader("Content-Range", "bytes " + start + "-" + end + "/" + fileSize);
+                response.addHeader("Accept-Ranges", "bytes");
+                Log.d(TAG, "onGet: 206 Partial Content (bytes " + start + "-" + end + "/" + fileSize + ")");
+                return response;
+                
+            } catch (NumberFormatException e) {
+                Log.w(TAG, "onGet: Invalid range header: " + rangeHeader);
+                return badRequest("onGet");
+            }
+        }
+        
+        stream = itemAccess.readFile(file);
         if (null != stream) {
-            return newFixedLengthResponse(Response.Status.OK, file.getContentType(), stream, file.getLength());
+            response = newFixedLengthResponse(Response.Status.OK, file.getContentType(), stream, file.getLength());
+            response.addHeader("Accept-Ranges", "bytes");
+            return response;
         }
         return badRequest("onGet");
     }
