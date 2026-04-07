@@ -14,6 +14,7 @@ import ca.pkay.rcloneexplorer.Items.RemoteItem;
 import ca.pkay.rcloneexplorer.Rclone;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.ServerReadinessChecker;
+import ca.pkay.rcloneexplorer.util.SyncLog;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -62,6 +63,9 @@ public class ThumbnailServerManager {
     private boolean intentionalStop = false;
     private long spawnStartTimeMs = 0;
 
+    /** Tracks state synchronously alongside postValue so we can detect the postValue/getValue race. */
+    private ServerState currentState = ServerState.STOPPED;
+
     private ThumbnailServerManager() {}
 
     public static ThumbnailServerManager getInstance() {
@@ -81,9 +85,22 @@ public class ThumbnailServerManager {
 
     /** Starts the thumbnail server for the given remote. No-op if already STARTING or READY. */
     public synchronized void start(Context context, RemoteItem remote, int port, String auth) {
-        ServerState current = stateLiveData.getValue();
-        if (current == ServerState.STARTING || current == ServerState.READY) {
-            FLog.d(TAG, "start() ignored — already in state %s", current);
+        // Use currentState (written synchronously) instead of stateLiveData.getValue()
+        // (written via postValue, which is asynchronous) to avoid the race where stop()
+        // posts STOPPED but getValue() still returns the stale READY value when start() runs.
+        if (appContext != null) {
+            SyncLog.info(appContext, "ThumbnailServer",
+                "start() called. currentState=" + currentState
+                + ", getValue()=" + stateLiveData.getValue()
+                + ", remote=" + (remote != null ? remote.getName() : "NULL")
+                + ", port=" + port);
+        }
+        if (currentState == ServerState.STARTING || currentState == ServerState.READY) {
+            FLog.d(TAG, "start() ignored — already in state %s", currentState);
+            if (appContext != null) {
+                SyncLog.info(appContext, "ThumbnailServer",
+                    "start() SKIPPED - currentState=" + currentState + " (already running)");
+            }
             return;
         }
         appContext = context.getApplicationContext();
@@ -97,6 +114,10 @@ public class ThumbnailServerManager {
 
     /** Stops the server. Cancels any pending readiness checker and destroys the process. */
     public synchronized void stop() {
+        if (appContext != null) {
+            SyncLog.info(appContext, "ThumbnailServer",
+                "stop() called. Destroying process, setting intentionalStop=true. Current gen: " + generation);
+        }
         intentionalStop = true;
         cancelReadinessChecker();
         destroyProcess();
@@ -113,12 +134,24 @@ public class ThumbnailServerManager {
 
         Rclone rclone = new Rclone(appContext);
         String hiddenPath = "/" + currentAuth + "/" + currentRemote.getName();
+        String probeUrlForLog = buildProbeUrl();
+        if (appContext != null) {
+            SyncLog.info(appContext, "ThumbnailServer",
+                "Spawning rclone serve process. Gen: " + gen
+                + ", port: " + currentPort
+                + ", probeUrl: " + probeUrlForLog);
+        }
         serverProcess = rclone.serve(
                 Rclone.SERVE_PROTOCOL_HTTP, currentPort, false,
                 null, null, currentRemote, "", hiddenPath);
 
         if (serverProcess == null) {
             FLog.e(TAG, "rclone.serve() returned null — cannot start thumbnail server");
+            if (appContext != null) {
+                SyncLog.error(appContext, "ThumbnailServer",
+                    "rclone.serve() returned NULL - process failed to start."
+                    + " Check rclone binary and remote config. Gen: " + gen);
+            }
             handleFailure(gen);
             return;
         }
@@ -131,6 +164,12 @@ public class ThumbnailServerManager {
         // Must be called from synchronized context.
         if (intentionalStop || generation != gen) {
             return;
+        }
+        if (appContext != null) {
+            SyncLog.info(appContext, "ThumbnailServer",
+                "Failure handling: restartCount=" + restartCount + "/" + MAX_RESTARTS
+                + ", intentionalStop=" + intentionalStop
+                + ", genMatch=" + (generation == gen));
         }
         if (restartCount < MAX_RESTARTS) {
             long backoff = BACKOFF_MS[restartCount];
@@ -174,6 +213,12 @@ public class ThumbnailServerManager {
                             if (intentionalStop || generation != gen) return;
                             long elapsedMs = System.currentTimeMillis() - spawnStartTimeMs;
                             FLog.d(TAG, "STARTING -> READY at %s (took %.1fs)", probeUrl, elapsedMs / 1000.0);
+                            if (appContext != null) {
+                                SyncLog.info(appContext, "ThumbnailServer",
+                                    "Server READY at " + probeUrl
+                                    + " (took " + String.format("%.1f", elapsedMs / 1000.0) + "s)"
+                                    + ". Gen: " + gen);
+                            }
                             restartCount = 0;
                             setState(ServerState.READY);
                             launchHealthCheck(gen);
@@ -184,6 +229,12 @@ public class ThumbnailServerManager {
                     public void onTimeout() {
                         synchronized (ThumbnailServerManager.this) {
                             FLog.w(TAG, "Readiness timeout for gen %d", gen);
+                            if (appContext != null) {
+                                SyncLog.error(appContext, "ThumbnailServer",
+                                    "Readiness check TIMED OUT after 30s."
+                                    + " Server never responded to HEAD " + probeUrl
+                                    + ". Gen: " + gen);
+                            }
                             handleFailure(gen);
                         }
                     }
@@ -191,6 +242,10 @@ public class ThumbnailServerManager {
                     @Override
                     public void onError(Exception e) {
                         FLog.e(TAG, "Readiness checker error for gen %d", e);
+                        if (appContext != null) {
+                            SyncLog.error(appContext, "ThumbnailServer",
+                                "Readiness check ERROR: " + e + ". Gen: " + gen);
+                        }
                         synchronized (ThumbnailServerManager.this) {
                             handleFailure(gen);
                         }
@@ -215,7 +270,13 @@ public class ThumbnailServerManager {
                 }
             }
             FLog.w(TAG, "rclone process (gen %d) exited unexpectedly with code %d", gen, exitCode);
-            drainStderr(process, gen);
+            String stderr = drainStderr(process, gen);
+            if (appContext != null) {
+                SyncLog.error(appContext, "ThumbnailServer",
+                    "rclone process exited unexpectedly. Exit code: " + exitCode
+                    + ", gen: " + gen
+                    + ", stderr: " + (stderr.isEmpty() ? "(none)" : stderr));
+            }
             synchronized (ThumbnailServerManager.this) {
                 if (!intentionalStop && generation == gen) {
                     handleFailure(gen);
@@ -226,7 +287,7 @@ public class ThumbnailServerManager {
         t.start();
     }
 
-    private void drainStderr(Process process, int gen) {
+    private String drainStderr(Process process, int gen) {
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(process.getErrorStream()))) {
             StringBuilder sb = new StringBuilder();
@@ -234,11 +295,14 @@ public class ThumbnailServerManager {
             while ((line = reader.readLine()) != null) {
                 sb.append(line).append('\n');
             }
-            if (sb.length() > 0) {
-                FLog.e(TAG, "rclone stderr (gen %d):\n%s", gen, sb.toString().trim());
+            String result = sb.toString().trim();
+            if (!result.isEmpty()) {
+                FLog.e(TAG, "rclone stderr (gen %d):\n%s", gen, result);
             }
+            return result;
         } catch (IOException e) {
             FLog.d(TAG, "drainStderr: could not read stderr for gen %d: %s", gen, e.getMessage());
+            return "";
         }
     }
 
@@ -318,8 +382,14 @@ public class ThumbnailServerManager {
     }
 
     private void setState(ServerState newState) {
+        ServerState oldState = currentState;
+        currentState = newState;
         FLog.d(TAG, "State -> %s", newState);
         stateLiveData.postValue(newState);
+        if (appContext != null) {
+            SyncLog.info(appContext, "ThumbnailServer",
+                "State transition: " + oldState + " -> " + newState);
+        }
     }
 
     // endregion

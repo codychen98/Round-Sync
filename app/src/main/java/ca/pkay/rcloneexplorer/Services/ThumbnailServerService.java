@@ -9,12 +9,14 @@ import android.os.IBinder;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
+import androidx.core.content.ContextCompat;
 import androidx.lifecycle.Observer;
 
 import ca.pkay.rcloneexplorer.Items.RemoteItem;
 import ca.pkay.rcloneexplorer.R;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.NotificationUtils;
+import ca.pkay.rcloneexplorer.util.SyncLog;
 
 /**
  * Foreground service that hosts the rclone HTTP serve process for thumbnail loading.
@@ -50,20 +52,26 @@ public class ThumbnailServerService extends android.app.Service {
                 }
             };
 
+    private boolean observerRegistered = false;
+
     // region — Static helpers for callers
 
     /** Starts the service and instructs the manager to begin serving thumbnails. */
     public static void startServing(Context context, RemoteItem remote, int port, String auth) {
         if (remote.isRemoteType(RemoteItem.SAFW)) {
             FLog.d(TAG, "Skipping SAFW remote — no thumbnail server needed");
+            SyncLog.info(context, "ThumbnailServer",
+                "Skipping SAFW remote - no thumbnail server needed");
             return;
         }
+        SyncLog.info(context, "ThumbnailServer",
+            "startServing: remote=" + remote.getName() + ", port=" + port);
         Intent intent = new Intent(context, ThumbnailServerService.class);
         intent.setAction(ACTION_START);
         intent.putExtra(EXTRA_REMOTE, remote);
         intent.putExtra(EXTRA_PORT, port);
         intent.putExtra(EXTRA_AUTH, auth);
-        context.startService(intent);
+        ContextCompat.startForegroundService(context, intent);
     }
 
     /** Instructs the service to stop the thumbnail server. */
@@ -106,6 +114,7 @@ public class ThumbnailServerService extends android.app.Service {
     public void onDestroy() {
         super.onDestroy();
         ThumbnailServerManager.getInstance().getState().removeObserver(stateObserver);
+        observerRegistered = false;
         ThumbnailServerManager.getInstance().stop();
     }
 
@@ -124,8 +133,15 @@ public class ThumbnailServerService extends android.app.Service {
         int port = intent.getIntExtra(EXTRA_PORT, 29179);
         String auth = intent.getStringExtra(EXTRA_AUTH);
 
+        SyncLog.info(this, "ThumbnailServer",
+            "Service handleStart: remote=" + (remote != null ? remote.getName() : "NULL")
+            + ", port=" + port
+            + ", auth=" + (auth != null ? "present" : "NULL"));
+
         if (remote == null || auth == null) {
             FLog.e(TAG, "handleStart: missing remote or auth — aborting");
+            SyncLog.error(this, "ThumbnailServer",
+                "handleStart ABORTED: missing remote or auth");
             stopSelf();
             return;
         }
@@ -133,7 +149,10 @@ public class ThumbnailServerService extends android.app.Service {
         startForegroundWithNotification();
 
         ThumbnailServerManager manager = ThumbnailServerManager.getInstance();
-        manager.getState().observeForever(stateObserver);
+        if (!observerRegistered) {
+            manager.getState().observeForever(stateObserver);
+            observerRegistered = true;
+        }
         manager.start(this, remote, port, auth);
     }
 

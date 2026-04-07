@@ -35,6 +35,7 @@ import ca.pkay.rcloneexplorer.Items.RemoteItem;
 import ca.pkay.rcloneexplorer.R;
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.util.FLog;
+import ca.pkay.rcloneexplorer.util.SyncLog;
 import io.github.x0b.safdav.SafAccessProvider;
 import io.github.x0b.safdav.file.FileAccessError;
 
@@ -55,6 +56,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     private boolean canSelect;
     private boolean showThumbnails;
     private boolean serverReady = false;
+    private boolean loggedFirstBind = false;
+    private boolean loggedFirstReady = false;
     private boolean optionsDisabled;
     private boolean wrapFileNames;
     private Context context;
@@ -152,6 +155,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                     bindSafFile(holder, item, glideOption);
                 } else if (serverReady) {
                     String url = buildThumbnailUrl(item);
+                    if (!loggedFirstReady) {
+                        loggedFirstReady = true;
+                        SyncLog.info(context, "ThumbnailServer",
+                            "Adapter: first Glide request issued. serverReady=true, url=" + url);
+                    }
                     RetryRequestListener retryListener = new RetryRequestListener(
                             ThumbnailServerManager.getInstance(),
                             rl -> Glide.with(context.getApplicationContext())
@@ -169,6 +177,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                             .listener(retryListener)
                             .into(holder.fileIcon);
                 } else {
+                    if (!loggedFirstBind) {
+                        loggedFirstBind = true;
+                        SyncLog.info(context, "ThumbnailServer",
+                            "Adapter: showing placeholder. serverReady=false, item=" + item.getName());
+                    }
                     cancelActiveRetryListener(holder);
                     Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
                     holder.fileIcon.setImageTintList(holder.defaultIconTint);
@@ -364,6 +377,9 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
     public void setThumbnailServerReady(boolean ready) {
         this.serverReady = ready;
+        if (ready) {
+            loggedFirstReady = false;
+        }
     }
 
     public List<FileItem> getCurrentContent() {
@@ -385,6 +401,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     }
 
     public void newData(List<FileItem> data) {
+        loggedFirstBind = false;
+        loggedFirstReady = false;
         this.clear();
         files = new ArrayList<>(data);
         isInSelectMode = false;

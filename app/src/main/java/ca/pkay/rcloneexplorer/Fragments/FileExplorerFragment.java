@@ -93,6 +93,7 @@ import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerService;
 import ca.pkay.rcloneexplorer.util.ActivityHelper;
 import ca.pkay.rcloneexplorer.util.FLog;
+import ca.pkay.rcloneexplorer.util.SyncLog;
 import ca.pkay.rcloneexplorer.util.ServerReadinessChecker;
 import ca.pkay.rcloneexplorer.util.LargeParcel;
 import ca.pkay.rcloneexplorer.workmanager.EphemeralTaskManager;
@@ -375,7 +376,16 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         registerReceivers();
 
         if (showThumbnails) {
+            if (context != null) {
+                SyncLog.info(context, "ThumbnailServer",
+                    "Fragment onStart: showThumbnails=true, starting server. Port=" + thumbnailServerPort);
+            }
             startThumbnailServer();
+        } else {
+            if (context != null) {
+                SyncLog.info(context, "ThumbnailServer",
+                    "Fragment onStart: showThumbnails=false, skipping server start");
+            }
         }
 
         if (directoryObject.isContentValid()) {
@@ -750,6 +760,10 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
 
     private void observeThumbnailServerState() {
         ThumbnailServerManager.getInstance().getState().observe(this, state -> {
+            if (context != null) {
+                SyncLog.info(context, "ThumbnailServer",
+                    "Fragment observer received state: " + state);
+            }
             if (state == ThumbnailServerManager.ServerState.READY) {
                 FLog.d(TAG, "Thumbnail server ready — refreshing visible items");
                 if (recyclerViewAdapter != null) {
@@ -769,6 +783,11 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                     Toasty.error(context, getString(R.string.thumbnail_server_failed),
                             Toast.LENGTH_LONG, true).show();
                 }
+            } else if (state == ThumbnailServerManager.ServerState.STOPPED) {
+                FLog.d(TAG, "Thumbnail server stopped");
+                if (recyclerViewAdapter != null) {
+                    recyclerViewAdapter.setThumbnailServerReady(false);
+                }
             }
         });
     }
@@ -779,6 +798,11 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         random.nextBytes(values);
         thumbnailServerAuth = Base64.encodeToString(values, Base64.NO_PADDING | Base64.NO_WRAP | Base64.URL_SAFE);
         thumbnailServerPort = allocatePort(29179, true);
+        if (context != null) {
+            SyncLog.info(context, "ThumbnailServer",
+                "Params initialized: port=" + thumbnailServerPort
+                + ", auth length=" + thumbnailServerAuth.length());
+        }
     }
 
     private static int allocatePort(int port, boolean allocateFallback) {
@@ -1195,6 +1219,9 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     @Override
     public void onStop() {
         super.onStop();
+        if (context != null) {
+            SyncLog.info(context, "ThumbnailServer", "Fragment onStop: stopping thumbnail server");
+        }
         ThumbnailServerService.stopServing(context);
 
         LocalBroadcastManager.getInstance(context).unregisterReceiver(backgroundTaskBroadcastReceiver);
