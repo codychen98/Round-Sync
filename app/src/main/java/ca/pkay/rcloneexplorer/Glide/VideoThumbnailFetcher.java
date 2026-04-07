@@ -1,5 +1,6 @@
 package ca.pkay.rcloneexplorer.Glide;
 
+import android.content.Context;
 import android.graphics.Bitmap;
 import android.media.MediaMetadataRetriever;
 
@@ -18,6 +19,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import ca.pkay.rcloneexplorer.util.FLog;
+import ca.pkay.rcloneexplorer.util.SyncLog;
 
 public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
 
@@ -25,11 +27,13 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
     private static final ExecutorService VIDEO_POOL = Executors.newFixedThreadPool(2);
 
     private final String url;
+    private final Context appContext;
     private volatile boolean cancelled;
     private volatile Future<?> pendingTask;
 
-    public VideoThumbnailFetcher(@NonNull String url) {
+    public VideoThumbnailFetcher(@NonNull String url, @NonNull Context appContext) {
         this.url = url;
+        this.appContext = appContext;
     }
 
     @Override
@@ -49,6 +53,8 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                 mmr.setDataSource(url, new HashMap<>());
                 Bitmap frame = extractNonBlackFrame(mmr);
                 if (frame == null) {
+                    SyncLog.error(appContext, "ThumbnailServer",
+                            "VideoThumbnailFetcher: no frame extracted (null or all too dark). url=" + url);
                     callback.onLoadFailed(
                             new RuntimeException("No frame extracted from " + url));
                     return;
@@ -59,6 +65,9 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                 callback.onDataReady(new ByteArrayInputStream(baos.toByteArray()));
             } catch (Exception e) {
                 FLog.e(TAG, "loadData: failed to extract frame from %s", url);
+                SyncLog.error(appContext, "ThumbnailServer",
+                        "VideoThumbnailFetcher exception: " + e.getClass().getSimpleName()
+                        + ": " + e.getMessage() + " | url=" + url);
                 callback.onLoadFailed(e);
             } finally {
                 try {

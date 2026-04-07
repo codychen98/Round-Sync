@@ -27,6 +27,6 @@ public class RoundSyncGlideModule extends AppGlideModule {
                                    @NonNull Glide glide,
                                    @NonNull Registry registry) {
         registry.prepend(VideoThumbnailUrl.class, InputStream.class,
-                new VideoThumbnailLoader.Factory());
+                new VideoThumbnailLoader.Factory(context));
     }
 }

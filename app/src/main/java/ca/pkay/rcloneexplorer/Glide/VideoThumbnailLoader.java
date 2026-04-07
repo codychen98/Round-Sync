@@ -1,5 +1,7 @@
 package ca.pkay.rcloneexplorer.Glide;
 
+import android.content.Context;
+
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
@@ -13,6 +15,12 @@ import java.io.InputStream;
 
 public class VideoThumbnailLoader implements ModelLoader<VideoThumbnailUrl, InputStream> {
 
+    private final Context appContext;
+
+    public VideoThumbnailLoader(@NonNull Context appContext) {
+        this.appContext = appContext;
+    }
+
     @Nullable
     @Override
     public LoadData<InputStream> buildLoadData(@NonNull VideoThumbnailUrl model,
@@ -20,7 +28,7 @@ public class VideoThumbnailLoader implements ModelLoader<VideoThumbnailUrl, Inpu
                                                 @NonNull Options options) {
         return new LoadData<>(
                 new ObjectKey(model.getStablePath()),
-                new VideoThumbnailFetcher(model.getUrl())
+                new VideoThumbnailFetcher(model.getUrl(), appContext)
         );
     }
 
@@ -30,11 +38,18 @@ public class VideoThumbnailLoader implements ModelLoader<VideoThumbnailUrl, Inpu
     }
 
     public static class Factory implements ModelLoaderFactory<VideoThumbnailUrl, InputStream> {
+
+        private final Context appContext;
+
+        public Factory(@NonNull Context appContext) {
+            this.appContext = appContext.getApplicationContext();
+        }
+
         @NonNull
         @Override
         public ModelLoader<VideoThumbnailUrl, InputStream> build(
                 @NonNull MultiModelLoaderFactory multiFactory) {
-            return new VideoThumbnailLoader();
+            return new VideoThumbnailLoader(appContext);
         }
 
         @Override
