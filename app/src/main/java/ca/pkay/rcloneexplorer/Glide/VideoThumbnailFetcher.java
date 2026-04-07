@@ -13,7 +13,6 @@ import com.bumptech.glide.load.data.DataFetcher;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
-import java.util.HashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -49,8 +48,9 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                 return;
             }
             MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+            OkHttpMediaDataSource dataSource = new OkHttpMediaDataSource(url);
             try {
-                mmr.setDataSource(url, new HashMap<>());
+                mmr.setDataSource(dataSource);
                 Bitmap frame = extractNonBlackFrame(mmr);
                 if (frame == null) {
                     SyncLog.error(appContext, "ThumbnailServer",
@@ -70,10 +70,8 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                         + ": " + e.getMessage() + " | url=" + url);
                 callback.onLoadFailed(e);
             } finally {
-                try {
-                    mmr.release();
-                } catch (Exception ignore) {
-                }
+                try { mmr.release(); } catch (Exception ignore) {}
+                try { dataSource.close(); } catch (Exception ignore) {}
             }
         });
     }
