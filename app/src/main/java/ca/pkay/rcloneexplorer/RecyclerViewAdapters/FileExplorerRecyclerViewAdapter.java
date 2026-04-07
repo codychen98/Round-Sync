@@ -196,6 +196,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         .placeholder(R.drawable.ic_file)
                         .error(R.drawable.ic_file);
                 if (serverReady) {
+                    if (!loggedFirstReady) {
+                        loggedFirstReady = true;
+                        SyncLog.info(context, "ThumbnailServer",
+                            "Adapter: first video Glide request issued. serverReady=true, url=" + url);
+                    }
                     RetryRequestListener retryListener = new RetryRequestListener(
                             ThumbnailServerManager.getInstance(),
                             rl -> Glide.with(context.getApplicationContext())
@@ -211,6 +216,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                             .listener(retryListener)
                             .into(holder.fileIcon);
                 } else {
+                    if (!loggedFirstBind) {
+                        loggedFirstBind = true;
+                        SyncLog.info(context, "ThumbnailServer",
+                            "Adapter: showing placeholder (video). serverReady=false, item=" + item.getName());
+                    }
                     cancelActiveRetryListener(holder);
                     Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
                     holder.fileIcon.setImageTintList(holder.defaultIconTint);

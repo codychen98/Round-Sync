@@ -769,6 +769,9 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                 if (recyclerViewAdapter != null) {
                     recyclerViewAdapter.setThumbnailServerReady(true);
                     recyclerViewAdapter.notifyDataSetChanged();
+                } else if (context != null) {
+                    SyncLog.error(context, "ThumbnailServer",
+                        "READY received but recyclerViewAdapter is null — thumbnails cannot load");
                 }
             } else if (state == ThumbnailServerManager.ServerState.STARTING) {
                 if (recyclerViewAdapter != null) {
