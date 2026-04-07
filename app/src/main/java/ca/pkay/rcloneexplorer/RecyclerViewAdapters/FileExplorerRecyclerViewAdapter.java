@@ -3,6 +3,7 @@ package ca.pkay.rcloneexplorer.RecyclerViewAdapters;
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
+import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.text.TextUtils;
 import android.view.LayoutInflater;
@@ -27,10 +28,12 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 
+import ca.pkay.rcloneexplorer.Glide.RetryRequestListener;
 import ca.pkay.rcloneexplorer.Glide.VideoThumbnailUrl;
 import ca.pkay.rcloneexplorer.Items.FileItem;
 import ca.pkay.rcloneexplorer.Items.RemoteItem;
 import ca.pkay.rcloneexplorer.R;
+import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.util.FLog;
 import io.github.x0b.safdav.SafAccessProvider;
 import io.github.x0b.safdav.file.FileAccessError;
@@ -51,6 +54,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     private boolean isInSearchMode;
     private boolean canSelect;
     private boolean showThumbnails;
+    private boolean serverReady = false;
     private boolean optionsDisabled;
     private boolean wrapFileNames;
     private Context context;
@@ -142,16 +146,33 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 RequestOptions glideOption = new RequestOptions()
                         .centerCrop()
                         .diskCacheStrategy(DiskCacheStrategy.DATA)
-                        .placeholder(R.drawable.ic_file);
+                        .placeholder(R.drawable.ic_file)
+                        .error(R.drawable.ic_file);
                 if (localLoad) {
                     bindSafFile(holder, item, glideOption);
-                } else {
+                } else if (serverReady) {
                     String url = buildThumbnailUrl(item);
+                    RetryRequestListener retryListener = new RetryRequestListener(
+                            ThumbnailServerManager.getInstance(),
+                            rl -> Glide.with(context.getApplicationContext())
+                                    .load(new PersistentGlideUrl(url))
+                                    .apply(glideOption)
+                                    .thumbnail(0.1f)
+                                    .listener(rl)
+                                    .into(holder.fileIcon));
+                    cancelActiveRetryListener(holder);
+                    holder.activeRetryListener = retryListener;
                     Glide.with(context.getApplicationContext())
                             .load(new PersistentGlideUrl(url))
                             .apply(glideOption)
                             .thumbnail(0.1f)
+                            .listener(retryListener)
                             .into(holder.fileIcon);
+                } else {
+                    cancelActiveRetryListener(holder);
+                    Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+                    holder.fileIcon.setImageTintList(holder.defaultIconTint);
+                    holder.fileIcon.setImageResource(R.drawable.ic_file);
                 }
             } else if (mimeType.startsWith("video/") && !localLoad) {
                 holder.fileIcon.setImageTintList(null);
@@ -159,11 +180,29 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 RequestOptions glideOption = new RequestOptions()
                         .centerCrop()
                         .diskCacheStrategy(DiskCacheStrategy.DATA)
-                        .placeholder(R.drawable.ic_file);
-                Glide.with(context.getApplicationContext())
-                        .load(new VideoThumbnailUrl(url))
-                        .apply(glideOption)
-                        .into(holder.fileIcon);
+                        .placeholder(R.drawable.ic_file)
+                        .error(R.drawable.ic_file);
+                if (serverReady) {
+                    RetryRequestListener retryListener = new RetryRequestListener(
+                            ThumbnailServerManager.getInstance(),
+                            rl -> Glide.with(context.getApplicationContext())
+                                    .load(new VideoThumbnailUrl(url))
+                                    .apply(glideOption)
+                                    .listener(rl)
+                                    .into(holder.fileIcon));
+                    cancelActiveRetryListener(holder);
+                    holder.activeRetryListener = retryListener;
+                    Glide.with(context.getApplicationContext())
+                            .load(new VideoThumbnailUrl(url))
+                            .apply(glideOption)
+                            .listener(retryListener)
+                            .into(holder.fileIcon);
+                } else {
+                    cancelActiveRetryListener(holder);
+                    Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+                    holder.fileIcon.setImageTintList(holder.defaultIconTint);
+                    holder.fileIcon.setImageResource(R.drawable.ic_file);
+                }
             } else {
                 Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
                 holder.fileIcon.setImageTintList(holder.defaultIconTint);
@@ -244,6 +283,19 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         }
     }
 
+    @Override
+    public void onViewRecycled(@NonNull ViewHolder holder) {
+        super.onViewRecycled(holder);
+        cancelActiveRetryListener(holder);
+    }
+
+    private void cancelActiveRetryListener(ViewHolder holder) {
+        if (holder.activeRetryListener != null) {
+            holder.activeRetryListener.cancel();
+            holder.activeRetryListener = null;
+        }
+    }
+
     private String buildThumbnailUrl(FileItem item) {
         String[] serverParams = listener.getThumbnailServerParams();
         String hiddenPath = serverParams[0];
@@ -308,6 +360,10 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
     public void showThumbnails(boolean showThumbnails) {
         this.showThumbnails = showThumbnails;
+    }
+
+    public void setThumbnailServerReady(boolean ready) {
+        this.serverReady = ready;
     }
 
     public List<FileItem> getCurrentContent() {
@@ -532,6 +588,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         public final View gridThumbnailContainer;
         public FileItem fileItem;
         public final ColorStateList defaultIconTint;
+        public RetryRequestListener activeRetryListener = null;
 
         ViewHolder(View itemView) {
             super(itemView);

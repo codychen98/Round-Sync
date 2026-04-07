@@ -89,9 +89,11 @@ import ca.pkay.rcloneexplorer.R;
 import ca.pkay.rcloneexplorer.Rclone;
 import ca.pkay.rcloneexplorer.RecyclerViewAdapters.FileExplorerRecyclerViewAdapter;
 import ca.pkay.rcloneexplorer.Services.StreamingService;
-import ca.pkay.rcloneexplorer.Services.ThumbnailsLoadingService;
+import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
+import ca.pkay.rcloneexplorer.Services.ThumbnailServerService;
 import ca.pkay.rcloneexplorer.util.ActivityHelper;
 import ca.pkay.rcloneexplorer.util.FLog;
+import ca.pkay.rcloneexplorer.util.ServerReadinessChecker;
 import ca.pkay.rcloneexplorer.util.LargeParcel;
 import ca.pkay.rcloneexplorer.workmanager.EphemeralTaskManager;
 import ca.pkay.rcloneexplorer.workmanager.SyncManager;
@@ -100,9 +102,7 @@ import es.dmoral.toasty.Toasty;
 import java9.util.stream.Collectors;
 import java9.util.stream.StreamSupport;
 import jp.wasabeef.recyclerview.animators.LandingAnimator;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
+import java.util.concurrent.CountDownLatch;
 
 public class FileExplorerFragment extends Fragment implements   FileExplorerRecyclerViewAdapter.OnClickListener,
                                                                 SwipeRefreshLayout.OnRefreshListener,
@@ -170,7 +170,6 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     private int syncDirection;
     private boolean is720dp;
     private boolean showThumbnails;
-    private boolean isThumbnailsServiceRunning;
     private boolean startAtRoot;
     private boolean goToDefaultSet;
     private Context context;
@@ -275,7 +274,6 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
 
         if (showThumbnails) {
             initializeThumbnailParams();
-            startThumbnailService();
         }
 
         swipeRefreshLayout = view.findViewById(R.id.file_explorer_srl);
@@ -292,6 +290,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         recyclerViewAdapter.showThumbnails(showThumbnails);
         recyclerViewAdapter.setWrapFileNames(wrapFilenames);
         recyclerView.setAdapter(recyclerViewAdapter);
+        observeThumbnailServerState();
         applyViewMode(false);
 
         if (remote.isRemoteType(RemoteItem.SFTP) && !goToDefaultSet & savedInstanceState == null) {
@@ -376,7 +375,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         registerReceivers();
 
         if (showThumbnails) {
-            startThumbnailService();
+            startThumbnailServer();
         }
 
         if (directoryObject.isContentValid()) {
@@ -745,17 +744,33 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         fetchDirectoryTask = new FetchDirectoryContent(true).execute();
     }
 
-    private void startThumbnailService() {
-        if(RemoteItem.SAFW == remote.getType()){
-            // safdav also serves files for thumbnails
-            return;
-        }
-        Intent serveIntent = new Intent(getContext(), ThumbnailsLoadingService.class);
-        serveIntent.putExtra(ThumbnailsLoadingService.REMOTE_ARG, remote);
-        serveIntent.putExtra(ThumbnailsLoadingService.HIDDEN_PATH, thumbnailServerAuth);
-        serveIntent.putExtra(ThumbnailsLoadingService.SERVER_PORT, thumbnailServerPort);
-        tryStartService(context, serveIntent);
-        isThumbnailsServiceRunning = true;
+    private void startThumbnailServer() {
+        ThumbnailServerService.startServing(context, remote, thumbnailServerPort, thumbnailServerAuth);
+    }
+
+    private void observeThumbnailServerState() {
+        ThumbnailServerManager.getInstance().getState().observe(this, state -> {
+            if (state == ThumbnailServerManager.ServerState.READY) {
+                FLog.d(TAG, "Thumbnail server ready — refreshing visible items");
+                if (recyclerViewAdapter != null) {
+                    recyclerViewAdapter.setThumbnailServerReady(true);
+                    recyclerViewAdapter.notifyDataSetChanged();
+                }
+            } else if (state == ThumbnailServerManager.ServerState.STARTING) {
+                if (recyclerViewAdapter != null) {
+                    recyclerViewAdapter.setThumbnailServerReady(false);
+                }
+            } else if (state == ThumbnailServerManager.ServerState.FAILED) {
+                FLog.e(TAG, "Thumbnail server failed to start");
+                if (recyclerViewAdapter != null) {
+                    recyclerViewAdapter.setThumbnailServerReady(false);
+                }
+                if (context != null) {
+                    Toasty.error(context, getString(R.string.thumbnail_server_failed),
+                            Toast.LENGTH_LONG, true).show();
+                }
+            }
+        });
     }
 
     private void initializeThumbnailParams() {
@@ -1180,11 +1195,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     @Override
     public void onStop() {
         super.onStop();
-        if (isThumbnailsServiceRunning) {
-            Intent intent = new Intent(context, ThumbnailsLoadingService.class);
-            context.stopService(intent);
-            isThumbnailsServiceRunning = false;
-        }
+        ThumbnailServerService.stopServing(context);
 
         LocalBroadcastManager.getInstance(context).unregisterReceiver(backgroundTaskBroadcastReceiver);
     }
@@ -2061,34 +2072,23 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                     .appendPath(fileItem.getName())
                     .build();
 
-            OkHttpClient client = new OkHttpClient.Builder().build();
-            Request request = new Request.Builder().url(probeUri.toString()).head().build();
-            int code = -1;
-
-            long waitTime = 30 * 1000;
-            boolean available = false;
-            while (waitTime > 0) {
-                long waitStart = System.nanoTime();
-                try {
-                    FLog.v(TAG, "doInBackground: HEAD %s", probeUri.toString());
-                    Response response = client.newCall(request).execute();
-                    code = response.code();
-                } catch (IOException e) {
-                    FLog.v(TAG, "doInBackground: Server not (yet) online");
-                }
-                if (code == 200) {
-                    available = true;
-                    break;
-                }
-                try {
-                    Thread.sleep(250);
-                } catch (InterruptedException e) {
-                    // ignored
-                }
-                long waitEnd = System.nanoTime();
-                waitTime -= (waitEnd - waitStart) / 1000000;
+            CountDownLatch latch = new CountDownLatch(1);
+            boolean[] available = {false};
+            ServerReadinessChecker checker = new ServerReadinessChecker.Builder(probeUri.toString())
+                    .pollIntervalMs(250)
+                    .callback(new ServerReadinessChecker.Callback() {
+                        @Override public void onReady() { available[0] = true; latch.countDown(); }
+                        @Override public void onTimeout() { latch.countDown(); }
+                        @Override public void onError(Exception e) { latch.countDown(); }
+                    })
+                    .build();
+            checker.start();
+            try {
+                latch.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             }
-            return available;
+            return available[0];
         }
 
         @Override
@@ -2178,44 +2178,23 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                 }
             }
 
-            OkHttpClient client = new OkHttpClient.Builder().build();
-            Request request = new Request.Builder().url(uri.toString()).head().build();
-            int code = -1;
-
-            long waitTime = 30 * 1000;
-            boolean available = false;
-            while (waitTime > 0) {
-                long waitStart = System.nanoTime();
-                try {
-                    FLog.v(TAG, "doInBackground: HEAD %s", uri.toString());
-                    Response response = client.newCall(request).execute();
-                    code = response.code();
-
-                    if(BuildConfig.DEBUG) {
-                        Map<String, List<String>> headerFields =  response.headers().toMultimap();
-                        String headers = StreamSupport.stream(headerFields.keySet())
-                                .map(k -> k + '=' + headerFields.get(k))
-                                .collect(Collectors.joining(",", "{", "}"));
-                        FLog.v(TAG, "doInBackground: Response %s", headers);
-                    }
-                } catch (IOException e) {
-                    FLog.v(TAG, "doInBackground: Server not (yet) online");
-                }
-
-                if (code == 200) {
-                    available = true;
-                    break;
-                }
-                try {
-                    Thread.sleep(250);
-                } catch (InterruptedException e) {
-                    // ignored
-                }
-                long waitEnd = System.nanoTime();
-                long actualWait = (waitEnd - waitStart) / 1000000;
-                waitTime -= actualWait;
+            CountDownLatch latch = new CountDownLatch(1);
+            boolean[] available = {false};
+            ServerReadinessChecker checker = new ServerReadinessChecker.Builder(uri.toString())
+                    .pollIntervalMs(250)
+                    .callback(new ServerReadinessChecker.Callback() {
+                        @Override public void onReady() { available[0] = true; latch.countDown(); }
+                        @Override public void onTimeout() { latch.countDown(); }
+                        @Override public void onError(Exception e) { latch.countDown(); }
+                    })
+                    .build();
+            checker.start();
+            try {
+                latch.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             }
-            return available;
+            return available[0];
         }
 
         @Override

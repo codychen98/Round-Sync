@@ -56,6 +56,9 @@
     <string name="streaming_service_notification_content">Serving on http://127.0.0.1:%1$d</string>
     <string name="streaming_service_notification_channel_description">Streaming service</string>
     <string name="streaming_task_failed">Could not stream file</string>
+    <string name="thumbnail_server_notification_title">Serving thumbnails</string>
+    <string name="thumbnail_server_notification_channel_description">Thumbnail server (can be hidden)</string>
+    <string name="thumbnail_server_failed">Thumbnail server failed to start</string>
     <string name="rcd_service_notification_channel_description">Background Service</string>
     <string name="worker_upload_complete">Upload complete</string>
     <string name="remotes_toolbar_title">Remotes</string>

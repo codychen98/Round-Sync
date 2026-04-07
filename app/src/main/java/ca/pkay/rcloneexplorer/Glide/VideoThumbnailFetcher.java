@@ -13,14 +13,20 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.util.HashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import ca.pkay.rcloneexplorer.util.FLog;
 
 public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
 
     private static final String TAG = "VideoThumbnailFetcher";
+    private static final ExecutorService VIDEO_POOL = Executors.newFixedThreadPool(2);
+
     private final String url;
     private volatile boolean cancelled;
+    private volatile Future<?> pendingTask;
 
     public VideoThumbnailFetcher(@NonNull String url) {
         this.url = url;
@@ -33,28 +39,34 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
             callback.onLoadFailed(new RuntimeException("Cancelled"));
             return;
         }
-        MediaMetadataRetriever mmr = new MediaMetadataRetriever();
-        try {
-            mmr.setDataSource(url, new HashMap<>());
-            Bitmap frame = extractNonBlackFrame(mmr);
-            if (frame == null) {
-                callback.onLoadFailed(
-                        new RuntimeException("No frame extracted from " + url));
+        pendingTask = VIDEO_POOL.submit(() -> {
+            if (cancelled) {
+                callback.onLoadFailed(new RuntimeException("Cancelled"));
                 return;
             }
-            ByteArrayOutputStream baos = new ByteArrayOutputStream(64 * 1024);
-            frame.compress(Bitmap.CompressFormat.JPEG, 75, baos);
-            frame.recycle();
-            callback.onDataReady(new ByteArrayInputStream(baos.toByteArray()));
-        } catch (Exception e) {
-            FLog.e(TAG, "loadData: failed to extract frame from %s", url);
-            callback.onLoadFailed(e);
-        } finally {
+            MediaMetadataRetriever mmr = new MediaMetadataRetriever();
             try {
-                mmr.release();
-            } catch (Exception ignore) {
+                mmr.setDataSource(url, new HashMap<>());
+                Bitmap frame = extractNonBlackFrame(mmr);
+                if (frame == null) {
+                    callback.onLoadFailed(
+                            new RuntimeException("No frame extracted from " + url));
+                    return;
+                }
+                ByteArrayOutputStream baos = new ByteArrayOutputStream(64 * 1024);
+                frame.compress(Bitmap.CompressFormat.JPEG, 75, baos);
+                frame.recycle();
+                callback.onDataReady(new ByteArrayInputStream(baos.toByteArray()));
+            } catch (Exception e) {
+                FLog.e(TAG, "loadData: failed to extract frame from %s", url);
+                callback.onLoadFailed(e);
+            } finally {
+                try {
+                    mmr.release();
+                } catch (Exception ignore) {
+                }
             }
-        }
+        });
     }
 
     private Bitmap extractNonBlackFrame(MediaMetadataRetriever mmr) {
@@ -134,6 +146,10 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
     @Override
     public void cancel() {
         cancelled = true;
+        Future<?> task = pendingTask;
+        if (task != null) {
+            task.cancel(true);
+        }
     }
 
     @NonNull

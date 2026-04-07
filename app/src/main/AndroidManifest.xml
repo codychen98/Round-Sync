@@ -81,7 +81,7 @@
             android:name=".Services.StreamingService"
             android:foregroundServiceType="dataSync" />
         <service
-            android:name=".Services.ThumbnailsLoadingService"
+            android:name=".Services.ThumbnailServerService"
             android:foregroundServiceType="dataSync" />
         <service
             android:name=".Services.TriggerService"

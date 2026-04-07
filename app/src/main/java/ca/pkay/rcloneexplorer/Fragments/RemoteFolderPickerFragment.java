@@ -1,7 +1,5 @@
 package ca.pkay.rcloneexplorer.Fragments;
 
-import static ca.pkay.rcloneexplorer.util.ActivityHelper.tryStartService;
-
 import android.annotation.SuppressLint;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -53,7 +51,7 @@ import ca.pkay.rcloneexplorer.Items.RemoteItem;
 import ca.pkay.rcloneexplorer.R;
 import ca.pkay.rcloneexplorer.Rclone;
 import ca.pkay.rcloneexplorer.RecyclerViewAdapters.FileExplorerRecyclerViewAdapter;
-import ca.pkay.rcloneexplorer.Services.ThumbnailsLoadingService;
+import ca.pkay.rcloneexplorer.Services.ThumbnailServerService;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.LargeParcel;
 import de.felixnuesse.ui.BreadcrumbView;
@@ -101,7 +99,6 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
     private Boolean isSearchMode;
     private String searchString;
     private boolean showThumbnails;
-    private boolean isThumbnailsServiceRunning;
     private boolean startAtRoot;
     private boolean goToDefaultSet;
     private Context context;
@@ -445,16 +442,7 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
     }
 
     private void startThumbnailService() {
-        if(RemoteItem.SAFW == remote.getType()){
-            // safdav also serves files for thumbnails
-            return;
-        }
-        Intent serveIntent = new Intent(getContext(), ThumbnailsLoadingService.class);
-        serveIntent.putExtra(ThumbnailsLoadingService.REMOTE_ARG, remote);
-        serveIntent.putExtra(ThumbnailsLoadingService.HIDDEN_PATH, thumbnailServerAuth);
-        serveIntent.putExtra(ThumbnailsLoadingService.SERVER_PORT, thumbnailServerPort);
-        tryStartService(context, serveIntent);
-        isThumbnailsServiceRunning = true;
+        ThumbnailServerService.startServing(context, remote, thumbnailServerPort, thumbnailServerAuth);
     }
 
     private void initializeThumbnailParams() {
@@ -660,11 +648,7 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
     @Override
     public void onStop() {
         super.onStop();
-        if (isThumbnailsServiceRunning) {
-            Intent intent = new Intent(context, ThumbnailsLoadingService.class);
-            context.stopService(intent);
-            isThumbnailsServiceRunning = false;
-        }
+        ThumbnailServerService.stopServing(context);
         ((FragmentActivity) context).setTitle(originalToolbarTitle);
         LocalBroadcastManager.getInstance(context).unregisterReceiver(backgroundTaskBroadcastReceiver);
     }
