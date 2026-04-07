@@ -43,6 +43,9 @@ public class ThumbnailServerService extends android.app.Service {
     private static final String CHANNEL_NAME = "Thumbnail server";
     private static final int    NOTIFICATION_ID = 182;
 
+    private boolean observerRegistered = false;
+    private boolean serverEverStarted = false;
+
     private final Observer<ThumbnailServerManager.ServerState> stateObserver =
             state -> {
                 if (state == ThumbnailServerManager.ServerState.STARTING
@@ -64,9 +67,6 @@ public class ThumbnailServerService extends android.app.Service {
                     }
                 }
             };
-
-    private boolean observerRegistered = false;
-    private boolean serverEverStarted = false;
 
     // region — Static helpers for callers
 
