@@ -45,14 +45,28 @@ public class ThumbnailServerService extends android.app.Service {
 
     private final Observer<ThumbnailServerManager.ServerState> stateObserver =
             state -> {
-                if (state == ThumbnailServerManager.ServerState.STOPPED) {
-                    FLog.d(TAG, "Manager stopped — stopping service");
-                    stopForegroundCompat();
-                    stopSelf();
+                if (state == ThumbnailServerManager.ServerState.STARTING
+                        || state == ThumbnailServerManager.ServerState.READY) {
+                    serverEverStarted = true;
+                } else if (state == ThumbnailServerManager.ServerState.STOPPED) {
+                    if (serverEverStarted) {
+                        // Genuine stop after the server was running — shut the service down.
+                        FLog.d(TAG, "Manager stopped — stopping service");
+                        SyncLog.info(this, "ThumbnailServer",
+                            "Service: manager reached STOPPED after running — stopping self");
+                        stopForegroundCompat();
+                        stopSelf();
+                    } else {
+                        // LiveData delivered the initial STOPPED value on observer registration.
+                        // Ignore it; the server hasn't started yet.
+                        SyncLog.info(this, "ThumbnailServer",
+                            "Service: ignoring initial STOPPED delivery (server not yet started)");
+                    }
                 }
             };
 
     private boolean observerRegistered = false;
+    private boolean serverEverStarted = false;
 
     // region — Static helpers for callers
 
@@ -115,6 +129,7 @@ public class ThumbnailServerService extends android.app.Service {
         super.onDestroy();
         ThumbnailServerManager.getInstance().getState().removeObserver(stateObserver);
         observerRegistered = false;
+        serverEverStarted = false;
         ThumbnailServerManager.getInstance().stop();
     }
 

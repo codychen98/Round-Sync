@@ -85,25 +85,22 @@ public class ThumbnailServerManager {
 
     /** Starts the thumbnail server for the given remote. No-op if already STARTING or READY. */
     public synchronized void start(Context context, RemoteItem remote, int port, String auth) {
+        // Set appContext first so SyncLog calls below always fire, including on the first invocation.
+        appContext = context.getApplicationContext();
         // Use currentState (written synchronously) instead of stateLiveData.getValue()
         // (written via postValue, which is asynchronous) to avoid the race where stop()
         // posts STOPPED but getValue() still returns the stale READY value when start() runs.
-        if (appContext != null) {
-            SyncLog.info(appContext, "ThumbnailServer",
-                "start() called. currentState=" + currentState
-                + ", getValue()=" + stateLiveData.getValue()
-                + ", remote=" + (remote != null ? remote.getName() : "NULL")
-                + ", port=" + port);
-        }
+        SyncLog.info(appContext, "ThumbnailServer",
+            "start() called. currentState=" + currentState
+            + ", getValue()=" + stateLiveData.getValue()
+            + ", remote=" + (remote != null ? remote.getName() : "NULL")
+            + ", port=" + port);
         if (currentState == ServerState.STARTING || currentState == ServerState.READY) {
             FLog.d(TAG, "start() ignored — already in state %s", currentState);
-            if (appContext != null) {
-                SyncLog.info(appContext, "ThumbnailServer",
-                    "start() SKIPPED - currentState=" + currentState + " (already running)");
-            }
+            SyncLog.info(appContext, "ThumbnailServer",
+                "start() SKIPPED - currentState=" + currentState + " (already running)");
             return;
         }
-        appContext = context.getApplicationContext();
         currentRemote = remote;
         currentPort = port;
         currentAuth = auth;
