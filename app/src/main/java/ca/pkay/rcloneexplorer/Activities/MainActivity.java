@@ -48,7 +48,6 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -60,6 +59,7 @@ import ca.pkay.rcloneexplorer.BuildConfig;
 import ca.pkay.rcloneexplorer.Database.json.Importer;
 import ca.pkay.rcloneexplorer.Database.json.SharedPreferencesBackup;
 import ca.pkay.rcloneexplorer.Dialogs.Dialogs;
+import ca.pkay.rcloneexplorer.Dialogs.EditPinnedItemsDialogFragment;
 import ca.pkay.rcloneexplorer.Dialogs.InputDialog;
 import ca.pkay.rcloneexplorer.Dialogs.LoadingDialog;
 import ca.pkay.rcloneexplorer.Fragments.FileExplorerFragment;
@@ -68,6 +68,8 @@ import ca.pkay.rcloneexplorer.Fragments.PermissionFragment;
 import ca.pkay.rcloneexplorer.Fragments.RemotesFragment;
 import ca.pkay.rcloneexplorer.Fragments.TasksFragment;
 import ca.pkay.rcloneexplorer.Fragments.TriggerFragment;
+import ca.pkay.rcloneexplorer.Items.PinnedItem;
+import ca.pkay.rcloneexplorer.Items.PinnedItemStore;
 import ca.pkay.rcloneexplorer.Items.RemoteItem;
 import ca.pkay.rcloneexplorer.R;
 import ca.pkay.rcloneexplorer.Rclone;
@@ -104,7 +106,7 @@ public class MainActivity extends AppCompatActivity
     private Rclone rclone;
     private Fragment fragment;
     private Context context;
-    private HashMap<Integer, RemoteItem> drawerPinnedRemoteIds;
+    private HashMap<Integer, PinnedItem> drawerPinnedRemoteIds;
     private int availableDrawerPinnedRemoteId;
 
     @Override
@@ -356,8 +358,13 @@ public class MainActivity extends AppCompatActivity
 
         int id = item.getItemId();
         navigationView.setCheckedItem(id);
+        if (id == R.id.nav_edit_pins) {
+            showEditPinsDialog();
+            drawer.closeDrawer(GravityCompat.START);
+            return true;
+        }
         if (drawerPinnedRemoteIds.containsKey(id)) {
-            startPinnedRemote(drawerPinnedRemoteIds.get(id));
+            startPinnedItem(drawerPinnedRemoteIds.get(id));
             return true;
         }
 
@@ -460,24 +467,33 @@ public class MainActivity extends AppCompatActivity
         SubMenu subMenu = menu.addSubMenu(R.id.drawer_pinned_header, 1, Menu.NONE, R.string.nav_drawer_pinned_header);
 
         List<RemoteItem> remoteItems = rclone.getRemotes();
-        Collections.sort(remoteItems);
+        HashMap<String, RemoteItem> remoteByName = new HashMap<>();
         SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
         Set<String> renamedRemotes = sharedPreferences.getStringSet(getString(R.string.pref_key_renamed_remotes), new HashSet<>());
-        for(RemoteItem item : remoteItems) {
-            if(renamedRemotes.contains(item.getName())) {
+        for (RemoteItem item : remoteItems) {
+            if (renamedRemotes.contains(item.getName())) {
                 String displayName = sharedPreferences.getString(
                         getString(R.string.pref_key_renamed_remote_prefix, item.getName()), item.getName());
                 item.setDisplayName(displayName);
             }
+            remoteByName.put(item.getName(), item);
         }
-        for (RemoteItem remoteItem : remoteItems) {
-            if (remoteItem.isDrawerPinned()) {
-                MenuItem menuItem = subMenu.add(R.id.nav_pinned, availableDrawerPinnedRemoteId, Menu.NONE, remoteItem.getDisplayName());
-                drawerPinnedRemoteIds.put(availableDrawerPinnedRemoteId, remoteItem);
-                availableDrawerPinnedRemoteId++;
-                menuItem.setIcon(remoteItem.getRemoteIcon());
+
+        List<PinnedItem> pinnedItems = PinnedItemStore.load(context);
+        for (PinnedItem pinnedItem : pinnedItems) {
+            RemoteItem remoteItem = remoteByName.get(pinnedItem.getRemoteName());
+            if (remoteItem == null) {
+                continue;
             }
+            MenuItem menuItem = subMenu.add(R.id.nav_pinned, availableDrawerPinnedRemoteId, Menu.NONE,
+                    pinnedItem.getEffectiveLabel());
+            drawerPinnedRemoteIds.put(availableDrawerPinnedRemoteId, pinnedItem);
+            availableDrawerPinnedRemoteId++;
+            menuItem.setIcon(remoteItem.getRemoteIcon());
         }
+
+        subMenu.add(R.id.nav_pinned, R.id.nav_edit_pins, Menu.NONE, R.string.edit_pins)
+                .setIcon(R.drawable.ic_edit);
     }
 
     public void startRemotesFragment() {
@@ -604,27 +620,75 @@ public class MainActivity extends AppCompatActivity
         //navigationView.getMenu().getItem(0).setChecked(false);
     }
 
-    private void startPinnedRemote(RemoteItem remoteItem) {
+    private void startPinnedItem(PinnedItem pinnedItem) {
+        List<RemoteItem> remoteItems = rclone.getRemotes();
+        RemoteItem remoteItem = null;
+        for (RemoteItem item : remoteItems) {
+            if (item.getName().equals(pinnedItem.getRemoteName())) {
+                remoteItem = item;
+                break;
+            }
+        }
+        if (remoteItem == null) {
+            FLog.w(TAG, "startPinnedItem: remote not found for " + pinnedItem.getRemoteName());
+            return;
+        }
+
+        String startPath = pinnedItem.getPath();
+        boolean hasSubPath = startPath != null && !startPath.isEmpty();
+
         if (fragment != null && fragment instanceof FileExplorerFragment) {
             FragmentManager fragmentManager = getSupportFragmentManager();
 
             // this is the case when remote gets started from a shortcut
             // therefore back should exit the app, and not go into remotes screen
             if (fragmentManager.getBackStackEntryCount() == 0) {
-                startRemote(remoteItem, false);
+                if (hasSubPath) {
+                    startRemoteAtPath(remoteItem, startPath, false);
+                } else {
+                    startRemote(remoteItem, false);
+                }
             } else {
                 for (int i = 0; i < fragmentManager.getBackStackEntryCount(); i++) {
                     fragmentManager.popBackStack();
                 }
-
-                startRemote(remoteItem, true);
+                if (hasSubPath) {
+                    startRemoteAtPath(remoteItem, startPath, true);
+                } else {
+                    startRemote(remoteItem, true);
+                }
             }
         } else {
-            startRemote(remoteItem, true);
+            if (hasSubPath) {
+                startRemoteAtPath(remoteItem, startPath, true);
+            } else {
+                startRemote(remoteItem, true);
+            }
         }
 
         DrawerLayout drawer = findViewById(R.id.drawer_layout);
         drawer.closeDrawer(GravityCompat.START);
+    }
+
+    private void showEditPinsDialog() {
+        EditPinnedItemsDialogFragment dialog = EditPinnedItemsDialogFragment.newInstance();
+        dialog.setOnPinsEditedListener(updatedItems -> {
+            PinnedItemStore.save(context, updatedItems);
+            addRemoteToNavDrawer();
+        });
+        dialog.show(getSupportFragmentManager(), "edit_pins");
+    }
+
+    private void startRemoteAtPath(RemoteItem remote, String startPath, boolean addToBackStack) {
+        fragment = FileExplorerFragment.newInstance(remote, startPath);
+        FragmentTransaction transaction = getSupportFragmentManager().beginTransaction();
+        transaction.replace(R.id.flFragment, fragment, FILE_EXPLORER_FRAGMENT_TAG);
+        if (addToBackStack) {
+            transaction.addToBackStack(null);
+        }
+        transaction.commit();
+
+        AppShortcutsHelper.reportAppShortcutUsage(this, remote.getName());
     }
 
     @Override
@@ -940,17 +1004,15 @@ public class MainActivity extends AppCompatActivity
                 return;
             }
             Set<String> renamedRemotes = pref.getStringSet(getString(R.string.pref_key_renamed_remotes), new HashSet<>());
-            Set<String> pinnedRemotes = pref.getStringSet(getString(R.string.shared_preferences_drawer_pinned_remotes), new HashSet<>());
             Set<String> generatedRemotes = pref.getStringSet(getString(R.string.pref_key_local_alias_remotes), new HashSet<>());
             renamedRemotes.add(id);
-            pinnedRemotes.add(id);
             generatedRemotes.add(id);
             pref.edit()
                     .putStringSet(getString(R.string.pref_key_renamed_remotes), renamedRemotes)
                     .putString(getString(R.string.pref_key_renamed_remote_prefix, id), name)
-                    .putStringSet(getString(R.string.shared_preferences_drawer_pinned_remotes), pinnedRemotes)
                     .putStringSet(getString(R.string.pref_key_local_alias_remotes), generatedRemotes)
                     .apply();
+            PinnedItemStore.addPin(context, id, "", name);
         }
 
         @Override

@@ -82,6 +82,7 @@ import ca.pkay.rcloneexplorer.FileComparators;
 import ca.pkay.rcloneexplorer.FilePicker;
 import ca.pkay.rcloneexplorer.Items.DirectoryObject;
 import ca.pkay.rcloneexplorer.Items.FileItem;
+import ca.pkay.rcloneexplorer.Items.PinnedItemStore;
 import ca.pkay.rcloneexplorer.Items.RemoteItem;
 import ca.pkay.rcloneexplorer.Items.SyncDirectionObject;
 import ca.pkay.rcloneexplorer.Items.Task;
@@ -114,9 +115,14 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                                                                 SortDialog.OnClickListener,
                                                                 ServeDialog.Callback {
 
+    public interface OnPinsChangedListener {
+        void onPinsChanged();
+    }
+
     public static final int STREAMING_INTENT_RESULT = 468;
     private static final String TAG = "FileExplorerFragment";
     private static final String ARG_REMOTE = "remote_param";
+    private static final String ARG_START_PATH = "start_path_param";
     private static final String SHARED_PREFS_SORT_ORDER = "ca.pkay.rcexplorer.sort_order";
     private static final int FILE_PICKER_UPLOAD_RESULT = 186;
     private static final int FILE_PICKER_DOWNLOAD_RESULT = 204;
@@ -174,6 +180,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     private boolean startAtRoot;
     private boolean goToDefaultSet;
     private Context context;
+    private OnPinsChangedListener pinsChangedListener;
     private String thumbnailServerAuth;
     private int thumbnailServerPort;
     private boolean wrapFilenames;
@@ -191,6 +198,17 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         FileExplorerFragment fragment = new FileExplorerFragment();
         Bundle args = new Bundle();
         args.putParcelable(ARG_REMOTE, remoteItem);
+        fragment.setArguments(args);
+        return fragment;
+    }
+
+    public static FileExplorerFragment newInstance(RemoteItem remoteItem, String startPath) {
+        FileExplorerFragment fragment = new FileExplorerFragment();
+        Bundle args = new Bundle();
+        args.putParcelable(ARG_REMOTE, remoteItem);
+        if (startPath != null && !startPath.isEmpty()) {
+            args.putString(ARG_START_PATH, startPath);
+        }
         fragment.setArguments(args);
         return fragment;
     }
@@ -218,7 +236,13 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
 
         String path;
         if (savedInstanceState == null) {
-            path = "//" + remoteName;
+            String startPath = getArguments().getString(ARG_START_PATH);
+            if (startPath != null && !startPath.isEmpty()) {
+                path = "//" + remoteName + startPath;
+                buildStackFromPath(remoteName, path);
+            } else {
+                path = "//" + remoteName;
+            }
             directoryObject.setPath(path);
         } else {
             path = savedInstanceState.getString(SAVED_PATH);
@@ -290,6 +314,17 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         recyclerViewAdapter = new FileExplorerRecyclerViewAdapter(context, emptyFolderView, noSearchResultsView, this);
         recyclerViewAdapter.showThumbnails(showThumbnails);
         recyclerViewAdapter.setWrapFileNames(wrapFilenames);
+        recyclerViewAdapter.setThumbnailProgressListener(new FileExplorerRecyclerViewAdapter.ThumbnailProgressListener() {
+            @Override
+            public void onThumbnailProgress(int loaded, int total) {
+                ThumbnailServerService.updateProgress(context, loaded, total);
+            }
+
+            @Override
+            public void onThumbnailLoadingComplete() {
+                ThumbnailServerService.clearProgress(context);
+            }
+        });
         recyclerView.setAdapter(recyclerViewAdapter);
         observeThumbnailServerState();
         applyViewMode(false);
@@ -1219,12 +1254,17 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         isRunning = true;
     }
 
+    public void setOnPinsChangedListener(OnPinsChangedListener listener) {
+        this.pinsChangedListener = listener;
+    }
+
     @Override
     public void onStop() {
         super.onStop();
         if (context != null) {
             SyncLog.info(context, "ThumbnailServer", "Fragment onStop: stopping thumbnail server");
         }
+        ThumbnailServerService.clearProgress(context);
         ThumbnailServerService.stopServing(context);
 
         LocalBroadcastManager.getInstance(context).unregisterReceiver(backgroundTaskBroadcastReceiver);
@@ -1461,6 +1501,16 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                 case R.id.action_sync:
                     showSyncDialog(fileItem.getPath());
                     break;
+                case R.id.action_pin_to_drawer:
+                    if (PinnedItemStore.isPinned(context, remote.getName(), fileItem.getPath())) {
+                        PinnedItemStore.removePin(context, remote.getName(), fileItem.getPath());
+                    } else {
+                        PinnedItemStore.addPin(context, remote.getName(), fileItem.getPath(), null);
+                    }
+                    if (pinsChangedListener != null) {
+                        pinsChangedListener.onPinsChanged();
+                    }
+                    break;
                 default:
                     return false;
             }
@@ -1469,8 +1519,12 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         popupMenu.show();
         if (fileItem.isDir()) {
             popupMenu.getMenu().findItem(R.id.action_open_as).setVisible(false);
+            boolean alreadyPinned = PinnedItemStore.isPinned(context, remote.getName(), fileItem.getPath());
+            popupMenu.getMenu().findItem(R.id.action_pin_to_drawer)
+                    .setTitle(alreadyPinned ? R.string.unpin_from_drawer : R.string.pin_to_drawer);
         } else {
             popupMenu.getMenu().findItem(R.id.action_sync).setVisible(false);
+            popupMenu.getMenu().findItem(R.id.action_pin_to_drawer).setVisible(false);
         }
         if (!remote.hasSyncSupport()) {
             // TODO: remove once destination sync is added.

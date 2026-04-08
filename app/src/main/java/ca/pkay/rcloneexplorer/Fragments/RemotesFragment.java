@@ -42,6 +42,7 @@ import java.util.Set;
 import ca.pkay.rcloneexplorer.Activities.MainActivity;
 import ca.pkay.rcloneexplorer.AppShortcutsHelper;
 import ca.pkay.rcloneexplorer.Dialogs.RemotePropertiesDialog;
+import ca.pkay.rcloneexplorer.Items.PinnedItemStore;
 import ca.pkay.rcloneexplorer.Items.RemoteItem;
 import ca.pkay.rcloneexplorer.R;
 import ca.pkay.rcloneexplorer.Rclone;
@@ -293,7 +294,7 @@ public class RemotesFragment extends Fragment implements RemotesRecyclerViewAdap
                     pinRemote(remoteItem);
                 }
             } else if (itemID == R.id.action_favorite) {
-                if (remoteItem.isDrawerPinned()) {
+                if (PinnedItemStore.isPinned(context, remoteItem.getName(), "")) {
                     unpinFromDrawer(remoteItem);
                 } else {
                     pinToDrawer(remoteItem);
@@ -320,7 +321,7 @@ public class RemotesFragment extends Fragment implements RemotesRecyclerViewAdap
         }
 
         MenuItem favoriteAction = popupMenu.getMenu().findItem(R.id.action_favorite);
-        if (remoteItem.isDrawerPinned()) {
+        if (PinnedItemStore.isPinned(context, remoteItem.getName(), "")) {
             favoriteAction.setTitle(R.string.unpin_from_drawer);
         } else {
             favoriteAction.setTitle(R.string.pin_to_drawer);
@@ -455,34 +456,14 @@ public class RemotesFragment extends Fragment implements RemotesRecyclerViewAdap
     }
 
     private void pinToDrawer(RemoteItem remoteItem) {
-        SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
-        SharedPreferences.Editor editor = sharedPreferences.edit();
-
-        Set<String> stringSet = sharedPreferences.getStringSet(getString(R.string.shared_preferences_drawer_pinned_remotes), new HashSet<>());
-        Set<String> pinnedRemotes = new HashSet<>(stringSet); // bug in android means that we have to create a copy
-        pinnedRemotes.add(remoteItem.getName());
+        PinnedItemStore.addPin(context, remoteItem.getName(), "", null);
         remoteItem.setDrawerPinned(true);
-
-        editor.putStringSet(getString(R.string.shared_preferences_drawer_pinned_remotes), pinnedRemotes);
-        editor.apply();
-
         pinToDrawerListener.addRemoteToNavDrawer();
     }
 
     private void unpinFromDrawer(RemoteItem remoteItem) {
-        SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
-        SharedPreferences.Editor editor = sharedPreferences.edit();
-
-        Set<String> stringSet = sharedPreferences.getStringSet(getString(R.string.shared_preferences_drawer_pinned_remotes), new HashSet<>());
-        Set<String> pinnedRemotes = new HashSet<>(stringSet);
-        if (pinnedRemotes.contains(remoteItem.getName())) {
-            pinnedRemotes.remove(remoteItem.getName());
-        }
+        PinnedItemStore.removePin(context, remoteItem.getName(), "");
         remoteItem.setDrawerPinned(false);
-
-        editor.putStringSet(getString(R.string.shared_preferences_drawer_pinned_remotes), pinnedRemotes);
-        editor.apply();
-
         pinToDrawerListener.removeRemoteFromNavDrawer();
     }
 
@@ -558,11 +539,8 @@ public class RemotesFragment extends Fragment implements RemotesRecyclerViewAdap
 
             AppShortcutsHelper.removeAppShortcut(context, remoteItem.getName());
 
-            Set<String> drawerPinnedRemote = sharedPreferences.getStringSet(context.getString(R.string.shared_preferences_drawer_pinned_remotes), new HashSet<>());
-            if (drawerPinnedRemote.contains(remoteItem.getName())) {
-                drawerPinnedRemote.remove(remoteItem.getName());
-                editor.putStringSet(context.getString(R.string.shared_preferences_drawer_pinned_remotes), new HashSet<>(pinnedRemotes));
-                editor.apply();
+            if (PinnedItemStore.isPinned(context, remoteItem.getName(), "")) {
+                PinnedItemStore.removePin(context, remoteItem.getName(), "");
                 pinToDrawerListener.removeRemoteFromNavDrawer();
             }
             

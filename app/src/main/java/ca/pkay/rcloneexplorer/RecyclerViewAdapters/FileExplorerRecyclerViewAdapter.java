@@ -27,6 +27,7 @@ import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import ca.pkay.rcloneexplorer.Glide.RetryRequestListener;
 import ca.pkay.rcloneexplorer.Glide.VideoThumbnailUrl;
@@ -63,6 +64,9 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     private Context context;
     private long sizeLimit;
     private int viewMode = VIEW_MODE_LIST;
+    private ThumbnailProgressListener progressListener;
+    private int thumbnailTotal = 0;
+    private final AtomicInteger thumbnailLoaded = new AtomicInteger(0);
 
     public interface OnClickListener {
         void onFileClicked(FileItem fileItem);
@@ -71,6 +75,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         void onFileDeselected();
         void onFileOptionsClicked(View view, FileItem fileItem);
         String[] getThumbnailServerParams();
+    }
+
+    public interface ThumbnailProgressListener {
+        void onThumbnailProgress(int loaded, int total);
+        void onThumbnailLoadingComplete();
     }
 
     public FileExplorerRecyclerViewAdapter(Context context, View emptyView, View noSearchResultsView, OnClickListener listener) {
@@ -160,7 +169,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         SyncLog.info(context, "ThumbnailServer",
                             "Adapter: first Glide request issued. serverReady=true, url=" + url);
                     }
-                    RetryRequestListener retryListener = new RetryRequestListener(
+                    RetryRequestListener retryListener = new ProgressTrackingRetryListener(
                             ThumbnailServerManager.getInstance(),
                             rl -> Glide.with(context.getApplicationContext())
                                     .load(new PersistentGlideUrl(url))
@@ -201,7 +210,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         SyncLog.info(context, "ThumbnailServer",
                             "Adapter: first video Glide request issued. serverReady=true, url=" + url);
                     }
-                    RetryRequestListener retryListener = new RetryRequestListener(
+                    RetryRequestListener retryListener = new ProgressTrackingRetryListener(
                             ThumbnailServerManager.getInstance(),
                             rl -> Glide.with(context.getApplicationContext())
                                     .load(new VideoThumbnailUrl(url))
@@ -413,6 +422,24 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     public void newData(List<FileItem> data) {
         loggedFirstBind = false;
         loggedFirstReady = false;
+        int total = 0;
+        if (showThumbnails) {
+            for (FileItem item : data) {
+                if (!item.isDir()) {
+                    boolean localLoad = item.getRemote() != null
+                            && item.getRemote().getType() == RemoteItem.SAFW;
+                    if (!localLoad) {
+                        String mime = item.getMimeType();
+                        if ((mime.startsWith("image/") && item.getSize() <= sizeLimit)
+                                || mime.startsWith("video/")) {
+                            total++;
+                        }
+                    }
+                }
+            }
+        }
+        thumbnailTotal = total;
+        thumbnailLoaded.set(0);
         this.clear();
         files = new ArrayList<>(data);
         isInSelectMode = false;
@@ -528,6 +555,10 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         refreshData();
     }
 
+    public void setThumbnailProgressListener(ThumbnailProgressListener listener) {
+        this.progressListener = listener;
+    }
+
     private void showEmptyState(Boolean show) {
         if (isInSearchMode) {
             if (show) {
@@ -600,6 +631,49 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             listener.onFilesSelected();
         }
         notifyDataSetChanged();
+    }
+
+    private class ProgressTrackingRetryListener extends RetryRequestListener {
+
+        ProgressTrackingRetryListener(
+                @NonNull ThumbnailServerManager serverManager,
+                @NonNull RetryRequestListener.RetryLoadCallback loadCallback) {
+            super(serverManager, loadCallback);
+        }
+
+        @Override
+        public boolean onResourceReady(
+                @NonNull android.graphics.drawable.Drawable resource,
+                @NonNull Object model,
+                com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
+                @NonNull com.bumptech.glide.load.DataSource dataSource,
+                boolean isFirstResource) {
+            boolean result = super.onResourceReady(resource, model, target, dataSource, isFirstResource);
+            notifyProgress();
+            return result;
+        }
+
+        @Override
+        public boolean onLoadFailed(
+                @androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e,
+                Object model,
+                @NonNull com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
+                boolean isFirstResource) {
+            boolean retrying = super.onLoadFailed(e, model, target, isFirstResource);
+            if (!retrying) {
+                notifyProgress();
+            }
+            return retrying;
+        }
+
+        private void notifyProgress() {
+            if (progressListener == null || thumbnailTotal == 0) return;
+            int loaded = thumbnailLoaded.incrementAndGet();
+            progressListener.onThumbnailProgress(loaded, thumbnailTotal);
+            if (loaded >= thumbnailTotal) {
+                progressListener.onThumbnailLoadingComplete();
+            }
+        }
     }
 
     public class ViewHolder extends RecyclerView.ViewHolder {

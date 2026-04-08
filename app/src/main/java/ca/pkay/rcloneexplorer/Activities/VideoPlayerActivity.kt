@@ -1,5 +1,6 @@
 package ca.pkay.rcloneexplorer.Activities
 
+import android.content.res.Configuration
 import android.os.Bundle
 import android.view.View
 import android.widget.ImageButton
@@ -26,14 +27,15 @@ class VideoPlayerActivity : AppCompatActivity() {
     private lateinit var episodeCounter: TextView
     private lateinit var btnScaleMode: ImageButton
     private var player: ExoPlayer? = null
-    private var scaleIndex = 1
+    private var scaleIndex = 0
 
     private val scaleModes = intArrayOf(
+        -1,  // AUTO: Portrait=Fit, Landscape=Stretch
         AspectRatioFrameLayout.RESIZE_MODE_FIT,
         AspectRatioFrameLayout.RESIZE_MODE_FILL,
         AspectRatioFrameLayout.RESIZE_MODE_ZOOM
     )
-    private val scaleModeLabels = arrayOf("Fit", "Stretch", "Crop")
+    private val scaleModeLabels = arrayOf("Auto", "Fit", "Stretch", "Crop")
 
     private var retryCount = 0
     private val maxRetries = 3
@@ -51,7 +53,7 @@ class VideoPlayerActivity : AppCompatActivity() {
         episodeCounter = findViewById(R.id.episode_counter)
         btnScaleMode = findViewById(R.id.btn_scale_mode)
 
-        playerView.resizeMode = scaleModes[scaleIndex]
+        applyScaleMode()
         topBar.visibility = View.GONE
 
         playerView.setControllerVisibilityListener(
@@ -100,9 +102,27 @@ class VideoPlayerActivity : AppCompatActivity() {
         episodeCounter.text = "${index + 1} / $total"
     }
 
+    private fun applyScaleMode() {
+        if (scaleModes[scaleIndex] == -1) {
+            val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+            playerView.resizeMode = if (isLandscape) {
+                AspectRatioFrameLayout.RESIZE_MODE_FILL
+            } else {
+                AspectRatioFrameLayout.RESIZE_MODE_FIT
+            }
+        } else {
+            playerView.resizeMode = scaleModes[scaleIndex]
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        applyScaleMode()
+    }
+
     private fun cycleScaleMode() {
         scaleIndex = (scaleIndex + 1) % scaleModes.size
-        playerView.resizeMode = scaleModes[scaleIndex]
+        applyScaleMode()
         Toast.makeText(this, scaleModeLabels[scaleIndex], Toast.LENGTH_SHORT).show()
     }
 

@@ -32,12 +32,16 @@ public class ThumbnailServerService extends android.app.Service {
 
     private static final String TAG = "ThumbnailServerService";
 
-    public static final String ACTION_START = "ca.pkay.rcexplorer.ThumbnailServerService.ACTION_START";
-    public static final String ACTION_STOP  = "ca.pkay.rcexplorer.ThumbnailServerService.ACTION_STOP";
+    public static final String ACTION_START           = "ca.pkay.rcexplorer.ThumbnailServerService.ACTION_START";
+    public static final String ACTION_STOP            = "ca.pkay.rcexplorer.ThumbnailServerService.ACTION_STOP";
+    public static final String ACTION_UPDATE_PROGRESS = "ca.pkay.rcexplorer.ThumbnailServerService.ACTION_UPDATE_PROGRESS";
+    public static final String ACTION_CLEAR_PROGRESS  = "ca.pkay.rcexplorer.ThumbnailServerService.ACTION_CLEAR_PROGRESS";
 
     public static final String EXTRA_REMOTE = "ca.pkay.rcexplorer.ThumbnailServerService.EXTRA_REMOTE";
     public static final String EXTRA_PORT   = "ca.pkay.rcexplorer.ThumbnailServerService.EXTRA_PORT";
     public static final String EXTRA_AUTH   = "ca.pkay.rcexplorer.ThumbnailServerService.EXTRA_AUTH";
+    public static final String EXTRA_LOADED = "ca.pkay.rcexplorer.ThumbnailServerService.EXTRA_LOADED";
+    public static final String EXTRA_TOTAL  = "ca.pkay.rcexplorer.ThumbnailServerService.EXTRA_TOTAL";
 
     private static final String CHANNEL_ID   = "ca.pkay.rcexplorer.thumbnail_server_channel";
     private static final String CHANNEL_NAME = "Thumbnail server";
@@ -45,6 +49,7 @@ public class ThumbnailServerService extends android.app.Service {
 
     private boolean observerRegistered = false;
     private boolean serverEverStarted = false;
+    private NotificationManager notificationManager;
 
     private final Observer<ThumbnailServerManager.ServerState> stateObserver =
             state -> {
@@ -95,6 +100,22 @@ public class ThumbnailServerService extends android.app.Service {
         context.startService(intent);
     }
 
+    /** Updates the foreground notification with thumbnail loading progress. */
+    public static void updateProgress(Context context, int loaded, int total) {
+        Intent intent = new Intent(context, ThumbnailServerService.class);
+        intent.setAction(ACTION_UPDATE_PROGRESS);
+        intent.putExtra(EXTRA_LOADED, loaded);
+        intent.putExtra(EXTRA_TOTAL, total);
+        context.startService(intent);
+    }
+
+    /** Resets the foreground notification back to the idle "Serving thumbnails" state. */
+    public static void clearProgress(Context context) {
+        Intent intent = new Intent(context, ThumbnailServerService.class);
+        intent.setAction(ACTION_CLEAR_PROGRESS);
+        context.startService(intent);
+    }
+
     // endregion
 
     // region — Service lifecycle
@@ -102,6 +123,7 @@ public class ThumbnailServerService extends android.app.Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         NotificationUtils.createNotificationChannel(
                 this,
                 CHANNEL_ID,
@@ -120,6 +142,12 @@ public class ThumbnailServerService extends android.app.Service {
             handleStart(intent);
         } else if (ACTION_STOP.equals(action)) {
             handleStop();
+        } else if (ACTION_UPDATE_PROGRESS.equals(action)) {
+            int loaded = intent.getIntExtra(EXTRA_LOADED, 0);
+            int total = intent.getIntExtra(EXTRA_TOTAL, 0);
+            handleUpdateProgress(loaded, total);
+        } else if (ACTION_CLEAR_PROGRESS.equals(action)) {
+            handleClearProgress();
         }
         return START_STICKY;
     }
@@ -177,6 +205,32 @@ public class ThumbnailServerService extends android.app.Service {
         // in case the manager was already stopped.
         stopForegroundCompat();
         stopSelf();
+    }
+
+    private void handleUpdateProgress(int loaded, int total) {
+        if (notificationManager == null || total == 0) return;
+        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_streaming)
+                .setContentTitle(getString(R.string.thumbnail_server_notification_title))
+                .setContentText("Loading thumbnails " + loaded + "/" + total)
+                .setProgress(total, loaded, false)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setOngoing(true)
+                .setSilent(true)
+                .build();
+        notificationManager.notify(NOTIFICATION_ID, notification);
+    }
+
+    private void handleClearProgress() {
+        if (notificationManager == null) return;
+        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_streaming)
+                .setContentTitle(getString(R.string.thumbnail_server_notification_title))
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setOngoing(true)
+                .setSilent(true)
+                .build();
+        notificationManager.notify(NOTIFICATION_ID, notification);
     }
 
     // endregion
