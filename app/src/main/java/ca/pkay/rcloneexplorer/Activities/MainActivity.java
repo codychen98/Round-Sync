@@ -618,6 +618,9 @@ public class MainActivity extends AppCompatActivity
 
     private void startRemote(RemoteItem remote, boolean addToBackStack) {
         fragment = FileExplorerFragment.newInstance(remote);
+        if (fragment instanceof FileExplorerFragment) {
+            ((FileExplorerFragment) fragment).setOnPinsChangedListener(this::addRemoteToNavDrawer);
+        }
         FragmentTransaction transaction = getSupportFragmentManager().beginTransaction();
         transaction.replace(R.id.flFragment, fragment, FILE_EXPLORER_FRAGMENT_TAG);
         if (addToBackStack) {
@@ -690,6 +693,9 @@ public class MainActivity extends AppCompatActivity
 
     private void startRemoteAtPath(RemoteItem remote, String startPath, boolean addToBackStack) {
         fragment = FileExplorerFragment.newInstance(remote, startPath);
+        if (fragment instanceof FileExplorerFragment) {
+            ((FileExplorerFragment) fragment).setOnPinsChangedListener(this::addRemoteToNavDrawer);
+        }
         FragmentTransaction transaction = getSupportFragmentManager().beginTransaction();
         transaction.replace(R.id.flFragment, fragment, FILE_EXPLORER_FRAGMENT_TAG);
         if (addToBackStack) {

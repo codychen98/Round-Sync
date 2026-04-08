@@ -238,11 +238,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         if (savedInstanceState == null) {
             String startPath = getArguments().getString(ARG_START_PATH);
             if (startPath != null && !startPath.isEmpty()) {
-                if (!startPath.startsWith("/")) {
-                    startPath = "/" + startPath;
-                }
-                path = "//" + remoteName + startPath;
-                buildStackFromPath(remoteName, path);
+                path = startPath;
+                buildStackFromPath(remoteName, startPath);
             } else {
                 path = "//" + remoteName;
             }
