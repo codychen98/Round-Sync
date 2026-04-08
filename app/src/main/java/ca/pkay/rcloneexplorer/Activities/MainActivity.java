@@ -485,8 +485,17 @@ public class MainActivity extends AppCompatActivity
             if (remoteItem == null) {
                 continue;
             }
+            String label;
+            if (pinnedItem.getPath().isEmpty()
+                    && pinnedItem.getDisplayLabel() == null
+                    && remoteItem.getDisplayName() != null
+                    && !remoteItem.getDisplayName().equals(pinnedItem.getRemoteName())) {
+                label = remoteItem.getDisplayName();
+            } else {
+                label = pinnedItem.getEffectiveLabel();
+            }
             MenuItem menuItem = subMenu.add(R.id.nav_pinned, availableDrawerPinnedRemoteId, Menu.NONE,
-                    pinnedItem.getEffectiveLabel());
+                    label);
             drawerPinnedRemoteIds.put(availableDrawerPinnedRemoteId, pinnedItem);
             availableDrawerPinnedRemoteId++;
             menuItem.setIcon(remoteItem.getRemoteIcon());

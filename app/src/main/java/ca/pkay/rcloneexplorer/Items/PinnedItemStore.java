@@ -129,7 +129,8 @@ public class PinnedItemStore {
         }
         List<PinnedItem> migrated = new ArrayList<>(oldSet.size());
         for (String remoteName : oldSet) {
-            migrated.add(new PinnedItem(remoteName, "", null));
+            String displayName = prefs.getString("remote_name_" + remoteName, null);
+            migrated.add(new PinnedItem(remoteName, "", displayName));
         }
         save(context, migrated);
         prefs.edit().remove(PREF_KEY_V1).apply();
