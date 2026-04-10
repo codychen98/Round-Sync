@@ -2,14 +2,20 @@ package ca.pkay.rcloneexplorer.Activities
 
 import android.content.res.Configuration
 import android.os.Bundle
+import android.view.GestureDetector
+import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
+import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.GestureDetectorCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -17,11 +23,14 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import ca.pkay.rcloneexplorer.R
+import ca.pkay.rcloneexplorer.util.VideoDoubleTapHorizontalZone
+import ca.pkay.rcloneexplorer.util.VideoPlayerDoubleTapZones
 import java.io.IOException
 
 class VideoPlayerActivity : AppCompatActivity() {
 
     private lateinit var playerView: PlayerView
+    private lateinit var gestureOverlay: View
     private lateinit var topBar: View
     private lateinit var videoTitle: TextView
     private lateinit var episodeCounter: TextView
@@ -42,12 +51,16 @@ class VideoPlayerActivity : AppCompatActivity() {
     private val retryWindowMs = 10000L
     private var lastErrorTime = 0L
 
+    private var controllerUiVisible = false
+    private var lastDoubleTapHandledAt = 0L
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         hideSystemUI()
         setContentView(R.layout.activity_video_player)
 
         playerView = findViewById(R.id.player_view)
+        gestureOverlay = findViewById(R.id.video_gesture_overlay)
         topBar = findViewById(R.id.top_bar)
         videoTitle = findViewById(R.id.video_title)
         episodeCounter = findViewById(R.id.episode_counter)
@@ -58,9 +71,13 @@ class VideoPlayerActivity : AppCompatActivity() {
 
         playerView.setControllerVisibilityListener(
             PlayerView.ControllerVisibilityListener { visibility ->
+                controllerUiVisible = visibility == View.VISIBLE
                 topBar.visibility = visibility
             }
         )
+
+        gestureOverlay.post { layoutGestureOverlayBand() }
+        setupGestureOverlay()
 
         btnScaleMode.setOnClickListener { cycleScaleMode() }
 
@@ -118,6 +135,83 @@ class VideoPlayerActivity : AppCompatActivity() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         applyScaleMode()
+        gestureOverlay.post { layoutGestureOverlayBand() }
+    }
+
+    private fun layoutGestureOverlayBand() {
+        val parent = gestureOverlay.parent as? View ?: return
+        val h = parent.height
+        if (h <= 0) {
+            return
+        }
+        val lp = gestureOverlay.layoutParams as FrameLayout.LayoutParams
+        lp.width = FrameLayout.LayoutParams.MATCH_PARENT
+        lp.height = (h * MIDDLE_BAND_HEIGHT_FRACTION).toInt()
+        lp.topMargin = (h * TOP_BOTTOM_EXCLUDE_FRACTION).toInt()
+        lp.leftMargin = 0
+        lp.rightMargin = 0
+        lp.bottomMargin = 0
+        lp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        gestureOverlay.layoutParams = lp
+    }
+
+    private fun setupGestureOverlay() {
+        val detector = GestureDetectorCompat(
+            this,
+            object : GestureDetector.SimpleOnGestureListener() {
+                override fun onDown(e: MotionEvent): Boolean = true
+
+                override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                    toggleControllerVisibility()
+                    return true
+                }
+
+                override fun onDoubleTap(e: MotionEvent): Boolean {
+                    val now = System.currentTimeMillis()
+                    if (now - lastDoubleTapHandledAt < DOUBLE_TAP_DEBOUNCE_MS) {
+                        return true
+                    }
+                    lastDoubleTapHandledAt = now
+                    val widthPx = gestureOverlay.width.coerceAtLeast(1)
+                    when (VideoPlayerDoubleTapZones.horizontalZone(e.x, widthPx)) {
+                        VideoDoubleTapHorizontalZone.LEFT -> seekRelativeMs(-SEEK_STEP_MS)
+                        VideoDoubleTapHorizontalZone.CENTER -> togglePlayPause()
+                        VideoDoubleTapHorizontalZone.RIGHT -> seekRelativeMs(SEEK_STEP_MS)
+                    }
+                    return true
+                }
+            }
+        )
+        gestureOverlay.setOnTouchListener { _, event -> detector.onTouchEvent(event) }
+    }
+
+    private fun toggleControllerVisibility() {
+        if (controllerUiVisible) {
+            playerView.hideController()
+        } else {
+            playerView.showController()
+        }
+    }
+
+    private fun togglePlayPause() {
+        val p = player ?: return
+        if (p.isPlaying) {
+            p.pause()
+        } else {
+            p.play()
+        }
+    }
+
+    private fun seekRelativeMs(deltaMs: Long) {
+        val p = player ?: return
+        val current = p.currentPosition
+        val duration = p.duration
+        val target = current + deltaMs
+        if (duration != C.TIME_UNSET && duration > 0) {
+            p.seekTo(target.coerceIn(0L, duration))
+        } else {
+            p.seekTo(target.coerceAtLeast(0L))
+        }
     }
 
     private fun cycleScaleMode() {
@@ -188,5 +282,12 @@ class VideoPlayerActivity : AppCompatActivity() {
         player?.release()
         player = null
         super.onDestroy()
+    }
+
+    companion object {
+        private const val TOP_BOTTOM_EXCLUDE_FRACTION = 0.25f
+        private const val MIDDLE_BAND_HEIGHT_FRACTION = 0.5f
+        private const val SEEK_STEP_MS = 10_000L
+        private const val DOUBLE_TAP_DEBOUNCE_MS = 400L
     }
 }
