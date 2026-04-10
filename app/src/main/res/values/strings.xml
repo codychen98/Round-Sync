@@ -3,6 +3,7 @@
     <string name="app_description">Rclone for Android</string>
     <string name="app_short_name">Round Sync</string>
 
+    <string name="title_activity_image_viewer">Images</string>
     <string name="title_activity_about">About</string>
     <string name="title_activity_changelog">Changelog</string>
     <string name="title_activity_contributors">License</string>

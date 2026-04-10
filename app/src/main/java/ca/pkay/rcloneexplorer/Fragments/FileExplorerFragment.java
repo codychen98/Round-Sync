@@ -66,6 +66,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Stack;
 
+import ca.pkay.rcloneexplorer.Activities.ImageViewerActivity;
 import ca.pkay.rcloneexplorer.Activities.MainActivity;
 import ca.pkay.rcloneexplorer.Activities.VideoPlayerActivity;
 import ca.pkay.rcloneexplorer.BuildConfig;
@@ -974,7 +975,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
 
     @Override
     public void onClickImage(FileItem fileItem) {
-        new DownloadAndOpen(DownloadAndOpen.OPEN_AS_IMAGE).execute(fileItem);
+        new ImageStreamTask().execute(fileItem);
     }
 
     private void showFileProperties(FileItem fileItem) {
@@ -1343,10 +1344,12 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     @Override
     public void onFileClicked(FileItem fileItem) {
         String type = fileItem.getMimeType();
-        if (type.startsWith("video/")) {
+        if (type != null && type.startsWith("video/")) {
             new VideoStreamTask().execute(fileItem);
-        } else if (type.startsWith("audio/")) {
+        } else if (type != null && type.startsWith("audio/")) {
             new StreamTask().execute(fileItem);
+        } else if (type != null && type.startsWith("image/")) {
+            new ImageStreamTask().execute(fileItem);
         } else {
             new DownloadAndOpen().execute(fileItem);
         }
@@ -2115,6 +2118,48 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         }
     }
 
+    private void launchImageViewer(FileItem clickedImage, int port) {
+        List<FileItem> ordered = isSearchMode
+                ? recyclerViewAdapter.getCurrentContent()
+                : directoryObject.getDirectoryContent();
+        List<FileItem> imageFiles = new ArrayList<>();
+        for (FileItem file : ordered) {
+            if (file.isDir()) {
+                continue;
+            }
+            String mt = file.getMimeType();
+            if (mt != null && mt.startsWith("image/")) {
+                imageFiles.add(file);
+            }
+        }
+        if (imageFiles.isEmpty()) {
+            imageFiles.add(clickedImage);
+        }
+        List<String> imageUrls = new ArrayList<>();
+        List<String> imageNames = new ArrayList<>();
+        int startIndex = 0;
+        for (int i = 0; i < imageFiles.size(); i++) {
+            FileItem img = imageFiles.get(i);
+            Uri uri = Uri.parse("http://127.0.0.1:" + port)
+                    .buildUpon()
+                    .appendPath(img.getName())
+                    .build();
+            imageUrls.add(uri.toString());
+            imageNames.add(img.getName());
+            if (img.getPath().equals(clickedImage.getPath())) {
+                startIndex = i;
+            }
+        }
+        Intent intent = new Intent(getContext(), ImageViewerActivity.class);
+        intent.putExtra(ImageViewerActivity.EXTRA_IMAGE_URLS, imageUrls.toArray(new String[0]));
+        intent.putExtra(ImageViewerActivity.EXTRA_IMAGE_NAMES, imageNames.toArray(new String[0]));
+        intent.putExtra(ImageViewerActivity.EXTRA_START_INDEX, startIndex);
+        Activity activity = getActivity();
+        if (activity != null) {
+            tryStartActivity(activity, intent);
+        }
+    }
+
     @SuppressLint("StaticFieldLeak")
     private class VideoStreamTask extends AsyncTask<FileItem, Void, Boolean> {
 
@@ -2184,6 +2229,94 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             Dialogs.dismissSilently(loadingDialog);
             if (success) {
                 launchVideoPlayer(fileItem, port);
+            } else {
+                Toasty.error(context, getString(R.string.streaming_task_failed), Toast.LENGTH_LONG, true).show();
+                context.stopService(serveIntent);
+            }
+        }
+    }
+
+    @SuppressLint("StaticFieldLeak")
+    private class ImageStreamTask extends AsyncTask<FileItem, Void, Boolean> {
+
+        private static final String TAG = "ImageStreamTask";
+        private LoadingDialog loadingDialog;
+        private Intent serveIntent;
+        private FileItem fileItem;
+        private int port;
+
+        @Override
+        protected void onPreExecute() {
+            super.onPreExecute();
+            loadingDialog = new LoadingDialog()
+                    .setCanCancel(false)
+                    .setTitle(getString(R.string.loading));
+            if (getFragmentManager() != null) {
+                loadingDialog.show(getChildFragmentManager(), "loading dialog");
+            }
+        }
+
+        @Override
+        protected Boolean doInBackground(FileItem... fileItems) {
+            if (context == null) {
+                FLog.w(TAG, "doInBackground: could not start stream, context is invalid");
+                return false;
+            }
+            fileItem = fileItems[0];
+            port = allocatePort(8080, true);
+            serveIntent = new Intent(context, StreamingService.class);
+            serveIntent.putExtra(StreamingService.SERVE_PATH_ARG, getParentPath(fileItem));
+            serveIntent.putExtra(StreamingService.REMOTE_ARG, remote);
+            serveIntent.putExtra(StreamingService.SHOW_NOTIFICATION_TEXT, false);
+            serveIntent.putExtra(StreamingService.SERVE_PORT, port);
+            context.stopService(new Intent(context, StreamingService.class));
+            tryStartService(context, serveIntent);
+
+            Uri probeUri = Uri.parse("http://127.0.0.1:" + port)
+                    .buildUpon()
+                    .appendPath(fileItem.getName())
+                    .build();
+
+            CountDownLatch latch = new CountDownLatch(1);
+            boolean[] available = {false};
+            ServerReadinessChecker checker = new ServerReadinessChecker.Builder(probeUri.toString())
+                    .pollIntervalMs(250)
+                    .callback(new ServerReadinessChecker.Callback() {
+                        @Override
+                        public void onReady() {
+                            available[0] = true;
+                            latch.countDown();
+                        }
+
+                        @Override
+                        public void onTimeout() {
+                            latch.countDown();
+                        }
+
+                        @Override
+                        public void onError(Exception e) {
+                            latch.countDown();
+                        }
+                    })
+                    .build();
+            checker.start();
+            try {
+                latch.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return available[0];
+        }
+
+        @Override
+        protected void onPostExecute(Boolean success) {
+            if (!isRunning) {
+                FLog.w(TAG, "Streaming failed: user navigated away before stream could load");
+                return;
+            }
+            Dialogs.dismissSilently(loadingDialog);
+            if (Boolean.TRUE.equals(success)) {
+                launchImageViewer(fileItem, port);
             } else {
                 Toasty.error(context, getString(R.string.streaming_task_failed), Toast.LENGTH_LONG, true).show();
                 context.stopService(serveIntent);
