@@ -117,6 +117,7 @@
     <string name="open_as_audio">Audio</string>
     <string name="open_as_video">Video</string>
     <string name="open_as_image">Image</string>
+    <string name="open_with">Open with…</string>
     <string name="title_activity_settings">Settings</string>
     <string name="pref_header_general">General</string>
     <string name="restart_required">App restart is required</string>

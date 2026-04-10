@@ -1,8 +1,12 @@
 package ca.pkay.rcloneexplorer.Activities
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.os.Build
 import android.os.Bundle
 import android.view.LayoutInflater
-import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import androidx.appcompat.app.AppCompatActivity
@@ -10,17 +14,27 @@ import androidx.core.view.WindowCompat
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
 import ca.pkay.rcloneexplorer.R
+import ca.pkay.rcloneexplorer.util.ImageViewerNetworkPolicy
 import com.bumptech.glide.Glide
+import com.bumptech.glide.Priority
 import com.bumptech.glide.load.model.GlideUrl
+import com.bumptech.glide.request.RequestOptions
 import com.google.android.material.appbar.MaterialToolbar
 
 class ImageViewerActivity : AppCompatActivity() {
 
     private lateinit var toolbar: MaterialToolbar
     private lateinit var pager: ViewPager2
+    private lateinit var connectivityManager: ConnectivityManager
+
+    private var highFidelity: Boolean = false
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        highFidelity = ImageViewerNetworkPolicy.preferHighFidelityLoad(this)
+
         WindowCompat.setDecorFitsSystemWindows(window, true)
         setContentView(R.layout.activity_image_viewer)
 
@@ -57,6 +71,48 @@ class ImageViewerActivity : AppCompatActivity() {
         toolbar.subtitle = "${startIndex + 1} / ${urls.size}"
     }
 
+    override fun onStart() {
+        super.onStart()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            return
+        }
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                val next = ImageViewerNetworkPolicy.preferHighFidelityCapabilities(caps)
+                if (next != highFidelity) {
+                    highFidelity = next
+                    runOnUiThread { pager.adapter?.notifyDataSetChanged() }
+                }
+            }
+        }
+        networkCallback = cb
+        connectivityManager.registerDefaultNetworkCallback(cb)
+    }
+
+    override fun onStop() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && networkCallback != null) {
+            connectivityManager.unregisterNetworkCallback(networkCallback!!)
+            networkCallback = null
+        }
+        super.onStop()
+    }
+
+    private fun glideRequestOptions(): RequestOptions {
+        val dm = resources.displayMetrics
+        val base = RequestOptions()
+            .fitCenter()
+            .error(R.drawable.ic_file)
+        return if (highFidelity) {
+            val w = (dm.widthPixels * 2).coerceAtMost(4096).coerceAtLeast(1)
+            val h = (dm.heightPixels * 2).coerceAtMost(4096).coerceAtLeast(1)
+            base.override(w, h).priority(Priority.HIGH)
+        } else {
+            val w = dm.widthPixels.coerceAtMost(1600).coerceAtLeast(1)
+            val h = dm.heightPixels.coerceAtMost(1600).coerceAtLeast(1)
+            base.override(w, h).priority(Priority.NORMAL)
+        }
+    }
+
     private inner class ImagePagerAdapter(
         private val urls: Array<String>,
         private val names: Array<String>
@@ -73,8 +129,7 @@ class ImageViewerActivity : AppCompatActivity() {
         override fun onBindViewHolder(holder: PageHolder, position: Int) {
             Glide.with(this@ImageViewerActivity)
                 .load(GlideUrl(urls[position]))
-                .fitCenter()
-                .error(R.drawable.ic_file)
+                .apply(glideRequestOptions())
                 .into(holder.imageView)
             holder.imageView.contentDescription = names.getOrElse(position) { "" }
         }

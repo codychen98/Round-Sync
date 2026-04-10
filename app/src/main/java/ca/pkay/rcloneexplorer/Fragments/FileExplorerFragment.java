@@ -1356,6 +1356,11 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     }
 
     @Override
+    public void onImageLongPress(FileItem fileItem) {
+        new DownloadAndOpen(DownloadAndOpen.OPEN_AS_IMAGE, true).execute(fileItem);
+    }
+
+    @Override
     public void onDirectoryClicked(FileItem fileItem, int position) {
         directoryPosition.put(directoryObject.getCurrentPath(), position);
         breadcrumbView.addCrumb(fileItem.getName(), fileItem.getPath());
@@ -1970,13 +1975,19 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         private Process process;
         private volatile boolean isCancelled = false;
         private String mimeType;
+        private final boolean useChooser;
 
         DownloadAndOpen() {
-            this(-1);
+            this(-1, false);
         }
 
         DownloadAndOpen(int openAs) {
+            this(openAs, false);
+        }
+
+        DownloadAndOpen(int openAs, boolean useChooser) {
             this.openAs = openAs;
+            this.useChooser = useChooser;
         }
 
         private void cancelProcess() {
@@ -2066,7 +2077,13 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                 }
             }
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            tryStartActivity(context, intent);
+            if (useChooser) {
+                Intent chooser = Intent.createChooser(intent, context.getString(R.string.open_with));
+                chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                tryStartActivity(context, chooser);
+            } else {
+                tryStartActivity(context, intent);
+            }
         }
     }
 
