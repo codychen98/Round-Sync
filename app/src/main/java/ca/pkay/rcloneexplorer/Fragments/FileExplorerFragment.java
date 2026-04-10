@@ -996,6 +996,19 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             downloadFiles();
         });
 
+        view.findViewById(R.id.file_open_with).setOnClickListener(v -> {
+            List<FileItem> sel = recyclerViewAdapter.getSelectedItems();
+            if (sel.size() != 1) {
+                return;
+            }
+            FileItem item = sel.get(0);
+            String mt = item.getMimeType();
+            if (mt == null || !mt.startsWith("image/")) {
+                return;
+            }
+            new DownloadAndOpen(DownloadAndOpen.OPEN_AS_IMAGE, true).execute(item);
+        });
+
         view.findViewById(R.id.file_move).setOnClickListener(v -> moveFiles(recyclerViewAdapter.getSelectedItems()));
 
         view.findViewById(R.id.file_rename).setOnClickListener(v -> {
@@ -1356,11 +1369,6 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     }
 
     @Override
-    public void onImageLongPress(FileItem fileItem) {
-        new DownloadAndOpen(DownloadAndOpen.OPEN_AS_IMAGE, true).execute(fileItem);
-    }
-
-    @Override
     public void onDirectoryClicked(FileItem fileItem, int position) {
         directoryPosition.put(directoryObject.getCurrentPath(), position);
         breadcrumbView.addCrumb(fileItem.getName(), fileItem.getPath());
@@ -1420,6 +1428,15 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             } else {
                 ((FragmentActivity) context).findViewById(R.id.file_rename).setAlpha(1f);
                 ((FragmentActivity) context).findViewById(R.id.file_rename).setClickable(true);
+            }
+            View openWith = ((FragmentActivity) context).findViewById(R.id.file_open_with);
+            if (openWith != null) {
+                boolean singleImage = numOfSelected == 1;
+                String mt = singleImage
+                        ? recyclerViewAdapter.getSelectedItems().get(0).getMimeType()
+                        : null;
+                boolean showOpenWith = mt != null && mt.startsWith("image/");
+                openWith.setVisibility(showOpenWith ? View.VISIBLE : View.GONE);
             }
         }
     }

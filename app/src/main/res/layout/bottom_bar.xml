@@ -15,7 +15,8 @@
     <com.google.android.material.card.MaterialCardView
         style="@style/FileListBottomBars"
         android:layout_width="match_parent"
-        android:layout_height="56dp"
+        android:layout_height="wrap_content"
+        android:minHeight="56dp"
         android:theme="@style/FileListBottomBars"
         app:cardCornerRadius="@dimen/cardCornerRadius"
         app:cardElevation="2dp"
@@ -35,6 +36,7 @@
                 android:id="@+id/file_download"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:background="?selectableItemBackgroundBorderless"
                 android:clickable="true"
                 android:focusable="true"
                 android:gravity="center_horizontal"
@@ -50,11 +52,46 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:paddingStart="12dp"
-                    android:paddingEnd="12dp"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
                     android:paddingBottom="10dp"
                     android:text="@string/download"
                     android:textSize="12sp" />
+            </LinearLayout>
+
+            <Space
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <LinearLayout
+                android:id="@+id/file_open_with"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="?selectableItemBackgroundBorderless"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_horizontal"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <ImageView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:contentDescription="@string/open_with"
+                    android:paddingTop="6dp"
+                    android:src="@drawable/ic_open_in_new" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_horizontal"
+                    android:maxLines="2"
+                    android:paddingStart="6dp"
+                    android:paddingEnd="6dp"
+                    android:paddingBottom="10dp"
+                    android:text="@string/open_with"
+                    android:textSize="11sp" />
             </LinearLayout>
 
             <Space
@@ -82,8 +119,8 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:paddingStart="12dp"
-                    android:paddingEnd="12dp"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
                     android:paddingBottom="10dp"
                     android:text="@string/move"
                     android:textSize="12sp" />
@@ -114,8 +151,8 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:paddingStart="12dp"
-                    android:paddingEnd="12dp"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
                     android:paddingBottom="10dp"
                     android:text="@string/rename"
                     android:textSize="12sp" />
@@ -146,8 +183,8 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:paddingStart="12dp"
-                    android:paddingEnd="12dp"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
                     android:paddingBottom="10dp"
                     android:text="@string/delete"
                     android:textSize="12sp" />

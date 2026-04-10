@@ -75,13 +75,6 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         void onFileDeselected();
         void onFileOptionsClicked(View view, FileItem fileItem);
         String[] getThumbnailServerParams();
-
-        /**
-         * Long-press on a non-directory row whose MIME type is {@code image/*} while not in
-         * multi-select mode. Used for an external app chooser (e.g. "Open with").
-         */
-        default void onImageLongPress(FileItem fileItem) {
-        }
     }
 
     public interface ThumbnailProgressListener {
@@ -307,16 +300,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         });
 
         holder.view.setOnLongClickListener(view -> {
-            if (isInMoveMode) {
-                return true;
-            }
-            String mime = item.getMimeType();
-            boolean isImage = !item.isDir() && mime != null && mime.startsWith("image/");
-            if (isImage && !isInSelectMode) {
-                listener.onImageLongPress(item);
-                return true;
-            }
-            if (canSelect) {
+            if (!isInMoveMode && canSelect) {
                 onLongClickAction(item, holder);
             }
             return true;
