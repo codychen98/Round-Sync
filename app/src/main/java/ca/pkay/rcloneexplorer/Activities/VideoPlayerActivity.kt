@@ -1,5 +1,6 @@
 package ca.pkay.rcloneexplorer.Activities
 
+import android.content.Intent
 import android.content.res.Configuration
 import android.os.Bundle
 import android.view.GestureDetector
@@ -28,6 +29,8 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import ca.pkay.rcloneexplorer.R
+import ca.pkay.rcloneexplorer.Services.StreamingService
+import ca.pkay.rcloneexplorer.util.SyncLog
 import ca.pkay.rcloneexplorer.util.SelectedFolderSimpleCacheProvider
 import ca.pkay.rcloneexplorer.util.VideoDoubleTapHorizontalZone
 import ca.pkay.rcloneexplorer.util.VideoPlayerDoubleTapZones
@@ -291,13 +294,55 @@ class VideoPlayerActivity : AppCompatActivity() {
             ErrorType.UNKNOWN -> getString(R.string.video_error_unknown)
         }
 
-        if (retryCount < maxRetries && (errorType == ErrorType.NETWORK || errorType == ErrorType.SEEKING || errorType == ErrorType.SERVER)) {
+        val willRetry = retryCount < maxRetries &&
+            (errorType == ErrorType.NETWORK || errorType == ErrorType.SEEKING || errorType == ErrorType.SERVER)
+        logPlaybackExceptionToSyncLog(error, errorType, willRetry)
+
+        if (willRetry) {
             retryCount++
             Toast.makeText(this, getString(R.string.video_error_retry, retryCount, maxRetries), Toast.LENGTH_SHORT).show()
             player?.prepare()
         } else {
             Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         }
+    }
+
+    private fun logPlaybackExceptionToSyncLog(
+        error: PlaybackException,
+        classified: ErrorType,
+        willRetry: Boolean,
+    ) {
+        val codeName = PlaybackException.getErrorCodeName(error.errorCode)
+        val uri = player?.currentMediaItem?.localConfiguration?.uri?.toString().orEmpty()
+        val uriShort = uri.take(400)
+        val chain = formatThrowableChainForSyncLog(error)
+        val content = buildString {
+            append("code=").append(error.errorCode)
+            append(" codeName=").append(codeName)
+            append(" classified=").append(classified.name)
+            append(" willRetry=").append(willRetry)
+            append(" retryCount=").append(retryCount)
+            append(" maxRetries=").append(maxRetries)
+            append(" exoMsg=").append((error.message ?: "").replace('\n', ' ').take(350))
+            if (uriShort.isNotEmpty()) {
+                append(" uri=").append(uriShort)
+            }
+            append(" causes=").append(chain)
+        }
+        SyncLog.info(this, SYNC_LOG_VIDEO_PLAYBACK_TITLE, content)
+    }
+
+    private fun formatThrowableChainForSyncLog(root: Throwable): String {
+        val parts = ArrayList<String>(8)
+        var t: Throwable? = root
+        var depth = 0
+        while (t != null && depth < 8) {
+            val msg = (t.message ?: "").replace('\n', ' ').take(180)
+            parts.add(t.javaClass.name + ":" + msg)
+            t = t.cause
+            depth++
+        }
+        return parts.joinToString(" <= ")
     }
 
     private fun classifyError(error: PlaybackException): ErrorType {
@@ -326,11 +371,15 @@ class VideoPlayerActivity : AppCompatActivity() {
     override fun onDestroy() {
         player?.release()
         player = null
+        stopService(Intent(this, StreamingService::class.java))
         super.onDestroy()
     }
 
     companion object {
         const val EXTRA_VIDEO_CACHE_ENABLED = "video_cache_enabled"
+
+        /** Prefix for Menu → Logs filter (written to sync.log). */
+        private const val SYNC_LOG_VIDEO_PLAYBACK_TITLE = "VideoPlaybackDbg"
 
         private const val TOP_BOTTOM_EXCLUDE_FRACTION = 0.25f
         private const val MIDDLE_BAND_HEIGHT_FRACTION = 0.5f

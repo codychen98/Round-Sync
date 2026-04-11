@@ -1,6 +1,7 @@
 package ca.pkay.rcloneexplorer.Activities
 
 import android.content.Context
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -14,6 +15,7 @@ import androidx.core.view.WindowCompat
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
 import ca.pkay.rcloneexplorer.R
+import ca.pkay.rcloneexplorer.Services.StreamingService
 import ca.pkay.rcloneexplorer.util.ImageServeBitmapLoader
 import ca.pkay.rcloneexplorer.util.ImageViewerNetworkPolicy
 import ca.pkay.rcloneexplorer.util.SelectedFolderImageHttpClientHolder
@@ -117,6 +119,7 @@ class ImageViewerActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         imageLoadExecutor.shutdown()
+        stopService(Intent(this, StreamingService::class.java))
         super.onDestroy()
     }
 
