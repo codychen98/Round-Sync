@@ -29,7 +29,7 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
-import com.google.android.material.floatingactionbutton.FloatingActionButton;
+import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
 
 import java.io.IOException;
 import java.net.ServerSocket;
@@ -37,6 +37,7 @@ import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Stack;
@@ -54,6 +55,7 @@ import ca.pkay.rcloneexplorer.RecyclerViewAdapters.FileExplorerRecyclerViewAdapt
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerService;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.LargeParcel;
+import ca.pkay.rcloneexplorer.util.SyncLog;
 import de.felixnuesse.ui.BreadcrumbView;
 import es.dmoral.toasty.Toasty;
 import jp.wasabeef.recyclerview.animators.LandingAnimator;
@@ -68,6 +70,8 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
 
     private static final String TAG = "FileExplorerFragment";
     private static final String ARG_REMOTE = "remote_param";
+    private static final String ARG_MEDIA_FOLDER_POLICY_MULTI = "media_folder_policy_multi_select";
+    private static final String SAVED_MULTI_SELECTED_PATHS = "media_folder_policy_multi_paths";
     private static final String SHARED_PREFS_SORT_ORDER = "ca.pkay.rcexplorer.sort_order";
 
     private final String SAVED_PATH = "ca.pkay.rcexplorer.FILE_EXPLORER_FRAG_SAVED_PATH";
@@ -95,7 +99,7 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
 
     private String originalToolbarTitle;
     private int sortOrder;
-    private FloatingActionButton fab;
+    private ExtendedFloatingActionButton fab;
     private Boolean isSearchMode;
     private String searchString;
     private boolean showThumbnails;
@@ -109,6 +113,8 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
 
     private FolderSelectorCallback mSelectedFolderCallback;
     private String mInitialPath = "";
+    private boolean mediaFolderPolicyMultiSelectMode;
+    private final LinkedHashSet<String> selectedFolderPaths = new LinkedHashSet<>();
 
     /**
      * Mandatory empty constructor for the fragment manager to instantiate the
@@ -118,9 +124,15 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
 
     @SuppressWarnings("unused")
     public static RemoteFolderPickerFragment newInstance(RemoteItem remoteItem, FolderSelectorCallback fsc, String initialPath) {
+        return newInstance(remoteItem, fsc, initialPath, false);
+    }
+
+    public static RemoteFolderPickerFragment newInstance(RemoteItem remoteItem, FolderSelectorCallback fsc,
+            String initialPath, boolean mediaFolderPolicyMultiSelect) {
         RemoteFolderPickerFragment fragment = new RemoteFolderPickerFragment();
         Bundle args = new Bundle();
         args.putParcelable(ARG_REMOTE, remoteItem);
+        args.putBoolean(ARG_MEDIA_FOLDER_POLICY_MULTI, mediaFolderPolicyMultiSelect);
         fragment.setArguments(args);
         fragment.setSelectedFolderCallback(fsc);
         fragment.setInitialPath(initialPath);
@@ -144,6 +156,7 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
             return;
         }
         remoteName = remote.getName();
+        mediaFolderPolicyMultiSelectMode = getArguments().getBoolean(ARG_MEDIA_FOLDER_POLICY_MULTI, false);
         pathStack = new Stack<>();
         directoryPosition = new HashMap<>();
         directoryObject = new DirectoryObject();
@@ -168,6 +181,14 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
             buildStackFromPath(remoteName, path);
         }
 
+        if (mediaFolderPolicyMultiSelectMode && savedInstanceState != null) {
+            ArrayList<String> restoredPaths = savedInstanceState.getStringArrayList(SAVED_MULTI_SELECTED_PATHS);
+            if (restoredPaths != null) {
+                selectedFolderPaths.clear();
+                selectedFolderPaths.addAll(restoredPaths);
+            }
+        }
+
         SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
         sortOrder = sharedPreferences.getInt(SHARED_PREFS_SORT_ORDER, SortDialog.ALPHA_ASCENDING);
         showThumbnails = sharedPreferences.getBoolean(getString(R.string.pref_key_show_thumbnails), true);
@@ -188,6 +209,10 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
         rclone = new Rclone(getContext());
 
         isSearchMode = false;
+        if (context != null) {
+            SyncLog.info(context, "PolicyCrashDbg", "event=pickerOnCreate remote=" + remoteName
+                    + " restored=" + (savedInstanceState != null));
+        }
     }
 
     @Nullable
@@ -217,6 +242,28 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
         recyclerViewAdapter.showThumbnails(showThumbnails);
         recyclerViewAdapter.setWrapFileNames(wrapFilenames);
         recyclerViewAdapter.disableFileOptions();
+        if (mediaFolderPolicyMultiSelectMode) {
+            recyclerViewAdapter.setMultiFolderPickerDelegate(new FileExplorerRecyclerViewAdapter.MultiFolderPickerDelegate() {
+                @Override
+                public boolean isPathSelected(@NonNull String itemPath) {
+                    return selectedFolderPaths.contains(itemPath);
+                }
+
+                @Override
+                public void onDirectorySelectionClicked(@NonNull FileItem directory, int adapterPosition) {
+                    String p = directory.getPath();
+                    if (selectedFolderPaths.contains(p)) {
+                        selectedFolderPaths.remove(p);
+                    } else {
+                        selectedFolderPaths.add(p);
+                    }
+                    if (adapterPosition != RecyclerView.NO_POSITION && recyclerViewAdapter != null) {
+                        recyclerViewAdapter.notifyItemChanged(adapterPosition);
+                    }
+                    updateMultiSelectFabUi();
+                }
+            });
+        }
         recyclerView.setAdapter(recyclerViewAdapter);
 
         if (remote.isRemoteType(RemoteItem.SFTP) && !goToDefaultSet & savedInstanceState == null) {
@@ -256,16 +303,7 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
             searchClicked();
         }
 
-        if(mSelectedFolderCallback != null) {
-            fab.setOnClickListener(v -> {
-                String target = "/"+directoryObject.getCurrentPath();
-                if(target.startsWith("///")){
-                    target = target.replace("//", "");
-                }
-                mSelectedFolderCallback.selectFolder(target);
-                exitFragment();
-            });
-        }
+        configureSelectFab();
 
         return view;
     }
@@ -301,6 +339,9 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
         }
         if (recyclerViewAdapter.isInSelectMode()) {
             outState.putParcelableArrayList(SAVED_SELECTED_ITEMS, new ArrayList<>(recyclerViewAdapter.getSelectedItems()));
+        }
+        if (mediaFolderPolicyMultiSelectMode) {
+            outState.putStringArrayList(SAVED_MULTI_SELECTED_PATHS, new ArrayList<>(selectedFolderPaths));
         }
 
         if (LargeParcel.calculateBundleSize(outState) > 250 * 1024) {
@@ -421,7 +462,73 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
         }
     }
 
+    private String directoryPathToSelectorArgument(String directoryAbsolutePath) {
+        String target = "/" + directoryAbsolutePath;
+        if (target.startsWith("///")) {
+            target = target.replace("//", "");
+        }
+        return target;
+    }
+
+    private void updateMultiSelectFabUi() {
+        if (fab == null || !mediaFolderPolicyMultiSelectMode || getContext() == null) {
+            return;
+        }
+        int n = selectedFolderPaths.size();
+        fab.setEnabled(n > 0);
+        fab.setAlpha(n > 0 ? 1f : 0.38f);
+        if (n > 0) {
+            fab.setText(getString(R.string.media_folder_policy_add_n_folders, n));
+            fab.extend();
+        } else {
+            fab.shrink();
+        }
+    }
+
+    private void configureSelectFab() {
+        if (mSelectedFolderCallback == null) {
+            if (context != null) {
+                SyncLog.info(context, "PolicyCrashDbg", "event=pickerFabNoListener remote=" + remoteName + " callback=null");
+            }
+            return;
+        }
+        if (mediaFolderPolicyMultiSelectMode) {
+            fab.setOnClickListener(v -> {
+                if (selectedFolderPaths.isEmpty()) {
+                    return;
+                }
+                List<String> out = new ArrayList<>();
+                for (String p : selectedFolderPaths) {
+                    out.add(directoryPathToSelectorArgument(p));
+                }
+                SyncLog.info(context, "PolicyCrashDbg", "event=fabSelectMulti count=" + out.size());
+                mSelectedFolderCallback.selectFolders(out);
+                selectedFolderPaths.clear();
+                exitFragment();
+            });
+            updateMultiSelectFabUi();
+        } else {
+            fab.shrink();
+            fab.setOnClickListener(v -> {
+                String target = directoryPathToSelectorArgument(directoryObject.getCurrentPath());
+                SyncLog.info(context, "PolicyCrashDbg", "event=fabSelect path=" + target + " callback=set");
+                mSelectedFolderCallback.selectFolder(target);
+                exitFragment();
+            });
+        }
+    }
+
     private void exitFragment() {
+        Context logCtx = getContext();
+        if (logCtx != null) {
+            int backStack = -1;
+            FragmentActivity act = getActivity();
+            if (act != null) {
+                backStack = act.getSupportFragmentManager().getBackStackEntryCount();
+            }
+            String path = directoryObject != null ? directoryObject.getCurrentPath() : "null";
+            SyncLog.info(logCtx, "PolicyCrashDbg", "event=exitPicker backStack=" + backStack + " path=" + path);
+        }
         breadcrumbView.clearCrumbs();
         ((FragmentActivity) context).setTitle(originalToolbarTitle);
         FragmentManager fm = this.getActivity().getSupportFragmentManager();
@@ -664,6 +771,9 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
     @Override
     public void onDetach() {
         super.onDetach();
+        if (recyclerViewAdapter != null) {
+            recyclerViewAdapter.setMultiFolderPickerDelegate(null);
+        }
         if (fetchDirectoryTask != null) {
             fetchDirectoryTask.cancel(true);
         }

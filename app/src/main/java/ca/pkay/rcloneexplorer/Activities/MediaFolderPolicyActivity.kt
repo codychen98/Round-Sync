@@ -9,12 +9,18 @@ import ca.pkay.rcloneexplorer.Items.RemoteItem
 import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Settings.MediaFolderPolicyFragment
 import ca.pkay.rcloneexplorer.util.ActivityHelper
+import ca.pkay.rcloneexplorer.util.SyncLog
 
 class MediaFolderPolicyActivity : AppCompatActivity(), FolderSelectorCallback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         ActivityHelper.applyTheme(this)
         super.onCreate(savedInstanceState)
+        SyncLog.info(
+            this,
+            "PolicyCrashDbg",
+            "event=onCreate savedState=${if (savedInstanceState != null) "restored" else "fresh"}",
+        )
         setContentView(R.layout.activity_media_folder_policy)
         val toolbar = findViewById<Toolbar>(R.id.toolbar)
         setSupportActionBar(toolbar)
@@ -36,10 +42,11 @@ class MediaFolderPolicyActivity : AppCompatActivity(), FolderSelectorCallback {
     }
 
     fun launchRemoteFolderPicker(remote: RemoteItem) {
+        SyncLog.info(this, "PolicyCrashDbg", "event=launchPicker remote=${remote.name}")
         supportFragmentManager.beginTransaction()
             .replace(
                 R.id.media_folder_policy_container,
-                RemoteFolderPickerFragment.newInstance(remote, this, ""),
+                RemoteFolderPickerFragment.newInstance(remote, this, "", true),
             )
             .addToBackStack(null)
             .commit()
@@ -48,6 +55,22 @@ class MediaFolderPolicyActivity : AppCompatActivity(), FolderSelectorCallback {
     override fun selectFolder(path: String) {
         val policy = supportFragmentManager.findFragmentByTag(MediaFolderPolicyFragment.TAG)
             as? MediaFolderPolicyFragment
+        val policyState = if (policy != null) "present" else "absent"
+        SyncLog.info(this, "PolicyCrashDbg", "event=selectFolder path=$path policyFragment=$policyState")
         policy?.handleFolderSelectedFromPicker(path)
+    }
+
+    override fun selectFolders(paths: List<String>) {
+        val clean = paths.map { it.trim() }.filter { it.isNotEmpty() }
+        if (clean.isEmpty()) return
+        val policy = supportFragmentManager.findFragmentByTag(MediaFolderPolicyFragment.TAG)
+            as? MediaFolderPolicyFragment
+        val policyState = if (policy != null) "present" else "absent"
+        SyncLog.info(this, "PolicyCrashDbg", "event=selectFolders count=${clean.size} policyFragment=$policyState")
+        if (policy != null) {
+            policy.handleFoldersSelectedFromPicker(clean)
+        } else {
+            selectFolder(clean[0])
+        }
     }
 }

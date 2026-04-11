@@ -86,6 +86,11 @@ class LastFolderThumbnailPrefetchWorker(
             return@withContext Result.success()
         }
 
+        SyncLog.info(
+            app,
+            "MediaPrepDbg",
+            "event=prefetchSetForeground path=${snapshot.directoryPath} targets=${targets.size}",
+        )
         setForeground(createPrefetchForegroundInfo(app, snapshot.directoryPath))
 
         var prefetchRefIncremented = false
@@ -102,6 +107,11 @@ class LastFolderThumbnailPrefetchWorker(
                 FLog.w(TAG, "Prefetch: server did not become READY in time")
                 return@withContext Result.success()
             }
+            SyncLog.info(
+                app,
+                "MediaPrepDbg",
+                "event=prefetchUpdateProgress phase=init loaded=0 total=${targets.size} path=${snapshot.directoryPath}",
+            )
             ThumbnailServerService.updateProgress(
                 app,
                 snapshot.directoryPath,
@@ -140,6 +150,11 @@ class LastFolderThumbnailPrefetchWorker(
                     break
                 }
                 loaded++
+                SyncLog.info(
+                    app,
+                    "MediaPrepDbg",
+                    "event=prefetchUpdateProgress phase=item loaded=$loaded total=${targets.size} path=${snapshot.directoryPath}",
+                )
                 ThumbnailServerService.updateProgress(
                     app,
                     snapshot.directoryPath,
@@ -149,6 +164,11 @@ class LastFolderThumbnailPrefetchWorker(
                     0,
                 )
             }
+            SyncLog.info(
+                app,
+                "MediaPrepDbg",
+                "event=prefetchUpdateProgress phase=complete loaded=${targets.size} total=${targets.size} path=${snapshot.directoryPath}",
+            )
             ThumbnailServerService.updateProgress(
                 app,
                 snapshot.directoryPath,

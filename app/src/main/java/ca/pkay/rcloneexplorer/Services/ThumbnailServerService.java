@@ -253,6 +253,8 @@ public class ThumbnailServerService extends android.app.Service {
         BackgroundMediaPrepWorkTracker.setCacheWorkInProgress(false);
 
         startForegroundWithPlaceholder();
+        SyncLog.info(this, "MediaPrepDbg", "event=serviceHandleStart foregroundPlaceholder=true remote="
+                + remote.getName() + " folderLine=" + folderDisplayPath);
         ThumbnailServerManager manager = ThumbnailServerManager.getInstance();
         if (!observerRegistered) {
             manager.getState().observeForever(stateObserver);
@@ -263,6 +265,7 @@ public class ThumbnailServerService extends android.app.Service {
     }
 
     private void handleStop() {
+        SyncLog.info(this, "MediaPrepDbg", "event=serviceHandleStop");
         BackgroundMediaPrepWorkTracker.setExplorerThumbnailBatchInProgress(false);
         BackgroundMediaPrepWorkTracker.setCacheWorkInProgress(false);
         ThumbnailServerManager.getInstance().stop();
@@ -288,6 +291,10 @@ public class ThumbnailServerService extends android.app.Service {
         lastCacheLoaded = cacheLoaded;
         lastCacheTotal = cacheTotal;
 
+        SyncLog.info(this, "MediaPrepDbg", "event=serviceHandleUpdateProgress folder=" + folderDisplayPath
+                + " thumbLoaded=" + loaded + " thumbTotal=" + total
+                + " cacheLoaded=" + cacheLoaded + " cacheTotal=" + cacheTotal);
+
         boolean explorerBatch = total > 0 && loaded < total;
         BackgroundMediaPrepWorkTracker.setExplorerThumbnailBatchInProgress(explorerBatch);
         boolean cacheWork = cacheTotal > 0 && cacheLoaded < cacheTotal;
@@ -297,6 +304,8 @@ public class ThumbnailServerService extends android.app.Service {
     }
 
     private void handleClearProgress() {
+        SyncLog.info(this, "MediaPrepDbg", "event=serviceHandleClearProgress beforeThumb="
+                + lastThumbLoaded + "/" + lastThumbTotal + " beforeCache=" + lastCacheLoaded + "/" + lastCacheTotal);
         if (notificationManager == null) {
             return;
         }
@@ -343,12 +352,16 @@ public class ThumbnailServerService extends android.app.Service {
             boolean showThumbProgress = lastThumbTotal > 0 && lastThumbLoaded < lastThumbTotal;
             Notification notification = buildMediaPrepNotification(
                     lastThumbLoaded, lastThumbTotal, lastCacheLoaded, lastCacheTotal, showThumbProgress);
+            SyncLog.info(this, "MediaPrepDbg", "event=serviceApplyForeground active=true showThumbProgress="
+                    + showThumbProgress + " thumb=" + lastThumbLoaded + "/" + lastThumbTotal
+                    + " cache=" + lastCacheLoaded + "/" + lastCacheTotal);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
             } else {
                 startForeground(NOTIFICATION_ID, notification);
             }
         } else {
+            SyncLog.info(this, "MediaPrepDbg", "event=serviceApplyForeground active=false stopForeground");
             stopForegroundCompat();
             notificationManager.cancel(NOTIFICATION_ID);
         }

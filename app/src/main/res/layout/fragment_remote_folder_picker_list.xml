@@ -29,15 +29,16 @@
 
     </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
-    <com.google.android.material.floatingactionbutton.FloatingActionButton
+    <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
         android:id="@+id/selectFloatingButton"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_gravity="bottom|right"
+        android:layout_gravity="bottom|end"
         android:layout_margin="24dp"
         android:clickable="true"
         android:visibility="visible"
-        android:src="@drawable/ic_check"
-        tools:srcCompat="@drawable/ic_check" />
+        android:text="@string/remote_folder_picker_fab_select_here"
+        app:icon="@drawable/ic_check"
+        app:iconTint="?attr/colorOnPrimaryContainer" />
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

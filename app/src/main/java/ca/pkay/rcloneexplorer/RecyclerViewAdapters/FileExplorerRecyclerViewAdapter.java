@@ -10,11 +10,13 @@ import android.text.TextUtils;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.CheckBox;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.core.widget.ImageViewCompat;
 import androidx.preference.PreferenceManager;
 import androidx.recyclerview.widget.RecyclerView;
@@ -28,6 +30,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import ca.pkay.rcloneexplorer.Glide.RetryRequestListener;
 import ca.pkay.rcloneexplorer.Glide.HttpServeThumbnailGlideUrl;
@@ -68,8 +71,12 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     private long sizeLimit;
     private int viewMode = VIEW_MODE_LIST;
     private ThumbnailProgressListener progressListener;
+    @Nullable
+    private MultiFolderPickerDelegate multiFolderPickerDelegate;
     private int thumbnailTotal = 0;
     private final AtomicInteger thumbnailLoaded = new AtomicInteger(0);
+    /** Incremented when thumbnail progress accounting resets (new folder / resort). */
+    private final AtomicLong thumbnailDataGeneration = new AtomicLong(0L);
     /** Cached per-remote thumbnail allow-list; invalidated when list or settings may have changed. */
     private String thumbPolicyCachedRemoteName;
     private Set<String> thumbPolicyCachedAllowed = Collections.emptySet();
@@ -86,6 +93,13 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     public interface ThumbnailProgressListener {
         void onThumbnailProgress(int loaded, int total);
         void onThumbnailLoadingComplete();
+    }
+
+    /** Optional directory checkboxes for media-folder policy multi-select picker. */
+    public interface MultiFolderPickerDelegate {
+        boolean isPathSelected(@NonNull String itemPath);
+
+        void onDirectorySelectionClicked(@NonNull FileItem directory, int adapterPosition);
     }
 
     public FileExplorerRecyclerViewAdapter(Context context, View emptyView, View noSearchResultsView, OnClickListener listener) {
@@ -311,6 +325,26 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             holder.fileName.setSingleLine(false);
         }
 
+        if (holder.folderPolicyPickCheckbox != null) {
+            if (multiFolderPickerDelegate != null && item.isDir()) {
+                holder.folderPolicyPickCheckbox.setVisibility(View.VISIBLE);
+                holder.folderPolicyPickCheckbox.setChecked(
+                        multiFolderPickerDelegate.isPathSelected(item.getPath()));
+                holder.folderPolicyPickCheckbox.setOnClickListener(v -> {
+                    int pos = holder.getBindingAdapterPosition();
+                    if (pos == RecyclerView.NO_POSITION || multiFolderPickerDelegate == null) {
+                        return;
+                    }
+                    multiFolderPickerDelegate.onDirectorySelectionClicked(item, pos);
+                    boolean selectedNow = multiFolderPickerDelegate.isPathSelected(item.getPath());
+                    ((CheckBox) v).setChecked(selectedNow);
+                });
+            } else {
+                holder.folderPolicyPickCheckbox.setVisibility(View.GONE);
+                holder.folderPolicyPickCheckbox.setOnClickListener(null);
+            }
+        }
+
         holder.view.setOnClickListener(view -> {
             if (isInSelectMode) {
                 onLongClickAction(item, holder);
@@ -465,6 +499,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         loggedFirstReady = false;
         thumbnailTotal = countThumbnailTargets(data);
         thumbnailLoaded.set(0);
+        long gen = thumbnailDataGeneration.incrementAndGet();
+        if (context != null) {
+            SyncLog.info(context, "MediaPrepDbg", "event=adapterNewData gen=" + gen + " loaded=0 total="
+                    + thumbnailTotal + " listSize=" + data.size());
+        }
         this.clear();
         files = new ArrayList<>(data);
         isInSelectMode = false;
@@ -541,6 +580,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         }
         thumbnailTotal = countThumbnailTargets(files);
         thumbnailLoaded.set(0);
+        long gen = thumbnailDataGeneration.incrementAndGet();
+        if (context != null) {
+            SyncLog.info(context, "MediaPrepDbg", "event=adapterUpdateSortedData gen=" + gen + " loaded=0 total="
+                    + thumbnailTotal + " listSize=" + files.size());
+        }
         notifyThumbnailIdleIfNoTargets();
     }
 
@@ -595,6 +639,10 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
     public void setThumbnailProgressListener(ThumbnailProgressListener listener) {
         this.progressListener = listener;
+    }
+
+    public void setMultiFolderPickerDelegate(@Nullable MultiFolderPickerDelegate delegate) {
+        this.multiFolderPickerDelegate = delegate;
     }
 
     private void showEmptyState(Boolean show) {
@@ -740,6 +788,10 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         private void notifyProgress() {
             if (progressListener == null || thumbnailTotal == 0) return;
             int loaded = thumbnailLoaded.incrementAndGet();
+            if (context != null) {
+                SyncLog.info(context, "MediaPrepDbg", "event=adapterNotifyProgress gen="
+                        + thumbnailDataGeneration.get() + " loaded=" + loaded + " total=" + thumbnailTotal);
+            }
             progressListener.onThumbnailProgress(loaded, thumbnailTotal);
             if (loaded >= thumbnailTotal) {
                 progressListener.onThumbnailLoadingComplete();
@@ -759,6 +811,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         public final TextView interpunct;
         public final ImageButton fileOptions;
         public final View gridThumbnailContainer;
+        @Nullable
+        public final CheckBox folderPolicyPickCheckbox;
         public FileItem fileItem;
         public final ColorStateList defaultIconTint;
         public RetryRequestListener activeRetryListener = null;
@@ -775,6 +829,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             this.fileOptions = view.findViewById(R.id.file_options);
             this.interpunct = view.findViewById(R.id.interpunct);
             this.gridThumbnailContainer = view.findViewById(R.id.grid_thumbnail_container);
+            this.folderPolicyPickCheckbox = view.findViewById(R.id.folder_policy_pick_checkbox);
             this.defaultIconTint = ImageViewCompat.getImageTintList(this.fileIcon);
         }
     }

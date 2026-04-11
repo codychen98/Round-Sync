@@ -323,12 +323,17 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         recyclerViewAdapter.setThumbnailProgressListener(new FileExplorerRecyclerViewAdapter.ThumbnailProgressListener() {
             @Override
             public void onThumbnailProgress(int loaded, int total) {
+                String path = directoryObject != null ? directoryObject.getCurrentPath() : "null";
+                SyncLog.info(context, "MediaPrepDbg", "event=explorerThumbProgress source=explorer path=" + path
+                        + " loaded=" + loaded + " total=" + total);
                 ThumbnailServerService.updateProgress(context, directoryObject.getCurrentPath(),
                         loaded, total, 0, 0);
             }
 
             @Override
             public void onThumbnailLoadingComplete() {
+                String path = directoryObject != null ? directoryObject.getCurrentPath() : "null";
+                SyncLog.info(context, "MediaPrepDbg", "event=explorerThumbComplete source=explorer path=" + path);
                 ThumbnailServerService.clearProgress(context);
             }
         });

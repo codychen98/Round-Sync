@@ -20,6 +20,7 @@ import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Rclone
 import ca.pkay.rcloneexplorer.util.MediaFolderPolicy
 import ca.pkay.rcloneexplorer.util.MediaFolderPolicyRow
+import ca.pkay.rcloneexplorer.util.SyncLog
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
 import es.dmoral.toasty.Toasty
 import io.github.x0b.safdav.file.SafConstants
@@ -148,21 +149,80 @@ class MediaFolderPolicyFragment : Fragment(), MediaFolderPolicyAdapter.Listener 
         }
         val act = requireActivity()
         if (act is MediaFolderPolicyActivity) {
+            SyncLog.info(requireContext(), "PolicyCrashDbg", "event=openFolderPicker remote=${remote.name}")
             act.launchRemoteFolderPicker(remote)
         }
+    }
+
+    fun handleFoldersSelectedFromPicker(pickerPaths: List<String>) {
+        val remote = selectedRemote() ?: run {
+            context?.let {
+                SyncLog.info(it, "PolicyCrashDbg", "event=handleFoldersPicker remote=null skipped")
+            }
+            return
+        }
+        val ctx = context ?: return
+        SyncLog.info(
+            ctx,
+            "PolicyCrashDbg",
+            "event=handleFoldersPicker count=${pickerPaths.size} remote=${remote.name} phase=batch",
+        )
+        if (pickerPaths.isEmpty()) {
+            return
+        }
+        val prefs = PreferenceManager.getDefaultSharedPreferences(ctx)
+        var current = MediaFolderPolicy.readPolicyRows(prefs, remote.name)
+        val newRows = mutableListOf<MediaFolderPolicyRow>()
+        for (pickerPath in pickerPaths) {
+            val relative = pickerPathToRelative(remote.name, pickerPath)
+            val normalized = MediaFolderPolicy.normalizeFolder(relative)
+            if (current.any { MediaFolderPolicy.normalizeFolder(it.path) == normalized }) {
+                continue
+            }
+            if (newRows.any { MediaFolderPolicy.normalizeFolder(it.path) == normalized }) {
+                continue
+            }
+            newRows.add(MediaFolderPolicyRow(path = normalized, thumbnail = true, cache = true))
+        }
+        if (newRows.isEmpty()) {
+            Toasty.info(
+                ctx,
+                getString(R.string.media_folder_policy_duplicate_folder),
+                Toast.LENGTH_SHORT,
+                true,
+            ).show()
+            return
+        }
+        val updated = current + newRows
+        val editor = prefs.edit()
+        MediaFolderPolicy.writePolicyRows(editor, remote.name, updated)
+        editor.apply()
+        SyncLog.info(
+            ctx,
+            "PolicyCrashDbg",
+            "event=handleFoldersPicker action=added count=${newRows.size} remote=${remote.name}",
+        )
+        refreshRowsFromPreferences()
     }
 
     fun handleFolderSelectedFromPicker(pickerPath: String) {
         val remote = selectedRemote()
         if (remote == null) {
+            context?.let { SyncLog.info(it, "PolicyCrashDbg", "event=handleFolderPicker path=$pickerPath remote=null action=skipped") }
             return
         }
         val ctx = context ?: return
+        SyncLog.info(
+            ctx,
+            "PolicyCrashDbg",
+            "event=handleFolderPicker path=$pickerPath remote=${remote.name} phase=received",
+        )
         val relative = pickerPathToRelative(remote.name, pickerPath)
         val normalized = MediaFolderPolicy.normalizeFolder(relative)
         val prefs = PreferenceManager.getDefaultSharedPreferences(ctx)
         val current = MediaFolderPolicy.readPolicyRows(prefs, remote.name)
         if (current.any { MediaFolderPolicy.normalizeFolder(it.path) == normalized }) {
+            SyncLog.info(ctx, "PolicyCrashDbg", "event=handleFolderPicker action=duplicate normalized=$normalized remote=${remote.name}")
             Toasty.info(
                 ctx,
                 getString(R.string.media_folder_policy_duplicate_folder),
@@ -176,6 +236,7 @@ class MediaFolderPolicyFragment : Fragment(), MediaFolderPolicyAdapter.Listener 
         val editor = prefs.edit()
         MediaFolderPolicy.writePolicyRows(editor, remote.name, updated)
         editor.apply()
+        SyncLog.info(ctx, "PolicyCrashDbg", "event=handleFolderPicker action=added normalized=$normalized remote=${remote.name}")
         refreshRowsFromPreferences()
     }
 
