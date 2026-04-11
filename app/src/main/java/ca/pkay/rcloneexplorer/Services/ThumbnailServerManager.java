@@ -83,6 +83,23 @@ public class ThumbnailServerManager {
         return stateLiveData;
     }
 
+    /**
+     * Current server state for callers that cannot use {@link LiveData} (e.g. WorkManager).
+     * Must be queried under the same threading rules as other {@link #start}/{@link #stop} calls.
+     */
+    public synchronized ServerState getSyncState() {
+        return currentState;
+    }
+
+    private boolean matchesCurrentParams(RemoteItem remote, int port, String auth) {
+        if (remote == null || currentRemote == null || auth == null || currentAuth == null) {
+            return false;
+        }
+        return currentPort == port
+                && currentAuth.equals(auth)
+                && currentRemote.getName().equals(remote.getName());
+    }
+
     /** Starts the thumbnail server for the given remote. No-op if already STARTING or READY. */
     public synchronized void start(Context context, RemoteItem remote, int port, String auth) {
         // Set appContext first so SyncLog calls below always fire, including on the first invocation.
@@ -96,10 +113,18 @@ public class ThumbnailServerManager {
             + ", remote=" + (remote != null ? remote.getName() : "NULL")
             + ", port=" + port);
         if (currentState == ServerState.STARTING || currentState == ServerState.READY) {
-            FLog.d(TAG, "start() ignored — already in state %s", currentState);
+            if (matchesCurrentParams(remote, port, auth)) {
+                FLog.d(TAG, "start() ignored — already in state %s with same params", currentState);
+                SyncLog.info(appContext, "ThumbnailServer",
+                    "start() SKIPPED - currentState=" + currentState + " (same connection)");
+                return;
+            }
             SyncLog.info(appContext, "ThumbnailServer",
-                "start() SKIPPED - currentState=" + currentState + " (already running)");
-            return;
+                "start() replacing server — params changed while in " + currentState);
+            intentionalStop = true;
+            cancelReadinessChecker();
+            destroyProcess();
+            setState(ServerState.STOPPED);
         }
         currentRemote = remote;
         currentPort = port;

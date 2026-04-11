@@ -200,7 +200,6 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
 
         if (showThumbnails) {
             initializeThumbnailParams();
-            startThumbnailService();
         }
 
         swipeRefreshLayout = view.findViewById(R.id.file_explorer_srl);
@@ -246,6 +245,10 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
             breadcrumbView.buildBreadCrumbsFromPath(remote.getDisplayName()+directoryObject.getCurrentPath());
         } else {
             breadcrumbView.addCrumb(remote.getDisplayName(), "//");
+        }
+
+        if (showThumbnails) {
+            startThumbnailService();
         }
 
         if (savedInstanceState != null && savedInstanceState.getBoolean(SAVED_SEARCH_MODE, false)) {
@@ -422,7 +425,11 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
         breadcrumbView.clearCrumbs();
         ((FragmentActivity) context).setTitle(originalToolbarTitle);
         FragmentManager fm = this.getActivity().getSupportFragmentManager();
-        fm.beginTransaction().remove(this).commit();
+        if (fm.getBackStackEntryCount() > 0) {
+            fm.popBackStack();
+        } else {
+            fm.beginTransaction().remove(this).commit();
+        }
     }
 
     private void showSFTPgoToDialog() {
@@ -442,7 +449,8 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
     }
 
     private void startThumbnailService() {
-        ThumbnailServerService.startServing(context, remote, thumbnailServerPort, thumbnailServerAuth);
+        ThumbnailServerService.startServing(context, remote, thumbnailServerPort, thumbnailServerAuth,
+                directoryObject.getCurrentPath());
     }
 
     private void initializeThumbnailParams() {

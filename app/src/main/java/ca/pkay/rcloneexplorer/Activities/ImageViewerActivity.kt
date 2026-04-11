@@ -14,12 +14,16 @@ import androidx.core.view.WindowCompat
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
 import ca.pkay.rcloneexplorer.R
+import ca.pkay.rcloneexplorer.util.ImageServeBitmapLoader
 import ca.pkay.rcloneexplorer.util.ImageViewerNetworkPolicy
+import ca.pkay.rcloneexplorer.util.SelectedFolderImageHttpClientHolder
 import com.bumptech.glide.Glide
 import com.bumptech.glide.Priority
 import com.bumptech.glide.load.model.GlideUrl
 import com.bumptech.glide.request.RequestOptions
 import com.google.android.material.appbar.MaterialToolbar
+import okhttp3.OkHttpClient
+import java.util.concurrent.Executors
 
 class ImageViewerActivity : AppCompatActivity() {
 
@@ -29,6 +33,8 @@ class ImageViewerActivity : AppCompatActivity() {
 
     private var highFidelity: Boolean = false
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    private val imageLoadExecutor = Executors.newFixedThreadPool(2)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,11 +61,23 @@ class ImageViewerActivity : AppCompatActivity() {
         }
         val startIndex = intent.getIntExtra(EXTRA_START_INDEX, 0).coerceIn(0, urls.lastIndex)
 
+        val cacheFlags = intent.getBooleanArrayExtra(EXTRA_IMAGE_CACHE_ENABLED)?.let { arr ->
+            if (arr.size == urls.size) {
+                arr
+            } else {
+                BooleanArray(urls.size) { i -> i < arr.size && arr[i] }
+            }
+        } ?: BooleanArray(urls.size) { false }
+
+        val useOkHttpDisk = cacheFlags.any { it }
+        val cachedClient: OkHttpClient? =
+            if (useOkHttpDisk) SelectedFolderImageHttpClientHolder.getOrNull(this) else null
+
         toolbar.setNavigationOnClickListener { finish() }
         toolbar.title = names.getOrElse(startIndex) { "" }
 
         pager.offscreenPageLimit = 1
-        pager.adapter = ImagePagerAdapter(urls, names)
+        pager.adapter = ImagePagerAdapter(urls, names, cacheFlags, cachedClient)
         pager.setCurrentItem(startIndex, false)
 
         pager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
@@ -97,6 +115,11 @@ class ImageViewerActivity : AppCompatActivity() {
         super.onStop()
     }
 
+    override fun onDestroy() {
+        imageLoadExecutor.shutdown()
+        super.onDestroy()
+    }
+
     private fun glideRequestOptions(): RequestOptions {
         val dm = resources.displayMetrics
         val base = RequestOptions()
@@ -113,12 +136,30 @@ class ImageViewerActivity : AppCompatActivity() {
         }
     }
 
+    private fun decodeTargetSize(): Pair<Int, Int> {
+        val dm = resources.displayMetrics
+        return if (highFidelity) {
+            val w = (dm.widthPixels * 2).coerceAtMost(4096).coerceAtLeast(1)
+            val h = (dm.heightPixels * 2).coerceAtMost(4096).coerceAtLeast(1)
+            w to h
+        } else {
+            val w = dm.widthPixels.coerceAtMost(1600).coerceAtLeast(1)
+            val h = dm.heightPixels.coerceAtMost(1600).coerceAtLeast(1)
+            w to h
+        }
+    }
+
     private inner class ImagePagerAdapter(
         private val urls: Array<String>,
-        private val names: Array<String>
+        private val names: Array<String>,
+        private val cacheEnabled: BooleanArray,
+        private val cachedHttpClient: OkHttpClient?,
     ) : RecyclerView.Adapter<ImagePagerAdapter.PageHolder>() {
 
-        inner class PageHolder(val imageView: ImageView) : RecyclerView.ViewHolder(imageView)
+        inner class PageHolder(val imageView: ImageView) : RecyclerView.ViewHolder(imageView) {
+            @Volatile
+            var loadToken: Long = 0L
+        }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): PageHolder {
             val view = LayoutInflater.from(parent.context)
@@ -127,10 +168,35 @@ class ImageViewerActivity : AppCompatActivity() {
         }
 
         override fun onBindViewHolder(holder: PageHolder, position: Int) {
-            Glide.with(this@ImageViewerActivity)
-                .load(GlideUrl(urls[position]))
-                .apply(glideRequestOptions())
-                .into(holder.imageView)
+            Glide.with(this@ImageViewerActivity).clear(holder.imageView)
+            holder.imageView.setImageDrawable(null)
+            holder.loadToken++
+            val token = holder.loadToken
+            val url = urls[position]
+            val useCache =
+                position < cacheEnabled.size && cacheEnabled[position] && cachedHttpClient != null
+            if (useCache) {
+                val client = cachedHttpClient!!
+                val (mw, mh) = decodeTargetSize()
+                imageLoadExecutor.execute {
+                    val bmp = ImageServeBitmapLoader.loadSampled(url, client, mw, mh)
+                    runOnUiThread {
+                        if (holder.loadToken != token) {
+                            return@runOnUiThread
+                        }
+                        if (bmp != null) {
+                            holder.imageView.setImageBitmap(bmp)
+                        } else {
+                            holder.imageView.setImageResource(R.drawable.ic_file)
+                        }
+                    }
+                }
+            } else {
+                Glide.with(this@ImageViewerActivity)
+                    .load(GlideUrl(url))
+                    .apply(glideRequestOptions())
+                    .into(holder.imageView)
+            }
             holder.imageView.contentDescription = names.getOrElse(position) { "" }
         }
 
@@ -141,5 +207,6 @@ class ImageViewerActivity : AppCompatActivity() {
         const val EXTRA_IMAGE_URLS = "image_urls"
         const val EXTRA_IMAGE_NAMES = "image_names"
         const val EXTRA_START_INDEX = "start_index"
+        const val EXTRA_IMAGE_CACHE_ENABLED = "image_cache_enabled"
     }
 }

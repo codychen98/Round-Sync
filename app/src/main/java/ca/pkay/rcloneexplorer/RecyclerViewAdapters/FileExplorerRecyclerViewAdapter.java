@@ -1,6 +1,7 @@
 package ca.pkay.rcloneexplorer.RecyclerViewAdapters;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.drawable.Drawable;
@@ -20,22 +21,24 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.bumptech.glide.Glide;
 import com.bumptech.glide.load.engine.DiskCacheStrategy;
-import com.bumptech.glide.load.model.GlideUrl;
 import com.bumptech.glide.request.RequestOptions;
 
-import java.net.MalformedURLException;
-import java.net.URL;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import ca.pkay.rcloneexplorer.Glide.RetryRequestListener;
+import ca.pkay.rcloneexplorer.Glide.HttpServeThumbnailGlideUrl;
 import ca.pkay.rcloneexplorer.Glide.VideoThumbnailUrl;
 import ca.pkay.rcloneexplorer.Items.FileItem;
 import ca.pkay.rcloneexplorer.Items.RemoteItem;
 import ca.pkay.rcloneexplorer.R;
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.util.FLog;
+import ca.pkay.rcloneexplorer.util.MediaFolderPolicy;
+import ca.pkay.rcloneexplorer.util.PolicyType;
 import ca.pkay.rcloneexplorer.util.SyncLog;
 import io.github.x0b.safdav.SafAccessProvider;
 import io.github.x0b.safdav.file.FileAccessError;
@@ -67,6 +70,9 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     private ThumbnailProgressListener progressListener;
     private int thumbnailTotal = 0;
     private final AtomicInteger thumbnailLoaded = new AtomicInteger(0);
+    /** Cached per-remote thumbnail allow-list; invalidated when list or settings may have changed. */
+    private String thumbPolicyCachedRemoteName;
+    private Set<String> thumbPolicyCachedAllowed = Collections.emptySet();
 
     public interface OnClickListener {
         void onFileClicked(FileItem fileItem);
@@ -163,28 +169,35 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 if (localLoad) {
                     bindSafFile(holder, item, glideOption);
                 } else if (serverReady) {
-                    String url = buildThumbnailUrl(item);
-                    if (!loggedFirstReady) {
-                        loggedFirstReady = true;
-                        SyncLog.info(context, "ThumbnailServer",
-                            "Adapter: first Glide request issued. serverReady=true, url=" + url);
+                    if (!isHttpThumbnailPolicyAllowedForNetworkThumbnail(item)) {
+                        cancelActiveRetryListener(holder);
+                        Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+                        holder.fileIcon.setImageTintList(holder.defaultIconTint);
+                        holder.fileIcon.setImageResource(R.drawable.ic_file);
+                    } else {
+                        String url = buildThumbnailUrl(item);
+                        if (!loggedFirstReady) {
+                            loggedFirstReady = true;
+                            SyncLog.info(context, "ThumbnailServer",
+                                "Adapter: first Glide request issued. serverReady=true, url=" + url);
+                        }
+                        RetryRequestListener retryListener = new ProgressTrackingRetryListener(
+                                ThumbnailServerManager.getInstance(),
+                                rl -> Glide.with(context.getApplicationContext())
+                                        .load(new HttpServeThumbnailGlideUrl(url))
+                                        .apply(glideOption)
+                                        .thumbnail(0.1f)
+                                        .listener(rl)
+                                        .into(holder.fileIcon));
+                        cancelActiveRetryListener(holder);
+                        holder.activeRetryListener = retryListener;
+                        Glide.with(context.getApplicationContext())
+                                .load(new HttpServeThumbnailGlideUrl(url))
+                                .apply(glideOption)
+                                .thumbnail(0.1f)
+                                .listener(retryListener)
+                                .into(holder.fileIcon);
                     }
-                    RetryRequestListener retryListener = new ProgressTrackingRetryListener(
-                            ThumbnailServerManager.getInstance(),
-                            rl -> Glide.with(context.getApplicationContext())
-                                    .load(new PersistentGlideUrl(url))
-                                    .apply(glideOption)
-                                    .thumbnail(0.1f)
-                                    .listener(rl)
-                                    .into(holder.fileIcon));
-                    cancelActiveRetryListener(holder);
-                    holder.activeRetryListener = retryListener;
-                    Glide.with(context.getApplicationContext())
-                            .load(new PersistentGlideUrl(url))
-                            .apply(glideOption)
-                            .thumbnail(0.1f)
-                            .listener(retryListener)
-                            .into(holder.fileIcon);
                 } else {
                     if (!loggedFirstBind) {
                         loggedFirstBind = true;
@@ -198,32 +211,39 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 }
             } else if (mimeType.startsWith("video/") && !localLoad) {
                 holder.fileIcon.setImageTintList(null);
-                String url = buildThumbnailUrl(item);
                 RequestOptions glideOption = new RequestOptions()
                         .centerCrop()
                         .diskCacheStrategy(DiskCacheStrategy.DATA)
                         .placeholder(R.drawable.ic_file)
                         .error(R.drawable.ic_file);
                 if (serverReady) {
-                    if (!loggedFirstReady) {
-                        loggedFirstReady = true;
-                        SyncLog.info(context, "ThumbnailServer",
-                            "Adapter: first video Glide request issued. serverReady=true, url=" + url);
+                    if (!isHttpThumbnailPolicyAllowedForNetworkThumbnail(item)) {
+                        cancelActiveRetryListener(holder);
+                        Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+                        holder.fileIcon.setImageTintList(holder.defaultIconTint);
+                        holder.fileIcon.setImageResource(R.drawable.ic_file);
+                    } else {
+                        String url = buildThumbnailUrl(item);
+                        if (!loggedFirstReady) {
+                            loggedFirstReady = true;
+                            SyncLog.info(context, "ThumbnailServer",
+                                "Adapter: first video Glide request issued. serverReady=true, url=" + url);
+                        }
+                        RetryRequestListener retryListener = new ProgressTrackingRetryListener(
+                                ThumbnailServerManager.getInstance(),
+                                rl -> Glide.with(context.getApplicationContext())
+                                        .load(new VideoThumbnailUrl(url))
+                                        .apply(glideOption)
+                                        .listener(rl)
+                                        .into(holder.fileIcon));
+                        cancelActiveRetryListener(holder);
+                        holder.activeRetryListener = retryListener;
+                        Glide.with(context.getApplicationContext())
+                                .load(new VideoThumbnailUrl(url))
+                                .apply(glideOption)
+                                .listener(retryListener)
+                                .into(holder.fileIcon);
                     }
-                    RetryRequestListener retryListener = new ProgressTrackingRetryListener(
-                            ThumbnailServerManager.getInstance(),
-                            rl -> Glide.with(context.getApplicationContext())
-                                    .load(new VideoThumbnailUrl(url))
-                                    .apply(glideOption)
-                                    .listener(rl)
-                                    .into(holder.fileIcon));
-                    cancelActiveRetryListener(holder);
-                    holder.activeRetryListener = retryListener;
-                    Glide.with(context.getApplicationContext())
-                            .load(new VideoThumbnailUrl(url))
-                            .apply(glideOption)
-                            .listener(retryListener)
-                            .into(holder.fileIcon);
                 } else {
                     if (!loggedFirstBind) {
                         loggedFirstBind = true;
@@ -328,6 +348,44 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         }
     }
 
+    private void invalidateThumbPolicyCache() {
+        thumbPolicyCachedRemoteName = null;
+        thumbPolicyCachedAllowed = Collections.emptySet();
+    }
+
+    private Set<String> getThumbAllowedFolders(@NonNull String remoteName) {
+        if (remoteName.equals(thumbPolicyCachedRemoteName)) {
+            return thumbPolicyCachedAllowed;
+        }
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+        Set<String> allowed = MediaFolderPolicy.INSTANCE.readAllowedFolders(prefs, remoteName, PolicyType.THUMBNAIL);
+        thumbPolicyCachedRemoteName = remoteName;
+        thumbPolicyCachedAllowed = allowed;
+        return allowed;
+    }
+
+    /**
+     * When false, skip HTTP thumbnail loads (no request, no new Glide disk cache) for this file.
+     * SAFW and other bypass remotes always return true.
+     */
+    private boolean isHttpThumbnailPolicyAllowedForNetworkThumbnail(@NonNull FileItem item) {
+        RemoteItem remote = item.getRemote();
+        if (remote == null) {
+            return true;
+        }
+        if (remote.getType() == RemoteItem.SAFW) {
+            return true;
+        }
+        if (!MediaFolderPolicy.INSTANCE.shouldApplyAllowListGating(remote)) {
+            return true;
+        }
+        Set<String> allowed = getThumbAllowedFolders(remote.getName());
+        String pathForPolicy = MediaFolderPolicy.INSTANCE.explorerPathForPolicyCheck(
+                remote.getName(),
+                item.getPath());
+        return MediaFolderPolicy.INSTANCE.isPathAllowed(remote, remote.getName(), pathForPolicy, allowed);
+    }
+
     private String buildThumbnailUrl(FileItem item) {
         String[] serverParams = listener.getThumbnailServerParams();
         String hiddenPath = serverParams[0];
@@ -356,24 +414,6 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             FLog.e(TAG, "onBindViewHolder: SAF error", e);
             holder.fileIcon.setImageTintList(holder.defaultIconTint);
             holder.fileIcon.setImageResource(R.drawable.ic_file);
-        }
-    }
-
-    private static class PersistentGlideUrl extends GlideUrl {
-
-        public PersistentGlideUrl(String url) {
-            super(url);
-        }
-
-        @Override
-        public String getCacheKey() {
-            try {
-                URL url = super.toURL();
-                String path = url.getPath();
-                return path.substring(path.indexOf('/', 1));
-            } catch (MalformedURLException e) {
-                return super.getCacheKey();
-            }
         }
     }
 
@@ -420,25 +460,10 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     }
 
     public void newData(List<FileItem> data) {
+        invalidateThumbPolicyCache();
         loggedFirstBind = false;
         loggedFirstReady = false;
-        int total = 0;
-        if (showThumbnails) {
-            for (FileItem item : data) {
-                if (!item.isDir()) {
-                    boolean localLoad = item.getRemote() != null
-                            && item.getRemote().getType() == RemoteItem.SAFW;
-                    if (!localLoad) {
-                        String mime = item.getMimeType();
-                        if ((mime.startsWith("image/") && item.getSize() <= sizeLimit)
-                                || mime.startsWith("video/")) {
-                            total++;
-                        }
-                    }
-                }
-            }
-        }
-        thumbnailTotal = total;
+        thumbnailTotal = countThumbnailTargets(data);
         thumbnailLoaded.set(0);
         this.clear();
         files = new ArrayList<>(data);
@@ -453,14 +478,19 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         } else {
             notifyItemRangeInserted(0, files.size());
         }
+        notifyThumbnailIdleIfNoTargets();
     }
 
     public void updateData(List<FileItem> data) {
+        invalidateThumbPolicyCache();
         if (data.isEmpty()) {
             int count = files.size();
             files.clear();
             notifyItemRangeRemoved(0, count);
             showEmptyState(true);
+            thumbnailTotal = 0;
+            thumbnailLoaded.set(0);
+            notifyThumbnailIdleIfNoTargets();
             return;
         }
         showEmptyState(false);
@@ -486,9 +516,13 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             files.add(index, fileItem);
             notifyItemInserted(index);
         }
+        thumbnailTotal = countThumbnailTargets(files);
+        thumbnailLoaded.set(0);
+        notifyThumbnailIdleIfNoTargets();
     }
 
     public void updateSortedData(List<FileItem> data) {
+        invalidateThumbPolicyCache();
         if (files != null) {
             int count = files.size();
             files.clear();
@@ -505,9 +539,13 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         } else {
             notifyItemRangeInserted(0, files.size());
         }
+        thumbnailTotal = countThumbnailTargets(files);
+        thumbnailLoaded.set(0);
+        notifyThumbnailIdleIfNoTargets();
     }
 
     public void refreshData() {
+        invalidateThumbPolicyCache();
         notifyDataSetChanged();
     }
 
@@ -631,6 +669,39 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             listener.onFilesSelected();
         }
         notifyDataSetChanged();
+    }
+
+    private int countThumbnailTargets(@NonNull List<FileItem> items) {
+        int total = 0;
+        if (!showThumbnails) {
+            return 0;
+        }
+        for (FileItem item : items) {
+            if (item.isDir()) {
+                continue;
+            }
+            if (item.getRemote() == null) {
+                continue;
+            }
+            boolean localLoad = item.getRemote().getType() == RemoteItem.SAFW;
+            if (localLoad) {
+                continue;
+            }
+            String mime = item.getMimeType();
+            if ((mime.startsWith("image/") && item.getSize() <= sizeLimit)
+                    || mime.startsWith("video/")) {
+                if (isHttpThumbnailPolicyAllowedForNetworkThumbnail(item)) {
+                    total++;
+                }
+            }
+        }
+        return total;
+    }
+
+    private void notifyThumbnailIdleIfNoTargets() {
+        if (thumbnailTotal == 0 && progressListener != null) {
+            progressListener.onThumbnailLoadingComplete();
+        }
     }
 
     private class ProgressTrackingRetryListener extends RetryRequestListener {

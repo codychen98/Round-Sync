@@ -25,6 +25,18 @@
 
     </PreferenceCategory>
 
+    <Preference
+        android:key="mediaFolderPolicyEntryKey"
+        android:title="@string/title_activity_media_folder_policy"
+        app:summary="@string/pref_media_folder_policy_summary" />
+
+    <PreferenceCategory android:title="@string/preference_category_header_selected_folder_media_cache">
+        <Preference
+            android:key="clearSelectedFolderMediaCacheKey"
+            android:title="@string/pref_clear_selected_folder_media_cache_title"
+            app:summary="@string/pref_clear_selected_folder_media_cache_summary" />
+    </PreferenceCategory>
+
     <PreferenceCategory android:title="@string/preference_category_header_background_work">
         <SwitchPreference
             android:defaultValue="true"

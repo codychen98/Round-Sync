@@ -1,22 +1,24 @@
 package ca.pkay.rcloneexplorer.Settings
 
 import android.content.DialogInterface
+import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
-import android.util.Log
 import android.widget.EditText
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.PreferenceManager
+import ca.pkay.rcloneexplorer.Activities.MediaFolderPolicyActivity
 import ca.pkay.rcloneexplorer.AppShortcutsHelper
 import ca.pkay.rcloneexplorer.Items.RemoteItem
 import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Rclone
 import ca.pkay.rcloneexplorer.util.FLog
+import ca.pkay.rcloneexplorer.util.SelectedFolderMediaCacheClearance
 import de.felixnuesse.extract.extensions.TAG
 import de.felixnuesse.extract.settings.language.LanguagePicker
 import de.felixnuesse.extract.settings.preferences.FilesizePreference
@@ -40,7 +42,6 @@ class GeneralPreferencesFragment : PreferenceFragmentCompat() {
             Preference.SummaryProvider<FilesizePreference> { preference ->
                 val size = preference.getValue()
                 val sizeMb = (size / 1024 / 1024)
-                Log.e(TAG(), "test: $sizeMb")
                 resources.getString(R.string.pref_thumbnails_size_summary, sizeMb.toFloat())
             }
 
@@ -57,6 +58,59 @@ class GeneralPreferencesFragment : PreferenceFragmentCompat() {
             true
         }
 
+        val mediaFolderPolicyPreference = findPreference("mediaFolderPolicyEntryKey") as Preference?
+        mediaFolderPolicyPreference?.setOnPreferenceClickListener {
+            startActivity(Intent(requireContext(), MediaFolderPolicyActivity::class.java))
+            true
+        }
+
+        val clearMediaCachePreference = findPreference("clearSelectedFolderMediaCacheKey") as Preference?
+        clearMediaCachePreference?.setOnPreferenceClickListener {
+            AlertDialog.Builder(requireContext())
+                .setTitle(R.string.clear_selected_folder_media_cache_dialog_title)
+                .setMessage(R.string.clear_selected_folder_media_cache_dialog_message)
+                .setNegativeButton(R.string.cancel, null)
+                .setPositiveButton(R.string.ok) { _: DialogInterface, _: Int ->
+                    runSelectedFolderMediaCacheClear()
+                }
+                .show()
+            true
+        }
+
+    }
+
+    private fun runSelectedFolderMediaCacheClear() {
+        val appContext = requireContext().applicationContext
+        val activity = requireActivity()
+        Thread {
+            var failed = false
+            try {
+                SelectedFolderMediaCacheClearance.clearAll(appContext)
+            } catch (t: Throwable) {
+                failed = true
+                FLog.e(TAG(), "runSelectedFolderMediaCacheClear", t)
+            }
+            activity.runOnUiThread {
+                if (!isAdded) {
+                    return@runOnUiThread
+                }
+                if (failed) {
+                    Toasty.error(
+                        activity,
+                        getString(R.string.clear_selected_folder_media_cache_failed),
+                        Toast.LENGTH_SHORT,
+                        true,
+                    ).show()
+                } else {
+                    Toasty.success(
+                        activity,
+                        getString(R.string.clear_selected_folder_media_cache_done),
+                        Toast.LENGTH_SHORT,
+                        true,
+                    ).show()
+                }
+            }
+        }.start()
     }
 
     private fun showThumbnailSizeDialog(preference: Preference) {

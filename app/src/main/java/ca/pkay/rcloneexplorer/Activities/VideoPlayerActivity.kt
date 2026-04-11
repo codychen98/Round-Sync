@@ -19,10 +19,16 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.Util
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import ca.pkay.rcloneexplorer.R
+import ca.pkay.rcloneexplorer.util.SelectedFolderSimpleCacheProvider
 import ca.pkay.rcloneexplorer.util.VideoDoubleTapHorizontalZone
 import ca.pkay.rcloneexplorer.util.VideoPlayerDoubleTapZones
 import java.io.IOException
@@ -89,11 +95,50 @@ class VideoPlayerActivity : AppCompatActivity() {
     }
 
     private fun initializePlayer(uris: Array<String>, names: Array<String>, startIndex: Int) {
+        val cacheFlags = intent.getBooleanArrayExtra(EXTRA_VIDEO_CACHE_ENABLED)?.let { arr ->
+            if (arr.size == uris.size) {
+                arr
+            } else {
+                BooleanArray(uris.size) { i -> i < arr.size && arr[i] }
+            }
+        } ?: BooleanArray(uris.size) { false }
+
+        val useDiskCache = cacheFlags.any { it }
+        val simpleCache = if (useDiskCache) {
+            SelectedFolderSimpleCacheProvider.getOrNull(this)
+        } else {
+            null
+        }
+
+        val upstreamFactory = DefaultHttpDataSource.Factory()
+            .setUserAgent(Util.getUserAgent(this, packageName ?: "RoundSync"))
+
+        val cacheDataSourceFactory = if (simpleCache != null) {
+            CacheDataSource.Factory()
+                .setCache(simpleCache)
+                .setUpstreamDataSourceFactory(upstreamFactory)
+                .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+        } else {
+            null
+        }
+
+        val progressiveWithCache =
+            cacheDataSourceFactory?.let { ProgressiveMediaSource.Factory(it) }
+        val progressiveNoCache = ProgressiveMediaSource.Factory(upstreamFactory)
+
+        val sources: List<MediaSource> = uris.indices.map { i ->
+            val item = MediaItem.fromUri(uris[i])
+            if (cacheFlags[i] && progressiveWithCache != null) {
+                progressiveWithCache.createMediaSource(item)
+            } else {
+                progressiveNoCache.createMediaSource(item)
+            }
+        }
+
         player = ExoPlayer.Builder(this).build().also { exo ->
             playerView.player = exo
 
-            val mediaItems = uris.map { MediaItem.fromUri(it) }
-            exo.setMediaItems(mediaItems, startIndex, 0L)
+            exo.setMediaSources(sources, startIndex, 0L)
 
             exo.addListener(object : Player.Listener {
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -285,6 +330,8 @@ class VideoPlayerActivity : AppCompatActivity() {
     }
 
     companion object {
+        const val EXTRA_VIDEO_CACHE_ENABLED = "video_cache_enabled"
+
         private const val TOP_BOTTOM_EXCLUDE_FRACTION = 0.25f
         private const val MIDDLE_BAND_HEIGHT_FRACTION = 0.5f
         private const val SEEK_STEP_MS = 10_000L

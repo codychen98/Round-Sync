@@ -64,6 +64,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.Stack;
 
 import ca.pkay.rcloneexplorer.Activities.ImageViewerActivity;
@@ -95,7 +96,11 @@ import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerService;
 import ca.pkay.rcloneexplorer.util.ActivityHelper;
 import ca.pkay.rcloneexplorer.util.FLog;
+import ca.pkay.rcloneexplorer.util.LastFolderSnapshotStore;
+import ca.pkay.rcloneexplorer.util.MediaFolderPolicy;
+import ca.pkay.rcloneexplorer.util.PolicyType;
 import ca.pkay.rcloneexplorer.util.SyncLog;
+import ca.pkay.rcloneexplorer.workmanager.LastFolderThumbnailPrefetchWorker;
 import ca.pkay.rcloneexplorer.util.ServerReadinessChecker;
 import ca.pkay.rcloneexplorer.util.LargeParcel;
 import ca.pkay.rcloneexplorer.workmanager.EphemeralTaskManager;
@@ -318,7 +323,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         recyclerViewAdapter.setThumbnailProgressListener(new FileExplorerRecyclerViewAdapter.ThumbnailProgressListener() {
             @Override
             public void onThumbnailProgress(int loaded, int total) {
-                ThumbnailServerService.updateProgress(context, loaded, total);
+                ThumbnailServerService.updateProgress(context, directoryObject.getCurrentPath(),
+                        loaded, total, 0, 0);
             }
 
             @Override
@@ -791,7 +797,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     }
 
     private void startThumbnailServer() {
-        ThumbnailServerService.startServing(context, remote, thumbnailServerPort, thumbnailServerAuth);
+        ThumbnailServerService.startServing(context, remote, thumbnailServerPort, thumbnailServerAuth,
+                directoryObject.getCurrentPath());
     }
 
     private void observeThumbnailServerState() {
@@ -1275,6 +1282,10 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     @Override
     public void onStop() {
         super.onStop();
+        if (context != null && remoteName != null && directoryObject != null) {
+            LastFolderSnapshotStore.persist(context, remoteName, directoryObject.getCurrentPath());
+            LastFolderThumbnailPrefetchWorker.enqueue(context);
+        }
         if (context != null) {
             SyncLog.info(context, "ThumbnailServer", "Fragment onStop: stopping thumbnail server");
         }
@@ -2114,6 +2125,20 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         return "//" + remoteName;
     }
 
+    private boolean[] buildCacheEnabledForFiles(List<FileItem> files) {
+        boolean[] out = new boolean[files.size()];
+        if (context == null || remote == null || remoteName == null) {
+            return out;
+        }
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+        Set<String> allowed = MediaFolderPolicy.INSTANCE.readAllowedFolders(prefs, remoteName, PolicyType.CACHE);
+        for (int i = 0; i < files.size(); i++) {
+            String p = MediaFolderPolicy.INSTANCE.explorerPathForPolicyCheck(remoteName, files.get(i).getPath());
+            out[i] = MediaFolderPolicy.INSTANCE.isPathAllowed(remote, remoteName, p, allowed);
+        }
+        return out;
+    }
+
     private void launchVideoPlayer(FileItem clickedVideo, int port) {
         List<FileItem> allFiles = directoryObject.getDirectoryContent();
         List<FileItem> videoFiles = new ArrayList<>();
@@ -2146,6 +2171,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         intent.putExtra("video_urls", videoUrls.toArray(new String[0]));
         intent.putExtra("video_names", videoNames.toArray(new String[0]));
         intent.putExtra("start_index", startIndex);
+        intent.putExtra(VideoPlayerActivity.EXTRA_VIDEO_CACHE_ENABLED, buildCacheEnabledForFiles(videoFiles));
         Activity activity = getActivity();
         if (activity != null) {
             tryStartActivityForResult(activity, intent, STREAMING_INTENT_RESULT);
@@ -2188,6 +2214,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         intent.putExtra(ImageViewerActivity.EXTRA_IMAGE_URLS, imageUrls.toArray(new String[0]));
         intent.putExtra(ImageViewerActivity.EXTRA_IMAGE_NAMES, imageNames.toArray(new String[0]));
         intent.putExtra(ImageViewerActivity.EXTRA_START_INDEX, startIndex);
+        intent.putExtra(ImageViewerActivity.EXTRA_IMAGE_CACHE_ENABLED, buildCacheEnabledForFiles(imageFiles));
         Activity activity = getActivity();
         if (activity != null) {
             tryStartActivity(activity, intent);
