@@ -9,7 +9,6 @@ import android.content.SharedPreferences;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.util.Base64;
-import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuInflater;
@@ -473,7 +472,26 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
         if (slash <= root.length()) {
             return root;
         }
-        return cur.substring(0, slash);
+        final String parentAbs = cur.substring(0, slash);
+        return explorerAbsoluteToListingPath(parentAbs, root);
+    }
+
+    /**
+     * Paths stored in {@link DirectoryObject} and used by {@code rclone lsjson} must be either
+     * {@code //remoteName} at the remote root or a relative path under it (e.g. {@code Photo/Photo}).
+     * Parent resolution uses absolute {@code //remoteName/...} strings; convert those before
+     * {@link #onBreadCrumbClicked} / {@link DirectoryObject#setPath} so {@code getDirectoryContent}
+     * does not build invalid {@code remote://remote/...} targets.
+     */
+    @NonNull
+    private String explorerAbsoluteToListingPath(@NonNull String abs, @NonNull String root) {
+        if (abs.equals(root) || abs.equals(root + "/")) {
+            return root;
+        }
+        if (abs.startsWith(root + "/")) {
+            return abs.substring(root.length() + 1);
+        }
+        return abs;
     }
 
     /**
@@ -1084,9 +1102,13 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
 
     @Override
     public void onBreadCrumbClicked(String path) {
-        Log.e("TAG", path);
         if (isSearchMode) {
             searchClicked();
+        }
+        if (remoteName != null) {
+            path = explorerAbsoluteToListingPath(
+                    toAbsoluteUnderRemoteRoot(path, "//" + remoteName),
+                    "//" + remoteName);
         }
         final String currentPath = directoryObject.getCurrentPath();
         final boolean noopEqualsCurrent = currentPath.equals(path);

@@ -39,7 +39,8 @@ final class VideoThumbnailExoFallback {
     private static final long PREPARE_TIMEOUT_MS = 20_000L;
     private static final long RENDER_WAIT_MS = 12_000L;
     private static final long PIXEL_COPY_MS = 5_000L;
-    private static final long MAX_DURATION_MS = 45L * 60L * 1000L;
+    /** Beyond this, skip Exo path (heavy demux). 45m excluded real files (~48m) that still need a thumb. */
+    private static final long MAX_DURATION_MS = 6L * 60L * 60L * 1000L;
 
     private VideoThumbnailExoFallback() {
     }
