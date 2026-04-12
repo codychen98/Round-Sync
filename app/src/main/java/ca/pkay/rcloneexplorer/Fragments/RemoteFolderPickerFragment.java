@@ -308,7 +308,7 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
             directoryObject.setPath(mInitialPath);
             breadcrumbView.buildBreadCrumbsFromPath(remote.getDisplayName()+directoryObject.getCurrentPath());
         } else {
-            breadcrumbView.addCrumb(remote.getDisplayName(), "//");
+            breadcrumbView.addCrumb(remote.getDisplayName(), "//" + remoteName);
         }
 
         if (savedInstanceState != null && savedInstanceState.getBoolean(SAVED_SEARCH_MODE, false)) {
@@ -412,19 +412,25 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
         if (!mediaFolderPolicyMultiSelectMode) {
             return;
         }
+        final String currentPath = directoryObject == null ? "null" : directoryObject.getCurrentPath();
+        final String parentPath = parentExplorerPathOrNull();
+        final String parentForLog = parentPath == null ? "null" : parentPath;
         if (Boolean.TRUE.equals(isSearchMode)) {
+            policyPickerNavLog("search", currentPath, parentForLog);
             searchClicked();
             return;
         }
         if (mediaFolderPolicyPickMode) {
+            policyPickerNavLog("exitPickMode", currentPath, parentForLog);
             exitMediaFolderPolicyPickMode();
             return;
         }
-        String parent = parentExplorerPathOrNull();
-        if (parent != null) {
-            onBreadCrumbClicked(parent);
+        if (parentPath != null) {
+            policyPickerNavLog("parentNavigation", currentPath, parentForLog);
+            onBreadCrumbClicked(parentPath);
             return;
         }
+        policyPickerNavLog("atRootForwardActivity", currentPath, "null");
         if (mediaFolderPolicyBackCallback != null) {
             mediaFolderPolicyBackCallback.setEnabled(false);
         }
@@ -434,14 +440,30 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
         }
     }
 
+    private void policyPickerNavLog(@NonNull String branch, @NonNull String currentPath, @NonNull String parentOrNullLiteral) {
+        if (context == null) {
+            return;
+        }
+        SyncLog.info(context, "PolicyPickerNavDbg",
+                "event=policyPickerBack branch=" + branch
+                        + " remote=" + remoteName
+                        + " currentPath=" + currentPath
+                        + " parent=" + parentOrNullLiteral);
+    }
+
     @Nullable
     private String parentExplorerPathOrNull() {
         if (remoteName == null || directoryObject == null) {
             return null;
         }
-        String root = "//" + remoteName;
-        String cur = directoryObject.getCurrentPath();
-        if (!cur.startsWith(root)) {
+        final String root = "//" + remoteName;
+        final String cur = toAbsoluteUnderRemoteRoot(directoryObject.getCurrentPath(), root);
+        if (cur == null) {
+            return null;
+        }
+        if (!isStrictlyUnderRemoteRoot(cur, root)
+                && !cur.equals(root)
+                && !cur.equals(root + "/")) {
             return null;
         }
         if (cur.equals(root) || cur.equals(root + "/")) {
@@ -452,6 +474,45 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
             return root;
         }
         return cur.substring(0, slash);
+    }
+
+    /**
+     * Rclone lsjson uses relative {@link FileItem} paths when listing the remote root; navigation
+     * then stores {@code Cosplay/sub} instead of {@code //remote/Cosplay/sub}. Media-folder Back
+     * must resolve parents against the absolute {@code //remote/...} form.
+     */
+    @Nullable
+    private String toAbsoluteUnderRemoteRoot(@Nullable String raw, @NonNull String root) {
+        if (raw == null) {
+            return null;
+        }
+        if (isStrictlyUnderRemoteRoot(raw, root) || raw.equals(root) || raw.equals(root + "/")) {
+            return raw;
+        }
+        if (raw.startsWith("//")) {
+            return raw;
+        }
+        if (raw.isEmpty()) {
+            return root;
+        }
+        if (raw.charAt(0) == '/') {
+            return root + raw;
+        }
+        return root + "/" + raw;
+    }
+
+    /**
+     * True when {@code path} is {@code //remoteName} or {@code //remoteName/...}, but not a false
+     * positive such as {@code //pcloudLock} when {@code remoteName} is {@code pcloud}.
+     */
+    private static boolean isStrictlyUnderRemoteRoot(@NonNull String path, @NonNull String root) {
+        if (!path.startsWith(root)) {
+            return false;
+        }
+        if (path.length() > root.length()) {
+            return path.charAt(root.length()) == '/';
+        }
+        return true;
     }
 
     @Override
@@ -1027,7 +1088,15 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
         if (isSearchMode) {
             searchClicked();
         }
-        if (directoryObject.getCurrentPath().equals(path)) {
+        final String currentPath = directoryObject.getCurrentPath();
+        final boolean noopEqualsCurrent = currentPath.equals(path);
+        if (context != null) {
+            SyncLog.info(context, "PolicyPickerNavDbg",
+                    "event=policyPickerBreadcrumb requestedPath=" + path
+                            + " currentPath=" + currentPath
+                            + " noopEqualsCurrent=" + noopEqualsCurrent);
+        }
+        if (noopEqualsCurrent) {
             return;
         }
         swipeRefreshLayout.setRefreshing(false);

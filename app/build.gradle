@@ -112,6 +112,7 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+        coreLibraryDesugaringEnabled true
     }
     kotlinOptions {
         jvmTarget = JavaVersion.VERSION_17
@@ -171,6 +172,7 @@ repositories {
 }
 
 dependencies {
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'androidx.vectordrawable:vectordrawable:1.1.0'
@@ -210,8 +212,7 @@ dependencies {
     implementation project(':safdav')
     implementation 'org.nanohttpd:nanohttpd:2.3.1'
 
-    // Java 8+ library support
-    // TODO: replace with coreLibraryDesugar once available
+    // Java 8+ library support (retrostreams retained for existing streams usage)
     implementation 'net.sourceforge.streamsupport:android-retrostreams:1.7.4'
     implementation 'net.sourceforge.streamsupport:android-retrofuture:1.7.4'
     // App intro
@@ -234,4 +235,6 @@ dependencies {
     implementation "androidx.media3:media3-common:$media3_version"
     implementation "androidx.media3:media3-datasource:$media3_version"
     implementation "androidx.media3:media3-database:$media3_version"
+    // Software decode for thumbnails when MMR returns noFrame (Track E.5 / Apr-P3); matches player Media3 version
+    implementation "org.jellyfin.media3:media3-ffmpeg-decoder:$media3_version+2"
 }

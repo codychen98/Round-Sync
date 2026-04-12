@@ -3,8 +3,10 @@ package ca.pkay.rcloneexplorer.Glide;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.media.MediaMetadataRetriever;
+import android.os.Build;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import com.bumptech.glide.Priority;
 import com.bumptech.glide.load.DataSource;
@@ -14,6 +16,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -62,19 +65,39 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
             }
             MediaMetadataRetriever mmr = new MediaMetadataRetriever();
             OkHttpMediaDataSource dataSource = new OkHttpMediaDataSource(url, appContext);
+            boolean mmrReleased = false;
+            boolean dataSourceClosed = false;
             try {
                 mmr.setDataSource(dataSource);
+                final String debugSuffix = frameExtractDebugSuffix(mmr);
+                final long durationMs = readDurationMsFromRetriever(mmr);
                 Bitmap frame = extractNonBlackFrame(mmr);
                 if (frame == null) {
-                    logThumbnailSyncFailureOnce(
-                            "event=videoFetchFail reason=noFrame "
-                                    + frameExtractDebugSuffix(mmr)
-                                    + " "
-                                    + mgrDebugSuffix()
-                                    + " url=");
-                    callback.onLoadFailed(
-                            new RuntimeException("No frame extracted from " + url));
-                    return;
+                    try {
+                        mmr.release();
+                    } catch (Exception ignore) {
+                    }
+                    mmrReleased = true;
+                    try {
+                        dataSource.close();
+                    } catch (Exception ignore) {
+                    }
+                    dataSourceClosed = true;
+                    if (!cancelled) {
+                        frame = VideoThumbnailExoFallback.tryGrabFirstFrame(
+                                appContext, url, durationMs, VideoThumbnailFetcher.this);
+                    }
+                    if (frame == null) {
+                        logThumbnailSyncFailureOnce(
+                                "event=videoFetchFail reason=noFrame "
+                                        + debugSuffix
+                                        + " "
+                                        + mgrDebugSuffix()
+                                        + " url=");
+                        callback.onLoadFailed(
+                                new RuntimeException("No frame extracted from " + url));
+                        return;
+                    }
                 }
                 ByteArrayOutputStream baos = new ByteArrayOutputStream(64 * 1024);
                 frame.compress(Bitmap.CompressFormat.JPEG, 75, baos);
@@ -90,8 +113,18 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                                 + " url=");
                 callback.onLoadFailed(e);
             } finally {
-                try { mmr.release(); } catch (Exception ignore) {}
-                try { dataSource.close(); } catch (Exception ignore) {}
+                if (!mmrReleased) {
+                    try {
+                        mmr.release();
+                    } catch (Exception ignore) {
+                    }
+                }
+                if (!dataSourceClosed) {
+                    try {
+                        dataSource.close();
+                    } catch (Exception ignore) {
+                    }
+                }
             }
         });
     }
@@ -120,6 +153,22 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                 + " bitrate=" + (bitrateStr != null ? bitrateStr : "?");
     }
 
+    private static long readDurationMsFromRetriever(@NonNull MediaMetadataRetriever mmr) {
+        String durationStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+        if (durationStr == null) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(durationStr);
+        } catch (NumberFormatException ignored) {
+            return 0L;
+        }
+    }
+
+    boolean isCancelled() {
+        return cancelled;
+    }
+
     private Bitmap extractNonBlackFrame(MediaMetadataRetriever mmr) {
         String durationStr = mmr.extractMetadata(
                 MediaMetadataRetriever.METADATA_KEY_DURATION);
@@ -130,42 +179,141 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
             } catch (NumberFormatException ignored) {
             }
         }
-
-        long[] timestamps;
-        if (durationMs > 0) {
-            timestamps = new long[]{
-                    durationMs * 100,   // 10% into the video (microseconds)
-                    durationMs * 250,   // 25% into the video
-                    durationMs * 500,   // 50% into the video
-                    2_000_000,          // 2 seconds
-                    0                   // fallback: first frame
-            };
-        } else {
-            timestamps = new long[]{2_000_000, 5_000_000, 0};
-        }
-
-        Bitmap brightestFrame = null;
-        double brightestScore = -1;
+        long durationUs = durationMs > 0 ? durationMs * 1000L : 0L;
+        long[] timestamps = buildThumbnailProbeTimesUs(durationMs, durationUs);
+        BrightestSoFar best = new BrightestSoFar();
 
         for (long ts : timestamps) {
-            if (cancelled) break;
-            Bitmap frame = mmr.getFrameAtTime(ts,
-                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
-            if (frame == null) continue;
-            double brightness = averageBrightness(frame);
-            if (brightness >= 30) {
-                if (brightestFrame != null) brightestFrame.recycle();
-                return frame;
+            if (cancelled) {
+                break;
             }
-            if (brightness > brightestScore) {
-                if (brightestFrame != null) brightestFrame.recycle();
-                brightestFrame = frame;
-                brightestScore = brightness;
-            } else {
-                frame.recycle();
+            Bitmap frame = retrieveFrameAtTime(mmr, ts, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+            if (frame != null) {
+                best.consider(frame);
+                if (best.isBrightEnough()) {
+                    return best.getFrame();
+                }
             }
         }
-        return brightestFrame;
+        for (long ts : timestamps) {
+            if (cancelled) {
+                break;
+            }
+            for (int option : new int[]{
+                    MediaMetadataRetriever.OPTION_PREVIOUS_SYNC,
+                    MediaMetadataRetriever.OPTION_NEXT_SYNC,
+            }) {
+                Bitmap frame = retrieveFrameAtTime(mmr, ts, option);
+                if (frame != null) {
+                    best.consider(frame);
+                    if (best.isBrightEnough()) {
+                        return best.getFrame();
+                    }
+                }
+            }
+        }
+        return best.getFrame();
+    }
+
+    /**
+     * Ordered probe times (microseconds). CLOSEST_SYNC pass uses these first so common cases stay
+     * fast; PREVIOUS/NEXT pass reuses the same set for sparse keyframes / odd muxes.
+     */
+    private static long[] buildThumbnailProbeTimesUs(long durationMs, long durationUs) {
+        if (durationMs <= 0) {
+            LinkedHashSet<Long> u = new LinkedHashSet<>();
+            u.add(2_000_000L);
+            u.add(5_000_000L);
+            u.add(500_000L);
+            u.add(1_000_000L);
+            u.add(10_000_000L);
+            u.add(0L);
+            return longSetToArray(u);
+        }
+        LinkedHashSet<Long> ordered = new LinkedHashSet<>();
+        ordered.add(clampTimeUs(durationUs / 10, durationUs));
+        ordered.add(clampTimeUs(durationUs / 4, durationUs));
+        ordered.add(clampTimeUs(durationUs / 2, durationUs));
+        ordered.add(clampTimeUs(Math.max(1L, durationUs / 100), durationUs));
+        ordered.add(clampTimeUs(durationUs / 20, durationUs));
+        ordered.add(clampTimeUs(durationUs * 3 / 4, durationUs));
+        ordered.add(clampTimeUs(durationUs * 9 / 10, durationUs));
+        ordered.add(clampTimeUs(2_000_000L, durationUs));
+        ordered.add(clampTimeUs(500_000L, durationUs));
+        ordered.add(clampTimeUs(1_000_000L, durationUs));
+        if (durationUs > 3_000_000L) {
+            ordered.add(clampTimeUs(durationUs - 1_000_000L, durationUs));
+        }
+        ordered.add(0L);
+        return longSetToArray(ordered);
+    }
+
+    private static long clampTimeUs(long timeUs, long durationUs) {
+        if (timeUs < 0) {
+            return 0L;
+        }
+        if (durationUs > 0 && timeUs > durationUs) {
+            return durationUs;
+        }
+        return timeUs;
+    }
+
+    private static long[] longSetToArray(LinkedHashSet<Long> values) {
+        long[] out = new long[values.size()];
+        int i = 0;
+        for (Long v : values) {
+            out[i++] = v;
+        }
+        return out;
+    }
+
+    @Nullable
+    private Bitmap retrieveFrameAtTime(
+            @NonNull MediaMetadataRetriever mmr,
+            long timeUs,
+            int option) {
+        Bitmap frame = mmr.getFrameAtTime(timeUs, option);
+        if (frame == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            try {
+                frame = mmr.getScaledFrameAtTime(timeUs, option, 384, 216);
+            } catch (RuntimeException ignored) {
+            }
+        }
+        return frame;
+    }
+
+    private static final class BrightestSoFar {
+        @Nullable
+        private Bitmap frame;
+        private double score = -1;
+
+        void consider(@NonNull Bitmap candidate) {
+            double brightness = averageBrightness(candidate);
+            if (brightness >= 30) {
+                if (frame != null) {
+                    frame.recycle();
+                }
+                frame = candidate;
+                score = brightness;
+            } else if (brightness > score) {
+                if (frame != null) {
+                    frame.recycle();
+                }
+                frame = candidate;
+                score = brightness;
+            } else {
+                candidate.recycle();
+            }
+        }
+
+        boolean isBrightEnough() {
+            return frame != null && score >= 30;
+        }
+
+        @Nullable
+        Bitmap getFrame() {
+            return frame;
+        }
     }
 
     private static double averageBrightness(Bitmap bitmap) {

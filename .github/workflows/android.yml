@@ -38,6 +38,10 @@ jobs:
         keytool -list -keystore ~/.android/debug.keystore -storepass android -noprompt
     - name: Build app
       run: ./gradlew assembleOssDebug
+    - name: Verify FFmpeg JNI in OSS debug APK (video thumb fallback)
+      run: |
+        APK=$(ls app/build/outputs/apk/oss/debug/*-oss-arm64-v8a-debug.apk)
+        unzip -l "$APK" | grep -q "lib/arm64-v8a/libffmpegJNI.so"
     - name: Verify APK signature
       run: |
         APK=$(ls app/build/outputs/apk/oss/debug/*-oss-arm64-v8a-debug.apk)

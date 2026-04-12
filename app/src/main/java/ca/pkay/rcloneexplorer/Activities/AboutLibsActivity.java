@@ -79,6 +79,12 @@ public class AboutLibsActivity extends AppCompatActivity implements AboutLibrari
         libraryLicences.put(glide, "BSD, part MIT and Apache 2.0");
         libraryLicenceUrls.put(glide, "https://github.com/bumptech/glide/blob/master/LICENSE");
 
+        String jellyfinMedia3Ffmpeg = "Jellyfin Media3 FFmpeg decoder";
+        libraryNames.add(jellyfinMedia3Ffmpeg);
+        libraryUrls.put(jellyfinMedia3Ffmpeg, "https://github.com/jellyfin/jellyfin-androidx-media");
+        libraryLicences.put(jellyfinMedia3Ffmpeg, "Licensed under GNU GPLv3 (includes FFmpeg; see project notices)");
+        libraryLicenceUrls.put(jellyfinMedia3Ffmpeg, "https://www.gnu.org/licenses/gpl-3.0.txt");
+
         String markDownView = "MarkDown View";
         libraryNames.add(markDownView);
         libraryUrls.put(markDownView, "https://github.com/falnatsheh/MarkdownView");
