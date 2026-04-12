@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.PixelFormat;
 import android.media.ImageReader;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -12,6 +13,7 @@ import android.view.PixelCopy;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
@@ -57,6 +59,45 @@ final class VideoThumbnailExoFallback {
             return "";
         }
         return msg.replace('\n', ' ').replace('\r', ' ');
+    }
+
+    /**
+     * Host, port, path segment count, and URL length for SyncLog (avoids dumping full auth path).
+     */
+    @NonNull
+    private static String thumbUrlForSyncLog(@NonNull String url) {
+        try {
+            Uri u = Uri.parse(url);
+            String host = u.getHost() != null ? u.getHost() : "";
+            int port = u.getPort();
+            String portPart = port > 0 ? String.valueOf(port) : "default";
+            int nSegs = u.getPathSegments() != null ? u.getPathSegments().size() : 0;
+            return "uriHost=" + host + " uriPort=" + portPart + " pathSegs=" + nSegs + " urlChars=" + url.length();
+        } catch (Exception e) {
+            return "uriParseFail urlChars=" + url.length();
+        }
+    }
+
+    @NonNull
+    private static String exoPlayerSnapshotForSyncLog(@NonNull ExoPlayer player) {
+        PlaybackException err = player.getPlayerError();
+        String errPart;
+        if (err == null) {
+            errPart = "playerError=none";
+        } else {
+            errPart = "playerErrorMsg=" + scrubExoMsg(err.getMessage())
+                    + " errorCode=" + err.errorCode
+                    + " errorCodeName=" + PlaybackException.getErrorCodeName(err.errorCode);
+        }
+        long dur = player.getDuration();
+        String durPart = dur == C.TIME_UNSET ? "unset" : String.valueOf(dur);
+        return "playbackState=" + player.getPlaybackState()
+                + " isLoading=" + player.isLoading()
+                + " playWhenReady=" + player.getPlayWhenReady()
+                + " posMs=" + player.getCurrentPosition()
+                + " bufEndMs=" + player.getBufferedPosition()
+                + " durationMs=" + durPart
+                + " " + errPart;
     }
 
     @NonNull
@@ -154,6 +195,11 @@ final class VideoThumbnailExoFallback {
                     new ProgressiveMediaSource.Factory(httpFactory);
             MediaItem item = MediaItem.fromUri(url);
             player.setMediaSource(progressiveFactory.createMediaSource(item));
+            VideoThumbnailFetcher.logThumbPipe(appContext, "exoPrepareStart",
+                    "basename=" + base + " durationMs=" + durationMs + " "
+                            + thumbUrlForSyncLog(url)
+                            + " httpEngine=DefaultHttpDataSource ProgressiveMediaSource"
+                            + " extensionRendererMode=on");
             player.prepare();
 
             if (!waitForReady(appContext, base, player, owner)) {
@@ -227,7 +273,8 @@ final class VideoThumbnailExoFallback {
             PlaybackException err = player.getPlayerError();
             if (err != null) {
                 VideoThumbnailFetcher.logThumbPipe(appContext, "exoPrepareFail",
-                        "basename=" + basename + " msg=" + scrubExoMsg(err.getMessage()));
+                        "basename=" + basename + " "
+                                + exoPlayerSnapshotForSyncLog(player));
                 return false;
             }
             int state = player.getPlaybackState();
@@ -236,7 +283,8 @@ final class VideoThumbnailExoFallback {
             }
             Thread.sleep(20L);
         }
-        VideoThumbnailFetcher.logThumbPipe(appContext, "exoPrepareTimeout", "basename=" + basename);
+        VideoThumbnailFetcher.logThumbPipe(appContext, "exoPrepareTimeout",
+                "basename=" + basename + " " + exoPlayerSnapshotForSyncLog(player));
         return false;
     }
 }

@@ -57,9 +57,10 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
     }
 
     /**
-     * Structured pipeline log for Menu → Logs exports. {@code phase} values: {@code fetcherStart},
-     * {@code mmrEnd}, {@code exoSkip}, {@code exoEnd}, {@code decodeOk}, {@code fetcherFail},
-     * {@code fetcherEarlyCancel}.
+     * Structured pipeline log for Menu → Logs exports. {@code phase} values include:
+     * {@code fetcherStart}, {@code mmrEnd}, {@code exoPrepareStart}, {@code exoPrepareFail},
+     * {@code exoPrepareTimeout}, {@code exoSkip}, {@code exoEnd}, {@code decodeOk},
+     * {@code fetcherFail}, {@code fetcherEarlyCancel}.
      */
     static void logThumbPipe(@Nullable Context ctx, @NonNull String phase, @NonNull String attrs) {
         if (ctx == null) {

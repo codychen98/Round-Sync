@@ -63,6 +63,9 @@ class VideoPlayerActivity : AppCompatActivity() {
     private var controllerUiVisible = false
     private var lastDoubleTapHandledAt = 0L
 
+    /** One `playbackReady` SyncLog line per playlist index per activity instance (avoids rebuffer spam). */
+    private val playbackReadyDiagLoggedIndices = HashSet<Int>()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         hideSystemUI()
@@ -148,6 +151,12 @@ class VideoPlayerActivity : AppCompatActivity() {
                     updateUI(names)
                 }
 
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (playbackState == Player.STATE_READY) {
+                        maybeLogPlaybackReadySeekDiag(exo, names)
+                    }
+                }
+
                 override fun onPlayerError(error: PlaybackException) {
                     handlePlaybackError(error)
                 }
@@ -157,6 +166,35 @@ class VideoPlayerActivity : AppCompatActivity() {
             exo.play()
         }
         updateUI(names)
+    }
+
+    /**
+     * Correlates in-app playback (scrub / seek commands) with thumbnail HTTP path: same
+     * [DefaultHttpDataSource] + progressive source as [VideoThumbnailExoFallback].
+     */
+    private fun maybeLogPlaybackReadySeekDiag(exo: ExoPlayer, names: Array<String>) {
+        val idx = exo.currentMediaItemIndex
+        if (!playbackReadyDiagLoggedIndices.add(idx)) {
+            return
+        }
+        val basename = names.getOrElse(idx) { "" }
+        val seekable = exo.isCurrentMediaItemSeekable
+        val dur = exo.duration
+        val durStr = if (dur == C.TIME_UNSET) "unset" else dur.toString()
+        val cmdSeekInWindow = exo.availableCommands.contains(Player.COMMAND_SEEK_IN_DEFAULT_WINDOW)
+        val uri = exo.currentMediaItem?.localConfiguration?.uri?.toString().orEmpty().take(400)
+        val content = buildString {
+            append("event=playbackReady index=").append(idx)
+            append(" basename=").append(basename.replace('\n', ' ').replace('\r', ' '))
+            append(" seekable=").append(seekable)
+            append(" durationMs=").append(durStr)
+            append(" commandSeekInDefaultWindow=").append(cmdSeekInWindow)
+            append(" httpEngine=DefaultHttpDataSource ProgressiveMediaSource")
+            if (uri.isNotEmpty()) {
+                append(" uri=").append(uri)
+            }
+        }
+        SyncLog.info(this, SYNC_LOG_VIDEO_PLAYBACK_TITLE, content)
     }
 
     private fun updateUI(names: Array<String>) {
