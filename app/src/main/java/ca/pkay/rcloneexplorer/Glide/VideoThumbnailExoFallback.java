@@ -52,6 +52,14 @@ final class VideoThumbnailExoFallback {
     }
 
     @NonNull
+    private static String scrubExoMsg(@Nullable String msg) {
+        if (msg == null) {
+            return "";
+        }
+        return msg.replace('\n', ' ').replace('\r', ' ');
+    }
+
+    @NonNull
     private static Handler exoThumbHandler() {
         synchronized (EXO_THREAD_LOCK) {
             if (sExoHandler == null) {
@@ -69,13 +77,20 @@ final class VideoThumbnailExoFallback {
             @NonNull String url,
             long durationMs,
             @NonNull VideoThumbnailFetcher owner) {
+        final String base = VideoThumbnailFetcher.basenameForThumbUrl(url);
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            VideoThumbnailFetcher.logThumbPipe(appContext, "exoSkip",
+                    "basename=" + base + " reason=apiLtN");
             return null;
         }
         if (owner.isCancelled()) {
+            VideoThumbnailFetcher.logThumbPipe(appContext, "exoSkip",
+                    "basename=" + base + " reason=cancelledAtExoEntry");
             return null;
         }
         if (durationMs <= 0 || durationMs > MAX_DURATION_MS) {
+            VideoThumbnailFetcher.logThumbPipe(appContext, "exoSkip",
+                    "basename=" + base + " reason=durationOutOfRange durationMs=" + durationMs);
             return null;
         }
         Handler exoH = exoThumbHandler();
@@ -95,13 +110,19 @@ final class VideoThumbnailExoFallback {
         try {
             if (!done.await(OUTER_WAIT_MS, TimeUnit.MILLISECONDS)) {
                 FLog.w(TAG, "Exo thumbnail fallback timed out waiting for exo thread");
+                VideoThumbnailFetcher.logThumbPipe(appContext, "exoOuterTimeout",
+                        "basename=" + base + " waitMs=" + OUTER_WAIT_MS);
                 return null;
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            VideoThumbnailFetcher.logThumbPipe(appContext, "exoInterrupted",
+                    "basename=" + base);
             return null;
         }
         if (errorMsg.get() != null) {
+            VideoThumbnailFetcher.logThumbPipe(appContext, "exoThreadException",
+                    "basename=" + base + " msg=" + scrubExoMsg(errorMsg.get()));
             return null;
         }
         return result.get();
@@ -113,6 +134,7 @@ final class VideoThumbnailExoFallback {
             @NonNull String url,
             long durationMs,
             @NonNull VideoThumbnailFetcher owner) throws Exception {
+        final String base = VideoThumbnailFetcher.basenameForThumbUrl(url);
         ExoPlayer player = null;
         ImageReader reader = null;
         try {
@@ -134,7 +156,7 @@ final class VideoThumbnailExoFallback {
             player.setMediaSource(progressiveFactory.createMediaSource(item));
             player.prepare();
 
-            if (!waitForReady(player, owner)) {
+            if (!waitForReady(appContext, base, player, owner)) {
                 return null;
             }
             long seekMs = Math.max(1L, durationMs / 4);
@@ -150,6 +172,10 @@ final class VideoThumbnailExoFallback {
             boolean gotFrame = rendered.await(RENDER_WAIT_MS, TimeUnit.MILLISECONDS);
             player.removeListener(listener);
             if (!gotFrame || owner.isCancelled()) {
+                VideoThumbnailFetcher.logThumbPipe(appContext, "exoNoRenderedFrame",
+                        "basename=" + base + " seekMs=" + seekMs + " gotFrame=" + gotFrame
+                                + " cancelled=" + owner.isCancelled()
+                                + " playbackState=" + player.getPlaybackState());
                 return null;
             }
 
@@ -163,10 +189,14 @@ final class VideoThumbnailExoFallback {
             }, main);
             if (!copied.await(PIXEL_COPY_MS, TimeUnit.MILLISECONDS) || owner.isCancelled()) {
                 bitmap.recycle();
+                VideoThumbnailFetcher.logThumbPipe(appContext, "exoPixelCopyTimeout",
+                        "basename=" + base + " cancelled=" + owner.isCancelled());
                 return null;
             }
             if (copyResult.get() != PixelCopy.SUCCESS) {
                 FLog.w(TAG, "PixelCopy failed code=%s", copyResult.get());
+                VideoThumbnailFetcher.logThumbPipe(appContext, "exoPixelCopyFail",
+                        "basename=" + base + " code=" + copyResult.get());
                 bitmap.recycle();
                 return null;
             }
@@ -181,15 +211,23 @@ final class VideoThumbnailExoFallback {
         }
     }
 
-    private static boolean waitForReady(@NonNull ExoPlayer player, @NonNull VideoThumbnailFetcher owner)
+    private static boolean waitForReady(
+            @NonNull Context appContext,
+            @NonNull String basename,
+            @NonNull ExoPlayer player,
+            @NonNull VideoThumbnailFetcher owner)
             throws InterruptedException {
         long deadline = System.currentTimeMillis() + PREPARE_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             if (owner.isCancelled()) {
+                VideoThumbnailFetcher.logThumbPipe(appContext, "exoPrepareAbort",
+                        "basename=" + basename + " reason=cancelled");
                 return false;
             }
             PlaybackException err = player.getPlayerError();
             if (err != null) {
+                VideoThumbnailFetcher.logThumbPipe(appContext, "exoPrepareFail",
+                        "basename=" + basename + " msg=" + scrubExoMsg(err.getMessage()));
                 return false;
             }
             int state = player.getPlaybackState();
@@ -198,6 +236,7 @@ final class VideoThumbnailExoFallback {
             }
             Thread.sleep(20L);
         }
+        VideoThumbnailFetcher.logThumbPipe(appContext, "exoPrepareTimeout", "basename=" + basename);
         return false;
     }
 }

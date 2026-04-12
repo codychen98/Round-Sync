@@ -86,6 +86,20 @@ public class RetryRequestListener implements RequestListener<Drawable> {
             Object model,
             @NonNull Target<Drawable> target,
             boolean isFirstResource) {
+        if (appContext != null && debugLoadKey.endsWith("|vid")) {
+            boolean willRetry = policyExtendedRetries
+                    ? extendedScheduleGate != null && extendedScheduleGate.allowSchedule()
+                    : retryCount < MAX_RETRIES;
+            VideoThumbnailFetcher.logThumbPipe(
+                    appContext,
+                    "glideLoadFailed",
+                    "key=" + debugLoadKey
+                            + " attempt=" + (retryCount + 1)
+                            + " willRetry=" + willRetry
+                            + " mgrState=" + serverManager.getSyncState()
+                            + " serveGen=" + serverManager.getServeGeneration()
+                            + " causes=" + formatGlideRootCauses(e));
+        }
         if (!policyExtendedRetries) {
             if (retryCount >= MAX_RETRIES) {
                 logRetriesExhausted(e);
@@ -153,6 +167,15 @@ public class RetryRequestListener implements RequestListener<Drawable> {
             Target<Drawable> target,
             @NonNull DataSource dataSource,
             boolean isFirstResource) {
+        if (appContext != null && debugLoadKey.endsWith("|vid")) {
+            VideoThumbnailFetcher.logThumbPipe(
+                    appContext,
+                    "glideResourceReady",
+                    "key=" + debugLoadKey
+                            + " dataSource=" + dataSource
+                            + " mgrState=" + serverManager.getSyncState()
+                            + " serveGen=" + serverManager.getServeGeneration());
+        }
         if (policyExtendedRetries) {
             retryCount = 0;
         }

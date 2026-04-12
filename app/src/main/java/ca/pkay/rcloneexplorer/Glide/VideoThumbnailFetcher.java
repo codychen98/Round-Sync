@@ -3,7 +3,9 @@ package ca.pkay.rcloneexplorer.Glide;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.media.MediaMetadataRetriever;
+import android.net.Uri;
 import android.os.Build;
+import android.os.SystemClock;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -24,7 +26,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import ca.pkay.rcloneexplorer.BuildConfig;
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.SyncLog;
@@ -37,9 +38,13 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
     private static final int MAX_FAILURE_LOG_URLS = 512;
     private static final Set<String> loggedSyncFailureUrls =
             Collections.newSetFromMap(new ConcurrentHashMap<>());
-    /** Caps {@code event=fetcherCancel} SyncLog volume in debug builds (Step 1 verification). */
+    /** Caps {@code event=fetcherCancel} SyncLog volume (includes basename when pending). */
     private static final AtomicInteger fetcherCancelLogCount = new AtomicInteger(0);
     private static final int MAX_FETCHER_CANCEL_DEBUG_LOGS = 100;
+    /** Throttled SyncLog lines for one reproducible export (see {@code event=thumbPipe}). */
+    private static final java.util.concurrent.atomic.AtomicInteger thumbPipeLogCount =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+    private static final int MAX_THUMB_PIPE_LOGS = 2500;
 
     private final String url;
     private final Context appContext;
@@ -51,18 +56,54 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
         this.appContext = appContext;
     }
 
+    /**
+     * Structured pipeline log for Menu → Logs exports. {@code phase} values: {@code fetcherStart},
+     * {@code mmrEnd}, {@code exoSkip}, {@code exoEnd}, {@code decodeOk}, {@code fetcherFail},
+     * {@code fetcherEarlyCancel}.
+     */
+    static void logThumbPipe(@Nullable Context ctx, @NonNull String phase, @NonNull String attrs) {
+        if (ctx == null) {
+            return;
+        }
+        if (thumbPipeLogCount.incrementAndGet() > MAX_THUMB_PIPE_LOGS) {
+            return;
+        }
+        SyncLog.info(ctx.getApplicationContext(), "VidThumbDbg", "event=thumbPipe phase=" + phase + " " + attrs);
+    }
+
+    @NonNull
+    static String basenameForThumbUrl(@NonNull String thumbUrl) {
+        String seg = Uri.parse(thumbUrl).getLastPathSegment();
+        return seg != null ? seg : thumbUrl;
+    }
+
+    @NonNull
+    private static String scrubMsg(@Nullable String msg) {
+        if (msg == null) {
+            return "";
+        }
+        return msg.replace('\n', ' ').replace('\r', ' ');
+    }
+
     @Override
     public void loadData(@NonNull Priority priority,
                          @NonNull DataCallback<? super InputStream> callback) {
         if (cancelled) {
+            logThumbPipe(appContext, "fetcherEarlyCancel",
+                    "basename=" + basenameForThumbUrl(url) + " when=loadDataEntry " + mgrDebugSuffix());
             callback.onLoadFailed(new RuntimeException("Cancelled"));
             return;
         }
         pendingTask = VIDEO_POOL.submit(() -> {
             if (cancelled) {
+                logThumbPipe(appContext, "fetcherEarlyCancel",
+                        "basename=" + basenameForThumbUrl(url) + " when=poolEntry " + mgrDebugSuffix());
                 callback.onLoadFailed(new RuntimeException("Cancelled"));
                 return;
             }
+            final long t0 = SystemClock.elapsedRealtime();
+            final String base = basenameForThumbUrl(url);
+            logThumbPipe(appContext, "fetcherStart", "basename=" + base + " " + mgrDebugSuffix());
             MediaMetadataRetriever mmr = new MediaMetadataRetriever();
             OkHttpMediaDataSource dataSource = new OkHttpMediaDataSource(url, appContext);
             boolean mmrReleased = false;
@@ -71,7 +112,12 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                 mmr.setDataSource(dataSource);
                 final String debugSuffix = frameExtractDebugSuffix(mmr);
                 final long durationMs = readDurationMsFromRetriever(mmr);
+                long tMmr = SystemClock.elapsedRealtime();
                 Bitmap frame = extractNonBlackFrame(mmr);
+                long mmrMs = SystemClock.elapsedRealtime() - tMmr;
+                logThumbPipe(appContext, "mmrEnd",
+                        "basename=" + base + " result=" + (frame != null ? "frame" : "noFrame")
+                                + " cancelled=" + cancelled + " mmrMs=" + mmrMs + " " + mgrDebugSuffix());
                 if (frame == null) {
                     try {
                         mmr.release();
@@ -84,8 +130,16 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                     }
                     dataSourceClosed = true;
                     if (!cancelled) {
+                        long tExo = SystemClock.elapsedRealtime();
                         frame = VideoThumbnailExoFallback.tryGrabFirstFrame(
                                 appContext, url, durationMs, VideoThumbnailFetcher.this);
+                        long exoMs = SystemClock.elapsedRealtime() - tExo;
+                        logThumbPipe(appContext, "exoEnd",
+                                "basename=" + base + " result=" + (frame != null ? "frame" : "null")
+                                        + " cancelled=" + cancelled + " exoMs=" + exoMs + " " + mgrDebugSuffix());
+                    } else {
+                        logThumbPipe(appContext, "exoSkip",
+                                "basename=" + base + " reason=cancelledBeforeExo " + mgrDebugSuffix());
                     }
                     if (frame == null) {
                         logThumbnailSyncFailureOnce(
@@ -102,9 +156,15 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                 ByteArrayOutputStream baos = new ByteArrayOutputStream(64 * 1024);
                 frame.compress(Bitmap.CompressFormat.JPEG, 75, baos);
                 frame.recycle();
+                logThumbPipe(appContext, "decodeOk",
+                        "basename=" + base + " totalMs=" + (SystemClock.elapsedRealtime() - t0)
+                                + " " + mgrDebugSuffix());
                 callback.onDataReady(new ByteArrayInputStream(baos.toByteArray()));
             } catch (Exception e) {
                 FLog.e(TAG, "loadData: failed to extract frame from %s", url);
+                logThumbPipe(appContext, "fetcherFail",
+                        "basename=" + base + " what=" + e.getClass().getSimpleName()
+                                + " msg=" + scrubMsg(e.getMessage()) + " " + mgrDebugSuffix());
                 logThumbnailSyncFailureOnce(
                         "event=videoFetchFail reason=exception what="
                                 + e.getClass().getSimpleName()
@@ -358,25 +418,30 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
      * in Glide 4.x). Debug-only and throttled; remove or tighten if no longer needed.
      */
     private void maybeLogFetcherCancelDebug(boolean hadPendingTask) {
-        if (!BuildConfig.DEBUG) {
-            return;
-        }
         int n = fetcherCancelLogCount.incrementAndGet();
         if (n > MAX_FETCHER_CANCEL_DEBUG_LOGS) {
             return;
         }
         ThumbnailServerManager m = ThumbnailServerManager.getInstance();
+        String basename = basenameForThumbUrl(url);
         SyncLog.info(
                 appContext,
                 "VidThumbDbg",
                 "event=fetcherCancel n="
                         + n
+                        + " basename="
+                        + basename
                         + " hadPendingTask="
                         + hadPendingTask
                         + " mgrState="
                         + m.getSyncState()
                         + " serveGen="
                         + m.getServeGeneration());
+        if (hadPendingTask) {
+            logThumbPipe(appContext, "fetcherCancelPending",
+                    "basename=" + basename + " n=" + n + " mgrState=" + m.getSyncState()
+                            + " serveGen=" + m.getServeGeneration());
+        }
     }
 
     @NonNull
