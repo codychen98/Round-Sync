@@ -64,6 +64,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     private boolean canSelect;
     private boolean showThumbnails;
     private boolean serverReady = false;
+    /** When false, policy-extended thumbnail retries are not scheduled (fragment paused). */
+    private volatile boolean thumbnailHostResumed = true;
     private boolean optionsDisabled;
     private boolean wrapFileNames;
     private Context context;
@@ -92,6 +94,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         void onFileDeselected();
         void onFileOptionsClicked(View view, FileItem fileItem);
         String[] getThumbnailServerParams();
+
+        /** Incremented when serve URL identity changes; used to drop stale Glide retries. */
+        default int getThumbnailUrlEpoch() {
+            return 0;
+        }
     }
 
     public interface ThumbnailProgressListener {
@@ -199,22 +206,29 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         holder.fileIcon.setImageTintList(holder.defaultIconTint);
                         holder.fileIcon.setImageResource(R.drawable.ic_file);
                     } else {
-                        String url = buildThumbnailUrl(item);
                         maybeLogThumbPipelineDbg(item, "imageGlideIssued", true);
+                        boolean extendedThumbRetry = isExtendedThumbnailRetryPolicy(item);
+                        RetryRequestListener.ThumbnailExtendedRetryScheduleGate extendedGate =
+                                extendedThumbRetry
+                                        ? () -> thumbnailHostResumed && serverReady
+                                        : null;
                         RetryRequestListener retryListener = new ProgressTrackingRetryListener(
                                 ThumbnailServerManager.getInstance(),
                                 rl -> Glide.with(context.getApplicationContext())
-                                        .load(new HttpServeThumbnailGlideUrl(url))
+                                        .load(new HttpServeThumbnailGlideUrl(buildThumbnailUrl(item)))
                                         .apply(glideOption)
                                         .thumbnail(0.1f)
                                         .listener(rl)
                                         .into(holder.fileIcon),
                                 context.getApplicationContext(),
-                                item.getPath() + "|img");
+                                item.getPath() + "|img",
+                                () -> listener.getThumbnailUrlEpoch(),
+                                extendedThumbRetry,
+                                extendedGate);
                         cancelActiveRetryListener(holder);
                         holder.activeRetryListener = retryListener;
                         Glide.with(context.getApplicationContext())
-                                .load(new HttpServeThumbnailGlideUrl(url))
+                                .load(new HttpServeThumbnailGlideUrl(buildThumbnailUrl(item)))
                                 .apply(glideOption)
                                 .thumbnail(0.1f)
                                 .listener(retryListener)
@@ -243,21 +257,28 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         holder.fileIcon.setImageTintList(holder.defaultIconTint);
                         holder.fileIcon.setImageResource(R.drawable.ic_file);
                     } else {
-                        String url = buildThumbnailUrl(item);
                         maybeLogThumbPipelineDbg(item, "videoGlideIssued", true);
+                        boolean extendedThumbRetry = isExtendedThumbnailRetryPolicy(item);
+                        RetryRequestListener.ThumbnailExtendedRetryScheduleGate extendedGate =
+                                extendedThumbRetry
+                                        ? () -> thumbnailHostResumed && serverReady
+                                        : null;
                         RetryRequestListener retryListener = new ProgressTrackingRetryListener(
                                 ThumbnailServerManager.getInstance(),
                                 rl -> Glide.with(context.getApplicationContext())
-                                        .load(new VideoThumbnailUrl(url))
+                                        .load(new VideoThumbnailUrl(buildThumbnailUrl(item)))
                                         .apply(glideOption)
                                         .listener(rl)
                                         .into(holder.fileIcon),
                                 context.getApplicationContext(),
-                                item.getPath() + "|vid");
+                                item.getPath() + "|vid",
+                                () -> listener.getThumbnailUrlEpoch(),
+                                extendedThumbRetry,
+                                extendedGate);
                         cancelActiveRetryListener(holder);
                         holder.activeRetryListener = retryListener;
                         Glide.with(context.getApplicationContext())
-                                .load(new VideoThumbnailUrl(url))
+                                .load(new VideoThumbnailUrl(buildThumbnailUrl(item)))
                                 .apply(glideOption)
                                 .listener(retryListener)
                                 .into(holder.fileIcon);
@@ -444,6 +465,21 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     }
 
     /**
+     * Media-folder policy allow-list applies to this remote and the file path is allowed for
+     * thumbnails — these rows use extended Glide retries while resumed and the server is ready.
+     */
+    private boolean isExtendedThumbnailRetryPolicy(@NonNull FileItem item) {
+        RemoteItem remote = item.getRemote();
+        if (remote == null || remote.getType() == RemoteItem.SAFW) {
+            return false;
+        }
+        if (!MediaFolderPolicy.INSTANCE.shouldApplyAllowListGating(remote)) {
+            return false;
+        }
+        return isHttpThumbnailPolicyAllowedForNetworkThumbnail(item);
+    }
+
+    /**
      * Throttled per file path + event so opening a large folder does not flood {@code sync.log}.
      * Filter exports with title {@code VidThumbDbg}.
      */
@@ -526,6 +562,45 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
     public void setThumbnailServerReady(boolean ready) {
         this.serverReady = ready;
+    }
+
+    /**
+     * Called from hosting {@code Fragment} {@code onResume} / {@code onPause} so policy-extended
+     * Glide retries do not run while the fragment is not resumed.
+     */
+    public void setThumbnailHostResumed(boolean resumed) {
+        thumbnailHostResumed = resumed;
+    }
+
+    /**
+     * Cancels scheduled Glide retries and clears in-flight thumbnail loads for visible file rows
+     * before the thumbnail serve lease is released (fragment {@code onStop}). Idempotent.
+     * Only runs when {@link #showThumbnails} is true; directory rows are skipped.
+     */
+    public void clearVisibleThumbnailGlideRequestsOnStop(@NonNull RecyclerView recyclerView) {
+        if (!showThumbnails || context == null) {
+            return;
+        }
+        int childCount = recyclerView.getChildCount();
+        for (int i = 0; i < childCount; i++) {
+            View child = recyclerView.getChildAt(i);
+            RecyclerView.ViewHolder rawHolder = recyclerView.getChildViewHolder(child);
+            if (!(rawHolder instanceof ViewHolder)) {
+                continue;
+            }
+            ViewHolder holder = (ViewHolder) rawHolder;
+            if (holder.getBindingAdapterPosition() == RecyclerView.NO_POSITION) {
+                continue;
+            }
+            FileItem item = holder.fileItem;
+            if (item == null || item.isDir()) {
+                continue;
+            }
+            cancelActiveRetryListener(holder);
+            Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+            holder.fileIcon.setImageTintList(holder.defaultIconTint);
+            holder.fileIcon.setImageResource(R.drawable.ic_file);
+        }
     }
 
     public List<FileItem> getCurrentContent() {
@@ -826,8 +901,18 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 @NonNull ThumbnailServerManager serverManager,
                 @NonNull RetryRequestListener.RetryLoadCallback loadCallback,
                 @NonNull Context logContext,
-                @NonNull String debugLoadKey) {
-            super(serverManager, loadCallback, logContext, debugLoadKey);
+                @NonNull String debugLoadKey,
+                @NonNull RetryRequestListener.ThumbnailRetryEpochSource epochSource,
+                boolean policyExtendedRetries,
+                @Nullable RetryRequestListener.ThumbnailExtendedRetryScheduleGate extendedScheduleGate) {
+            super(
+                    serverManager,
+                    loadCallback,
+                    logContext,
+                    debugLoadKey,
+                    epochSource,
+                    policyExtendedRetries,
+                    extendedScheduleGate);
         }
 
         @Override

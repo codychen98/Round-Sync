@@ -7,6 +7,12 @@ import java.net.MalformedURLException;
 import java.net.URL;
 import java.security.MessageDigest;
 
+/**
+ * Glide model for HTTP-served video frames. The full URL includes localhost port and auth segment;
+ * {@link #updateDiskCacheKey} and equality use {@link #stablePath} only (path after the first URL
+ * path segment), so changing port or re-encoding the hidden prefix does not change the disk cache
+ * identity for the same remote file (G1).
+ */
 public class VideoThumbnailUrl implements Key {
     private final String url;
     private final String stablePath;

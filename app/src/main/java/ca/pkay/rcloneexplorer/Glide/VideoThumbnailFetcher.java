@@ -19,7 +19,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import ca.pkay.rcloneexplorer.BuildConfig;
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.SyncLog;
@@ -32,6 +34,9 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
     private static final int MAX_FAILURE_LOG_URLS = 512;
     private static final Set<String> loggedSyncFailureUrls =
             Collections.newSetFromMap(new ConcurrentHashMap<>());
+    /** Caps {@code event=fetcherCancel} SyncLog volume in debug builds (Step 1 verification). */
+    private static final AtomicInteger fetcherCancelLogCount = new AtomicInteger(0);
+    private static final int MAX_FETCHER_CANCEL_DEBUG_LOGS = 100;
 
     private final String url;
     private final Context appContext;
@@ -193,9 +198,37 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
     public void cancel() {
         cancelled = true;
         Future<?> task = pendingTask;
-        if (task != null) {
+        boolean hadPendingTask = task != null;
+        if (hadPendingTask) {
             task.cancel(true);
         }
+        maybeLogFetcherCancelDebug(hadPendingTask);
+    }
+
+    /**
+     * Confirms Glide forwarded cancellation into this fetcher (see {@code SourceGenerator.cancel}
+     * in Glide 4.x). Debug-only and throttled; remove or tighten if no longer needed.
+     */
+    private void maybeLogFetcherCancelDebug(boolean hadPendingTask) {
+        if (!BuildConfig.DEBUG) {
+            return;
+        }
+        int n = fetcherCancelLogCount.incrementAndGet();
+        if (n > MAX_FETCHER_CANCEL_DEBUG_LOGS) {
+            return;
+        }
+        ThumbnailServerManager m = ThumbnailServerManager.getInstance();
+        SyncLog.info(
+                appContext,
+                "VidThumbDbg",
+                "event=fetcherCancel n="
+                        + n
+                        + " hadPendingTask="
+                        + hadPendingTask
+                        + " mgrState="
+                        + m.getSyncState()
+                        + " serveGen="
+                        + m.getServeGeneration());
     }
 
     @NonNull

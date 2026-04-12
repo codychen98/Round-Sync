@@ -113,6 +113,8 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
     private String thumbnailServerAuth;
     private int thumbnailServerPort;
     private int thumbnailServeLeaseId;
+    private int thumbnailUrlEpoch;
+    private int lastThumbnailServeGenAtReady = Integer.MIN_VALUE;
     private boolean wrapFilenames;
     private SharedPreferences.OnSharedPreferenceChangeListener prefChangeListener;
 
@@ -341,6 +343,11 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
                         "Picker observer received state: " + state);
             }
             if (state == ThumbnailServerManager.ServerState.READY) {
+                int serveGen = ThumbnailServerManager.getInstance().getServeGeneration();
+                if (lastThumbnailServeGenAtReady != Integer.MIN_VALUE && serveGen != lastThumbnailServeGenAtReady) {
+                    thumbnailUrlEpoch++;
+                }
+                lastThumbnailServeGenAtReady = serveGen;
                 FLog.d(TAG, "Thumbnail server ready — refreshing picker items");
                 if (recyclerViewAdapter != null) {
                     recyclerViewAdapter.setThumbnailServerReady(true);
@@ -464,6 +471,22 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
         }
         swipeRefreshLayout.setRefreshing(true);
         fetchDirectoryTask = new FetchDirectoryContent(true).execute();
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        if (recyclerViewAdapter != null) {
+            recyclerViewAdapter.setThumbnailHostResumed(true);
+        }
+    }
+
+    @Override
+    public void onPause() {
+        if (recyclerViewAdapter != null) {
+            recyclerViewAdapter.setThumbnailHostResumed(false);
+        }
+        super.onPause();
     }
 
     @Override
@@ -595,7 +618,11 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
                 onCreateNewDirectory();
                 return true;
             case android.R.id.home:
-                exitFragment();
+                if (mediaFolderPolicyMultiSelectMode) {
+                    handleMediaFolderPolicyMultiSelectBack();
+                } else {
+                    exitFragment();
+                }
                 return true;
             default:
                 return super.onOptionsItemSelected(item);
@@ -722,6 +749,7 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
         random.nextBytes(values);
         thumbnailServerAuth = Base64.encodeToString(values, Base64.NO_PADDING | Base64.NO_WRAP | Base64.URL_SAFE);
         thumbnailServerPort = allocatePort(29179, true);
+        thumbnailUrlEpoch++;
     }
 
     private static int allocatePort(int port, boolean allocateFallback) {
@@ -986,6 +1014,11 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
     @Override
     public String[] getThumbnailServerParams() {
         return new String[]{thumbnailServerAuth + '/' + remote.getName(), String.valueOf(thumbnailServerPort)};
+    }
+
+    @Override
+    public int getThumbnailUrlEpoch() {
+        return thumbnailUrlEpoch;
     }
 
     @Override

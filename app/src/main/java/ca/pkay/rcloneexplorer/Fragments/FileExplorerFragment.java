@@ -191,6 +191,9 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     private int thumbnailServerPort;
     /** Non-zero while this fragment holds a {@link ThumbnailServerManager} serve lease. */
     private int thumbnailServeLeaseId;
+    /** Bumped when thumbnail HTTP params or observed serve generation changes; invalidates retries. */
+    private int thumbnailUrlEpoch;
+    private int lastThumbnailServeGenAtReady = Integer.MIN_VALUE;
     private boolean wrapFilenames;
     private SharedPreferences.OnSharedPreferenceChangeListener prefChangeListener;
 
@@ -443,6 +446,22 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         }
         swipeRefreshLayout.setRefreshing(true);
         fetchDirectoryTask = new FetchDirectoryContent(true).execute();
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        if (recyclerViewAdapter != null) {
+            recyclerViewAdapter.setThumbnailHostResumed(true);
+        }
+    }
+
+    @Override
+    public void onPause() {
+        if (recyclerViewAdapter != null) {
+            recyclerViewAdapter.setThumbnailHostResumed(false);
+        }
+        super.onPause();
     }
 
     @Override
@@ -829,6 +848,11 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                     "Fragment observer received state: " + state);
             }
             if (state == ThumbnailServerManager.ServerState.READY) {
+                int serveGen = ThumbnailServerManager.getInstance().getServeGeneration();
+                if (lastThumbnailServeGenAtReady != Integer.MIN_VALUE && serveGen != lastThumbnailServeGenAtReady) {
+                    thumbnailUrlEpoch++;
+                }
+                lastThumbnailServeGenAtReady = serveGen;
                 FLog.d(TAG, "Thumbnail server ready — refreshing visible items");
                 if (recyclerViewAdapter != null) {
                     recyclerViewAdapter.setThumbnailServerReady(true);
@@ -865,6 +889,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         random.nextBytes(values);
         thumbnailServerAuth = Base64.encodeToString(values, Base64.NO_PADDING | Base64.NO_WRAP | Base64.URL_SAFE);
         thumbnailServerPort = allocatePort(29179, true);
+        thumbnailUrlEpoch++;
         if (context != null) {
             SyncLog.info(context, "ThumbnailServer",
                 "Params initialized: port=" + thumbnailServerPort
@@ -1313,6 +1338,9 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         if (context != null) {
             ThumbnailServerService.clearProgress(context);
         }
+        if (recyclerView != null && recyclerViewAdapter != null) {
+            recyclerViewAdapter.clearVisibleThumbnailGlideRequestsOnStop(recyclerView);
+        }
         releaseThumbnailServeLease();
 
         LocalBroadcastManager.getInstance(context).unregisterReceiver(backgroundTaskBroadcastReceiver);
@@ -1498,6 +1526,11 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     @Override
     public String[] getThumbnailServerParams() {
         return new String[]{thumbnailServerAuth + '/' + remote.getName(), String.valueOf(thumbnailServerPort)};
+    }
+
+    @Override
+    public int getThumbnailUrlEpoch() {
+        return thumbnailUrlEpoch;
     }
 
     private void showFileMenu(View view, final FileItem fileItem) {

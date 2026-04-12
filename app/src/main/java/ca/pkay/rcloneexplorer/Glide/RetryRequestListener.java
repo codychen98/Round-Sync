@@ -22,6 +22,21 @@ import java.util.List;
 public class RetryRequestListener implements RequestListener<Drawable> {
 
     /**
+     * Monotonic epoch from the host fragment (port/auth or serve generation); retries scheduled
+     * under one epoch must not run after the epoch advances.
+     */
+    @FunctionalInterface
+    public interface ThumbnailRetryEpochSource {
+        int getEpoch();
+    }
+
+    /** When policy-extended retries are enabled, returns whether another delayed retry may be scheduled. */
+    @FunctionalInterface
+    public interface ThumbnailExtendedRetryScheduleGate {
+        boolean allowSchedule();
+    }
+
+    /**
      * Callback invoked to re-issue a Glide load with the same listener attached,
      * allowing the listener to track retries across attempts.
      */
@@ -40,6 +55,11 @@ public class RetryRequestListener implements RequestListener<Drawable> {
     private final Context appContext;
     @NonNull
     private final String debugLoadKey;
+    @NonNull
+    private final ThumbnailRetryEpochSource epochSource;
+    private final boolean policyExtendedRetries;
+    @Nullable
+    private final ThumbnailExtendedRetryScheduleGate extendedScheduleGate;
     private int retryCount = 0;
     private Runnable pendingRunnable = null;
 
@@ -47,11 +67,17 @@ public class RetryRequestListener implements RequestListener<Drawable> {
             @NonNull ThumbnailServerManager serverManager,
             @NonNull RetryLoadCallback loadCallback,
             @Nullable Context appContextForDiag,
-            @NonNull String debugLoadKey) {
+            @NonNull String debugLoadKey,
+            @NonNull ThumbnailRetryEpochSource epochSource,
+            boolean policyExtendedRetries,
+            @Nullable ThumbnailExtendedRetryScheduleGate extendedScheduleGate) {
         this.serverManager = serverManager;
         this.loadCallback = loadCallback;
         this.appContext = appContextForDiag != null ? appContextForDiag.getApplicationContext() : null;
         this.debugLoadKey = debugLoadKey;
+        this.epochSource = epochSource;
+        this.policyExtendedRetries = policyExtendedRetries;
+        this.extendedScheduleGate = extendedScheduleGate;
     }
 
     @Override
@@ -60,32 +86,64 @@ public class RetryRequestListener implements RequestListener<Drawable> {
             Object model,
             @NonNull Target<Drawable> target,
             boolean isFirstResource) {
-        if (retryCount >= MAX_RETRIES) {
-            FLog.w(TAG, "Max retries reached, showing error drawable");
-            if (appContext != null) {
-                ThumbnailServerManager.ServerState live = serverManager.getState().getValue();
-                ThumbnailServerManager.ServerState sync = serverManager.getSyncState();
-                SyncLog.error(appContext, "VidThumbDbg",
-                        "event=glideRetriesExhausted key=" + debugLoadKey
-                                + " mgrStateLive=" + live
-                                + " mgrStateSync=" + sync
-                                + " serveGen=" + serverManager.getServeGeneration()
-                                + " causes=" + formatGlideRootCauses(e));
+        if (!policyExtendedRetries) {
+            if (retryCount >= MAX_RETRIES) {
+                logRetriesExhausted(e);
+                return false;
             }
-            return false; // let Glide show the error drawable
-        }
-        ThumbnailServerManager.ServerState state = serverManager.getState().getValue();
-        long delay = RETRY_DELAYS_MS[retryCount];
-        retryCount++;
-        if (state != ThumbnailServerManager.ServerState.READY) {
-            FLog.d(TAG, "Server state " + state + " (not READY); scheduling retry "
-                    + retryCount + "/" + MAX_RETRIES + " after " + delay + "ms");
         } else {
-            FLog.w(TAG, "Scheduling retry " + retryCount + "/" + MAX_RETRIES + " after " + delay + "ms");
+            if (extendedScheduleGate == null || !extendedScheduleGate.allowSchedule()) {
+                FLog.d(TAG, "Policy extended retry not scheduled (host inactive or server not READY)");
+                return false;
+            }
         }
-        pendingRunnable = () -> loadCallback.load(this);
+
+        ThumbnailServerManager.ServerState state = serverManager.getState().getValue();
+        long delay;
+        if (policyExtendedRetries) {
+            delay = ThumbnailExtendedRetryDelays.delayMsForAttempt(retryCount);
+            retryCount++;
+            FLog.d(TAG, "Scheduling policy-extended retry " + retryCount + " after " + delay + "ms"
+                    + " serverState=" + state);
+        } else {
+            delay = RETRY_DELAYS_MS[retryCount];
+            retryCount++;
+            if (state != ThumbnailServerManager.ServerState.READY) {
+                FLog.d(TAG, "Server state " + state + " (not READY); scheduling retry "
+                        + retryCount + "/" + MAX_RETRIES + " after " + delay + "ms");
+            } else {
+                FLog.w(TAG, "Scheduling retry " + retryCount + "/" + MAX_RETRIES + " after " + delay + "ms");
+            }
+        }
+        final int epochWhenScheduled = epochSource.getEpoch();
+        pendingRunnable = () -> {
+            if (ThumbnailRetryEpochs.isStale(epochWhenScheduled, epochSource.getEpoch())) {
+                pendingRunnable = null;
+                return;
+            }
+            if (policyExtendedRetries
+                    && (extendedScheduleGate == null || !extendedScheduleGate.allowSchedule())) {
+                pendingRunnable = null;
+                return;
+            }
+            loadCallback.load(this);
+        };
         HANDLER.postDelayed(pendingRunnable, delay);
         return true; // suppress error drawable while retry is pending
+    }
+
+    private void logRetriesExhausted(@Nullable GlideException e) {
+        FLog.w(TAG, "Max retries reached, showing error drawable");
+        if (appContext != null) {
+            ThumbnailServerManager.ServerState live = serverManager.getState().getValue();
+            ThumbnailServerManager.ServerState sync = serverManager.getSyncState();
+            SyncLog.error(appContext, "VidThumbDbg",
+                    "event=glideRetriesExhausted key=" + debugLoadKey
+                            + " mgrStateLive=" + live
+                            + " mgrStateSync=" + sync
+                            + " serveGen=" + serverManager.getServeGeneration()
+                            + " causes=" + formatGlideRootCauses(e));
+        }
     }
 
     @Override
@@ -95,6 +153,9 @@ public class RetryRequestListener implements RequestListener<Drawable> {
             Target<Drawable> target,
             @NonNull DataSource dataSource,
             boolean isFirstResource) {
+        if (policyExtendedRetries) {
+            retryCount = 0;
+        }
         return false; // let Glide handle success normally
     }
 
