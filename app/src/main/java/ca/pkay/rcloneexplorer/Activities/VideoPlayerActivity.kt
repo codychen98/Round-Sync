@@ -181,14 +181,14 @@ class VideoPlayerActivity : AppCompatActivity() {
         val seekable = exo.isCurrentMediaItemSeekable
         val dur = exo.duration
         val durStr = if (dur == C.TIME_UNSET) "unset" else dur.toString()
-        val cmdSeekInWindow = exo.availableCommands.contains(Player.COMMAND_SEEK_IN_DEFAULT_WINDOW)
+        val cmdSeekInWindow = exo.availableCommands.contains(Player.COMMAND_SEEK_IN_CURRENT_WINDOW)
         val uri = exo.currentMediaItem?.localConfiguration?.uri?.toString().orEmpty().take(400)
         val content = buildString {
             append("event=playbackReady index=").append(idx)
             append(" basename=").append(basename.replace('\n', ' ').replace('\r', ' '))
             append(" seekable=").append(seekable)
             append(" durationMs=").append(durStr)
-            append(" commandSeekInDefaultWindow=").append(cmdSeekInWindow)
+            append(" commandSeekInCurrentWindow=").append(cmdSeekInWindow)
             append(" httpEngine=DefaultHttpDataSource ProgressiveMediaSource")
             if (uri.isNotEmpty()) {
                 append(" uri=").append(uri)
