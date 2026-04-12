@@ -1,5 +1,6 @@
 package ca.pkay.rcloneexplorer.Glide;
 
+import android.content.Context;
 import android.graphics.drawable.Drawable;
 import android.os.Handler;
 import android.os.Looper;
@@ -14,6 +15,9 @@ import com.bumptech.glide.request.target.Target;
 
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.util.FLog;
+import ca.pkay.rcloneexplorer.util.SyncLog;
+
+import java.util.List;
 
 public class RetryRequestListener implements RequestListener<Drawable> {
 
@@ -32,14 +36,22 @@ public class RetryRequestListener implements RequestListener<Drawable> {
 
     private final ThumbnailServerManager serverManager;
     private final RetryLoadCallback loadCallback;
+    @Nullable
+    private final Context appContext;
+    @NonNull
+    private final String debugLoadKey;
     private int retryCount = 0;
     private Runnable pendingRunnable = null;
 
     public RetryRequestListener(
             @NonNull ThumbnailServerManager serverManager,
-            @NonNull RetryLoadCallback loadCallback) {
+            @NonNull RetryLoadCallback loadCallback,
+            @Nullable Context appContextForDiag,
+            @NonNull String debugLoadKey) {
         this.serverManager = serverManager;
         this.loadCallback = loadCallback;
+        this.appContext = appContextForDiag != null ? appContextForDiag.getApplicationContext() : null;
+        this.debugLoadKey = debugLoadKey;
     }
 
     @Override
@@ -50,6 +62,16 @@ public class RetryRequestListener implements RequestListener<Drawable> {
             boolean isFirstResource) {
         if (retryCount >= MAX_RETRIES) {
             FLog.w(TAG, "Max retries reached, showing error drawable");
+            if (appContext != null) {
+                ThumbnailServerManager.ServerState live = serverManager.getState().getValue();
+                ThumbnailServerManager.ServerState sync = serverManager.getSyncState();
+                SyncLog.error(appContext, "VidThumbDbg",
+                        "event=glideRetriesExhausted key=" + debugLoadKey
+                                + " mgrStateLive=" + live
+                                + " mgrStateSync=" + sync
+                                + " serveGen=" + serverManager.getServeGeneration()
+                                + " causes=" + formatGlideRootCauses(e));
+            }
             return false; // let Glide show the error drawable
         }
         ThumbnailServerManager.ServerState state = serverManager.getState().getValue();
@@ -81,5 +103,28 @@ public class RetryRequestListener implements RequestListener<Drawable> {
             HANDLER.removeCallbacks(pendingRunnable);
             pendingRunnable = null;
         }
+    }
+
+    @NonNull
+    private static String formatGlideRootCauses(@Nullable GlideException e) {
+        if (e == null) {
+            return "(no GlideException)";
+        }
+        StringBuilder sb = new StringBuilder();
+        List<Throwable> roots = e.getRootCauses();
+        for (int i = 0; i < roots.size(); i++) {
+            Throwable t = roots.get(i);
+            sb.append('[').append(i).append(']')
+                    .append(t.getClass().getSimpleName())
+                    .append(": ")
+                    .append(t.getMessage());
+            if (i + 1 < roots.size()) {
+                sb.append(" ; ");
+            }
+        }
+        if (sb.length() == 0) {
+            return e.getMessage() != null ? e.getMessage() : e.toString();
+        }
+        return sb.toString();
     }
 }

@@ -121,7 +121,7 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
     private boolean mediaFolderPolicyMultiSelectMode;
     /** Navigate-only until long-press; then directory taps toggle selection without changing path. */
     private boolean mediaFolderPolicyPickMode;
-    private OnBackPressedCallback pickModeBackCallback;
+    private OnBackPressedCallback mediaFolderPolicyBackCallback;
     private final LinkedHashSet<String> selectedFolderPaths = new LinkedHashSet<>();
 
     /**
@@ -322,13 +322,13 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
     @Override
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
-        pickModeBackCallback = new OnBackPressedCallback(mediaFolderPolicyMultiSelectMode && mediaFolderPolicyPickMode) {
+        mediaFolderPolicyBackCallback = new OnBackPressedCallback(mediaFolderPolicyMultiSelectMode) {
             @Override
             public void handleOnBackPressed() {
-                exitMediaFolderPolicyPickMode();
+                handleMediaFolderPolicyMultiSelectBack();
             }
         };
-        requireActivity().getOnBackPressedDispatcher().addCallback(getViewLifecycleOwner(), pickModeBackCallback);
+        requireActivity().getOnBackPressedDispatcher().addCallback(getViewLifecycleOwner(), mediaFolderPolicyBackCallback);
     }
 
     private void observeThumbnailServerState() {
@@ -380,9 +380,6 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
         if (recyclerViewAdapter != null) {
             recyclerViewAdapter.setFolderPolicyPickMode(true);
         }
-        if (pickModeBackCallback != null) {
-            pickModeBackCallback.setEnabled(true);
-        }
         updateMultiSelectFabUi();
         View v = getView();
         if (v != null && isAdded()) {
@@ -398,9 +395,56 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
         if (recyclerViewAdapter != null) {
             recyclerViewAdapter.setFolderPolicyPickMode(false);
         }
-        if (pickModeBackCallback != null) {
-            pickModeBackCallback.setEnabled(false);
+    }
+
+    /**
+     * Media-folder-policy multi picker: Back leaves pick mode first, then walks up directories;
+     * only at remote root does Back pop this fragment (return to policy screen).
+     */
+    private void handleMediaFolderPolicyMultiSelectBack() {
+        if (!mediaFolderPolicyMultiSelectMode) {
+            return;
         }
+        if (Boolean.TRUE.equals(isSearchMode)) {
+            searchClicked();
+            return;
+        }
+        if (mediaFolderPolicyPickMode) {
+            exitMediaFolderPolicyPickMode();
+            return;
+        }
+        String parent = parentExplorerPathOrNull();
+        if (parent != null) {
+            onBreadCrumbClicked(parent);
+            return;
+        }
+        if (mediaFolderPolicyBackCallback != null) {
+            mediaFolderPolicyBackCallback.setEnabled(false);
+        }
+        requireActivity().getOnBackPressedDispatcher().onBackPressed();
+        if (isAdded() && mediaFolderPolicyBackCallback != null) {
+            mediaFolderPolicyBackCallback.setEnabled(true);
+        }
+    }
+
+    @Nullable
+    private String parentExplorerPathOrNull() {
+        if (remoteName == null || directoryObject == null) {
+            return null;
+        }
+        String root = "//" + remoteName;
+        String cur = directoryObject.getCurrentPath();
+        if (!cur.startsWith(root)) {
+            return null;
+        }
+        if (cur.equals(root) || cur.equals(root + "/")) {
+            return null;
+        }
+        int slash = cur.lastIndexOf('/');
+        if (slash <= root.length()) {
+            return root;
+        }
+        return cur.substring(0, slash);
     }
 
     @Override

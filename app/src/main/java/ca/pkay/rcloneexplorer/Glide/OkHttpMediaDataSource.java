@@ -1,13 +1,18 @@
 package ca.pkay.rcloneexplorer.Glide;
 
+import android.content.Context;
 import android.media.MediaDataSource;
+import android.net.Uri;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+import ca.pkay.rcloneexplorer.util.SyncLog;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -33,6 +38,9 @@ public class OkHttpMediaDataSource extends MediaDataSource {
     private static final int BUFFER_SIZE = 512 * 1024; // 512 KB read-ahead
 
     private final String url;
+    @Nullable
+    private final Context appContext;
+    private final AtomicBoolean httpDiagLogged = new AtomicBoolean(false);
     private long cachedSize = -1;
 
     // Read-ahead buffer — reduces HTTP round-trips for sequential reads
@@ -40,8 +48,22 @@ public class OkHttpMediaDataSource extends MediaDataSource {
     private long bufferStart = -1;
     private int bufferLength = 0;
 
-    public OkHttpMediaDataSource(@NonNull String url) {
+    public OkHttpMediaDataSource(@NonNull String url, @Nullable Context appContextForDiag) {
         this.url = url;
+        this.appContext = appContextForDiag != null ? appContextForDiag.getApplicationContext() : null;
+    }
+
+    private void logHttpIssueOnce(@NonNull String where, int code, @Nullable String msg) {
+        if (appContext == null || !httpDiagLogged.compareAndSet(false, true)) {
+            return;
+        }
+        String file = Uri.parse(url).getLastPathSegment();
+        if (file == null) {
+            file = "(unknown)";
+        }
+        SyncLog.error(appContext, "VidThumbDbg",
+                "event=httpThumbFail where=" + where + " code=" + code + " file=" + file
+                        + " msg=" + (msg != null ? msg : ""));
     }
 
     @Override
@@ -75,10 +97,19 @@ public class OkHttpMediaDataSource extends MediaDataSource {
                 .build();
 
         try (Response response = CLIENT.newCall(request).execute()) {
-            if (response.code() == 416) return -1; // Range not satisfiable
+            if (response.code() == 416) {
+                return -1; // Range not satisfiable
+            }
+            if (!response.isSuccessful()) {
+                logHttpIssueOnce("readAt", response.code(), response.message());
+                return -1;
+            }
 
             ResponseBody body = response.body();
-            if (body == null) return -1;
+            if (body == null) {
+                logHttpIssueOnce("readAt", response.code(), "null body");
+                return -1;
+            }
 
             try (InputStream is = body.byteStream()) {
                 if (readBuffer == null || readBuffer.length < fetchSize) {
@@ -112,6 +143,10 @@ public class OkHttpMediaDataSource extends MediaDataSource {
                 .build();
 
         try (Response response = CLIENT.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                logHttpIssueOnce("headSize", response.code(), response.message());
+                return -1;
+            }
             String contentLength = response.header("Content-Length");
             if (contentLength != null) {
                 cachedSize = Long.parseLong(contentLength);

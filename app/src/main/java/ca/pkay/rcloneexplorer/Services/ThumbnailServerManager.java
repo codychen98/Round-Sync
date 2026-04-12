@@ -96,6 +96,14 @@ public class ThumbnailServerManager {
         return currentState;
     }
 
+    /**
+     * rclone serve process generation (incremented on each spawn). For correlating thumbnail
+     * failures with server restarts in {@code sync.log}.
+     */
+    public synchronized int getServeGeneration() {
+        return generation;
+    }
+
     private boolean matchesCurrentParams(RemoteItem remote, int port, String auth) {
         if (remote == null || currentRemote == null || auth == null || currentAuth == null) {
             return false;

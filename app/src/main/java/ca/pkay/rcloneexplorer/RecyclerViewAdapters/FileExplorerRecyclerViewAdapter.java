@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -63,8 +64,6 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     private boolean canSelect;
     private boolean showThumbnails;
     private boolean serverReady = false;
-    private boolean loggedFirstBind = false;
-    private boolean loggedFirstReady = false;
     private boolean optionsDisabled;
     private boolean wrapFileNames;
     private Context context;
@@ -82,6 +81,9 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     /** Cached per-remote thumbnail allow-list; invalidated when list or settings may have changed. */
     private String thumbPolicyCachedRemoteName;
     private Set<String> thumbPolicyCachedAllowed = Collections.emptySet();
+
+    private static final ConcurrentHashMap<String, Long> THUMB_PIPELINE_LOG_AT = new ConcurrentHashMap<>();
+    private static final long THUMB_PIPELINE_LOG_COOLDOWN_MS = 60_000L;
 
     public interface OnClickListener {
         void onFileClicked(FileItem fileItem);
@@ -191,17 +193,14 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                     bindSafFile(holder, item, glideOption);
                 } else if (serverReady) {
                     if (!isHttpThumbnailPolicyAllowedForNetworkThumbnail(item)) {
+                        maybeLogThumbPipelineDbg(item, "imagePolicySkip", false);
                         cancelActiveRetryListener(holder);
                         Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
                         holder.fileIcon.setImageTintList(holder.defaultIconTint);
                         holder.fileIcon.setImageResource(R.drawable.ic_file);
                     } else {
                         String url = buildThumbnailUrl(item);
-                        if (!loggedFirstReady) {
-                            loggedFirstReady = true;
-                            SyncLog.info(context, "ThumbnailServer",
-                                "Adapter: first Glide request issued. serverReady=true, url=" + url);
-                        }
+                        maybeLogThumbPipelineDbg(item, "imageGlideIssued", true);
                         RetryRequestListener retryListener = new ProgressTrackingRetryListener(
                                 ThumbnailServerManager.getInstance(),
                                 rl -> Glide.with(context.getApplicationContext())
@@ -209,7 +208,9 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                         .apply(glideOption)
                                         .thumbnail(0.1f)
                                         .listener(rl)
-                                        .into(holder.fileIcon));
+                                        .into(holder.fileIcon),
+                                context.getApplicationContext(),
+                                item.getPath() + "|img");
                         cancelActiveRetryListener(holder);
                         holder.activeRetryListener = retryListener;
                         Glide.with(context.getApplicationContext())
@@ -220,11 +221,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 .into(holder.fileIcon);
                     }
                 } else {
-                    if (!loggedFirstBind) {
-                        loggedFirstBind = true;
-                        SyncLog.info(context, "ThumbnailServer",
-                            "Adapter: showing placeholder. serverReady=false, item=" + item.getName());
-                    }
+                    maybeLogThumbPipelineDbg(item, "imagePlaceholderNotReady",
+                            isHttpThumbnailPolicyAllowedForNetworkThumbnail(item));
                     cancelActiveRetryListener(holder);
                     Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
                     holder.fileIcon.setImageTintList(holder.defaultIconTint);
@@ -239,24 +237,23 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         .error(R.drawable.ic_file);
                 if (serverReady) {
                     if (!isHttpThumbnailPolicyAllowedForNetworkThumbnail(item)) {
+                        maybeLogThumbPipelineDbg(item, "videoPolicySkip", false);
                         cancelActiveRetryListener(holder);
                         Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
                         holder.fileIcon.setImageTintList(holder.defaultIconTint);
                         holder.fileIcon.setImageResource(R.drawable.ic_file);
                     } else {
                         String url = buildThumbnailUrl(item);
-                        if (!loggedFirstReady) {
-                            loggedFirstReady = true;
-                            SyncLog.info(context, "ThumbnailServer",
-                                "Adapter: first video Glide request issued. serverReady=true, url=" + url);
-                        }
+                        maybeLogThumbPipelineDbg(item, "videoGlideIssued", true);
                         RetryRequestListener retryListener = new ProgressTrackingRetryListener(
                                 ThumbnailServerManager.getInstance(),
                                 rl -> Glide.with(context.getApplicationContext())
                                         .load(new VideoThumbnailUrl(url))
                                         .apply(glideOption)
                                         .listener(rl)
-                                        .into(holder.fileIcon));
+                                        .into(holder.fileIcon),
+                                context.getApplicationContext(),
+                                item.getPath() + "|vid");
                         cancelActiveRetryListener(holder);
                         holder.activeRetryListener = retryListener;
                         Glide.with(context.getApplicationContext())
@@ -266,11 +263,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 .into(holder.fileIcon);
                     }
                 } else {
-                    if (!loggedFirstBind) {
-                        loggedFirstBind = true;
-                        SyncLog.info(context, "ThumbnailServer",
-                            "Adapter: showing placeholder (video). serverReady=false, item=" + item.getName());
-                    }
+                    maybeLogThumbPipelineDbg(item, "videoPlaceholderNotReady",
+                            isHttpThumbnailPolicyAllowedForNetworkThumbnail(item));
                     cancelActiveRetryListener(holder);
                     Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
                     holder.fileIcon.setImageTintList(holder.defaultIconTint);
@@ -449,6 +443,39 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         return MediaFolderPolicy.INSTANCE.isPathAllowed(remote, remote.getName(), pathForPolicy, allowed);
     }
 
+    /**
+     * Throttled per file path + event so opening a large folder does not flood {@code sync.log}.
+     * Filter exports with title {@code VidThumbDbg}.
+     */
+    private void maybeLogThumbPipelineDbg(
+            @NonNull FileItem item,
+            @NonNull String event,
+            boolean policyThumbAllowed) {
+        if (context == null) {
+            return;
+        }
+        String key = item.getPath() + "|" + event;
+        long now = System.currentTimeMillis();
+        Long last = THUMB_PIPELINE_LOG_AT.get(key);
+        if (last != null && now - last < THUMB_PIPELINE_LOG_COOLDOWN_MS) {
+            return;
+        }
+        if (THUMB_PIPELINE_LOG_AT.size() > 800) {
+            THUMB_PIPELINE_LOG_AT.clear();
+        }
+        THUMB_PIPELINE_LOG_AT.put(key, now);
+        ThumbnailServerManager mgr = ThumbnailServerManager.getInstance();
+        SyncLog.info(context, "VidThumbDbg",
+                "event=" + event
+                        + " path=" + item.getPath()
+                        + " name=" + item.getName()
+                        + " serverReady=" + serverReady
+                        + " policyThumbAllowed=" + policyThumbAllowed
+                        + " mgrState=" + mgr.getSyncState()
+                        + " serveGen=" + mgr.getServeGeneration()
+                        + " adapterGen=" + thumbnailDataGeneration.get());
+    }
+
     private String buildThumbnailUrl(FileItem item) {
         String[] serverParams = listener.getThumbnailServerParams();
         String hiddenPath = serverParams[0];
@@ -499,9 +526,6 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
     public void setThumbnailServerReady(boolean ready) {
         this.serverReady = ready;
-        if (ready) {
-            loggedFirstReady = false;
-        }
     }
 
     public List<FileItem> getCurrentContent() {
@@ -524,8 +548,6 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
     public void newData(List<FileItem> data) {
         invalidateThumbPolicyCache();
-        loggedFirstBind = false;
-        loggedFirstReady = false;
         thumbnailTotal = countThumbnailTargets(data);
         thumbnailLoaded.set(0);
         long gen = thumbnailDataGeneration.incrementAndGet();
@@ -802,8 +824,10 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
         ProgressTrackingRetryListener(
                 @NonNull ThumbnailServerManager serverManager,
-                @NonNull RetryRequestListener.RetryLoadCallback loadCallback) {
-            super(serverManager, loadCallback);
+                @NonNull RetryRequestListener.RetryLoadCallback loadCallback,
+                @NonNull Context logContext,
+                @NonNull String debugLoadKey) {
+            super(serverManager, loadCallback, logContext, debugLoadKey);
         }
 
         @Override

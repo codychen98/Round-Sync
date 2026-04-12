@@ -20,6 +20,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
+import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.SyncLog;
 
@@ -55,13 +56,17 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                 return;
             }
             MediaMetadataRetriever mmr = new MediaMetadataRetriever();
-            OkHttpMediaDataSource dataSource = new OkHttpMediaDataSource(url);
+            OkHttpMediaDataSource dataSource = new OkHttpMediaDataSource(url, appContext);
             try {
                 mmr.setDataSource(dataSource);
                 Bitmap frame = extractNonBlackFrame(mmr);
                 if (frame == null) {
                     logThumbnailSyncFailureOnce(
-                            "VideoThumbnailFetcher: no frame extracted (null or all too dark). url=");
+                            "event=videoFetchFail reason=noFrame "
+                                    + frameExtractDebugSuffix(mmr)
+                                    + " "
+                                    + mgrDebugSuffix()
+                                    + " url=");
                     callback.onLoadFailed(
                             new RuntimeException("No frame extracted from " + url));
                     return;
@@ -73,8 +78,11 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
             } catch (Exception e) {
                 FLog.e(TAG, "loadData: failed to extract frame from %s", url);
                 logThumbnailSyncFailureOnce(
-                        "VideoThumbnailFetcher exception: " + e.getClass().getSimpleName()
-                                + ": " + e.getMessage() + " | url=");
+                        "event=videoFetchFail reason=exception what="
+                                + e.getClass().getSimpleName()
+                                + " msg=" + e.getMessage()
+                                + " | " + mgrDebugSuffix()
+                                + " url=");
                 callback.onLoadFailed(e);
             } finally {
                 try { mmr.release(); } catch (Exception ignore) {}
@@ -90,7 +98,21 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
         if (!loggedSyncFailureUrls.add(url)) {
             return;
         }
-        SyncLog.error(appContext, "ThumbnailServer", messagePrefix + url);
+        SyncLog.error(appContext, "VidThumbDbg", messagePrefix + url);
+    }
+
+    @NonNull
+    private static String mgrDebugSuffix() {
+        ThumbnailServerManager m = ThumbnailServerManager.getInstance();
+        return "mgrState=" + m.getSyncState() + " serveGen=" + m.getServeGeneration();
+    }
+
+    @NonNull
+    private static String frameExtractDebugSuffix(@NonNull MediaMetadataRetriever mmr) {
+        String durationStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+        String bitrateStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE);
+        return "durationMs=" + (durationStr != null ? durationStr : "?")
+                + " bitrate=" + (bitrateStr != null ? bitrateStr : "?");
     }
 
     private Bitmap extractNonBlackFrame(MediaMetadataRetriever mmr) {
