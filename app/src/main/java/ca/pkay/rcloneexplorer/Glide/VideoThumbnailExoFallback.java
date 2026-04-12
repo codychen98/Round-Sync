@@ -6,6 +6,7 @@ import android.graphics.PixelFormat;
 import android.media.ImageReader;
 import android.os.Build;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.Looper;
 import android.view.PixelCopy;
 
@@ -28,8 +29,8 @@ import ca.pkay.rcloneexplorer.util.FLog;
 
 /**
  * One-frame grab via Media3 + FFmpeg extension when {@link android.media.MediaMetadataRetriever}
- * finds no usable frame (Apr-P3 / media_folder_policy Track E.5). Runs on the caller thread
- * (Glide video pool).
+ * finds no usable frame. ExoPlayer must run on the looper passed to {@link ExoPlayer.Builder}
+ * (not Glide's worker pool), so work is marshalled to a dedicated {@link HandlerThread}.
  */
 final class VideoThumbnailExoFallback {
 
@@ -39,10 +40,27 @@ final class VideoThumbnailExoFallback {
     private static final long PREPARE_TIMEOUT_MS = 20_000L;
     private static final long RENDER_WAIT_MS = 12_000L;
     private static final long PIXEL_COPY_MS = 5_000L;
-    /** Beyond this, skip Exo path (heavy demux). 45m excluded real files (~48m) that still need a thumb. */
     private static final long MAX_DURATION_MS = 6L * 60L * 60L * 1000L;
+    private static final long OUTER_WAIT_MS =
+            PREPARE_TIMEOUT_MS + RENDER_WAIT_MS + PIXEL_COPY_MS + 5_000L;
+
+    private static final Object EXO_THREAD_LOCK = new Object();
+    @Nullable
+    private static Handler sExoHandler;
 
     private VideoThumbnailExoFallback() {
+    }
+
+    @NonNull
+    private static Handler exoThumbHandler() {
+        synchronized (EXO_THREAD_LOCK) {
+            if (sExoHandler == null) {
+                HandlerThread ht = new HandlerThread("video_thumb_exo");
+                ht.start();
+                sExoHandler = new Handler(ht.getLooper());
+            }
+            return sExoHandler;
+        }
     }
 
     @Nullable
@@ -60,12 +78,49 @@ final class VideoThumbnailExoFallback {
         if (durationMs <= 0 || durationMs > MAX_DURATION_MS) {
             return null;
         }
+        Handler exoH = exoThumbHandler();
+        CountDownLatch done = new CountDownLatch(1);
+        AtomicReference<Bitmap> result = new AtomicReference<>();
+        AtomicReference<String> errorMsg = new AtomicReference<>();
+        exoH.post(() -> {
+            try {
+                result.set(grabOnExoLooper(appContext, url, durationMs, owner));
+            } catch (Exception e) {
+                errorMsg.set(e.getMessage());
+                FLog.w(TAG, "Exo thumbnail fallback failed: %s", e.getMessage());
+            } finally {
+                done.countDown();
+            }
+        });
+        try {
+            if (!done.await(OUTER_WAIT_MS, TimeUnit.MILLISECONDS)) {
+                FLog.w(TAG, "Exo thumbnail fallback timed out waiting for exo thread");
+                return null;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+        if (errorMsg.get() != null) {
+            return null;
+        }
+        return result.get();
+    }
+
+    @Nullable
+    private static Bitmap grabOnExoLooper(
+            @NonNull Context appContext,
+            @NonNull String url,
+            long durationMs,
+            @NonNull VideoThumbnailFetcher owner) throws Exception {
         ExoPlayer player = null;
         ImageReader reader = null;
         try {
             DefaultRenderersFactory renderersFactory = new DefaultRenderersFactory(appContext)
                     .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON);
-            player = new ExoPlayer.Builder(appContext, renderersFactory).build();
+            player = new ExoPlayer.Builder(appContext, renderersFactory)
+                    .setLooper(Looper.myLooper())
+                    .build();
             reader = ImageReader.newInstance(OUT_W, OUT_H, PixelFormat.RGBA_8888, 2);
             player.setVideoSurface(reader.getSurface());
             player.setPlayWhenReady(false);
@@ -116,9 +171,6 @@ final class VideoThumbnailExoFallback {
                 return null;
             }
             return bitmap;
-        } catch (Exception e) {
-            FLog.w(TAG, "Exo thumbnail fallback failed: %s", e.getMessage());
-            return null;
         } finally {
             if (player != null) {
                 player.release();
