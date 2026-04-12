@@ -499,6 +499,7 @@
     <string name="media_folder_policy_empty">No folders in the policy list. Use Add folder to choose a directory on this remote.</string>
     <string name="media_folder_policy_duplicate_folder">That folder is already in the list.</string>
     <string name="media_folder_policy_add_n_folders">Add %1$d folders</string>
+    <string name="media_folder_policy_selection_mode">Selection mode: tap folders to include or exclude.</string>
     <string name="remote_folder_picker_fab_select_here">Select here</string>
     <string name="media_folder_policy_safw_notice">This remote is SAF WebDAV. Folder rules are not enforced for thumbnails or cache on SAF remotes.</string>
     <string name="pref_media_folder_policy_summary">Limit thumbnail generation and media cache to selected folders per remote.</string>

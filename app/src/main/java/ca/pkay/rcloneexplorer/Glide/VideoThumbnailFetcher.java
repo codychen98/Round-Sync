@@ -13,6 +13,9 @@ import com.bumptech.glide.load.data.DataFetcher;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.util.Collections;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -24,6 +27,10 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
 
     private static final String TAG = "VideoThumbnailFetcher";
     private static final ExecutorService VIDEO_POOL = Executors.newFixedThreadPool(2);
+    /** Limits sync.log spam when many parallel loads fail for the same URL. */
+    private static final int MAX_FAILURE_LOG_URLS = 512;
+    private static final Set<String> loggedSyncFailureUrls =
+            Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     private final String url;
     private final Context appContext;
@@ -53,8 +60,8 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                 mmr.setDataSource(dataSource);
                 Bitmap frame = extractNonBlackFrame(mmr);
                 if (frame == null) {
-                    SyncLog.error(appContext, "ThumbnailServer",
-                            "VideoThumbnailFetcher: no frame extracted (null or all too dark). url=" + url);
+                    logThumbnailSyncFailureOnce(
+                            "VideoThumbnailFetcher: no frame extracted (null or all too dark). url=");
                     callback.onLoadFailed(
                             new RuntimeException("No frame extracted from " + url));
                     return;
@@ -65,15 +72,25 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                 callback.onDataReady(new ByteArrayInputStream(baos.toByteArray()));
             } catch (Exception e) {
                 FLog.e(TAG, "loadData: failed to extract frame from %s", url);
-                SyncLog.error(appContext, "ThumbnailServer",
+                logThumbnailSyncFailureOnce(
                         "VideoThumbnailFetcher exception: " + e.getClass().getSimpleName()
-                        + ": " + e.getMessage() + " | url=" + url);
+                                + ": " + e.getMessage() + " | url=");
                 callback.onLoadFailed(e);
             } finally {
                 try { mmr.release(); } catch (Exception ignore) {}
                 try { dataSource.close(); } catch (Exception ignore) {}
             }
         });
+    }
+
+    private void logThumbnailSyncFailureOnce(String messagePrefix) {
+        if (loggedSyncFailureUrls.size() >= MAX_FAILURE_LOG_URLS && !loggedSyncFailureUrls.contains(url)) {
+            return;
+        }
+        if (!loggedSyncFailureUrls.add(url)) {
+            return;
+        }
+        SyncLog.error(appContext, "ThumbnailServer", messagePrefix + url);
     }
 
     private Bitmap extractNonBlackFrame(MediaMetadataRetriever mmr) {

@@ -8,6 +8,8 @@ import androidx.lifecycle.MutableLiveData;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import ca.pkay.rcloneexplorer.Items.RemoteItem;
@@ -66,6 +68,9 @@ public class ThumbnailServerManager {
     /** Tracks state synchronously alongside postValue so we can detect the postValue/getValue race. */
     private ServerState currentState = ServerState.STOPPED;
 
+    private final Set<Integer> activeServeLeases = new HashSet<>();
+    private int nextLeaseId = 1;
+
     private ThumbnailServerManager() {}
 
     public static ThumbnailServerManager getInstance() {
@@ -98,6 +103,73 @@ public class ThumbnailServerManager {
         return currentPort == port
                 && currentAuth.equals(auth)
                 && currentRemote.getName().equals(remote.getName());
+    }
+
+    /**
+     * Registers interest in the shared HTTP thumbnail serve process. Callers must pair with
+     * {@link #releaseServeLease(int)}. Returns {@code 0} for SAFW remotes (no HTTP serve server).
+     * <p>When parameters differ from the running server while other leases exist, older lease ids
+     * are invalidated, the process is stopped, and a new lease is issued.</p>
+     */
+    public synchronized int acquireServeLease(Context context, RemoteItem remote, int port, String auth) {
+        appContext = context.getApplicationContext();
+        if (remote == null || auth == null) {
+            return 0;
+        }
+        if (remote.isRemoteType(RemoteItem.SAFW)) {
+            return 0;
+        }
+        boolean hadLeases = !activeServeLeases.isEmpty();
+        boolean paramsMismatchWhileUp = (currentState == ServerState.STARTING || currentState == ServerState.READY)
+                && !matchesCurrentParams(remote, port, auth);
+        if (hadLeases && paramsMismatchWhileUp) {
+            activeServeLeases.clear();
+            if (appContext != null) {
+                SyncLog.info(appContext, "ThumbnailServer",
+                        "acquireServeLease: preempt — params changed while leases were active");
+            }
+            fullStopInternal();
+        }
+        int id = nextLeaseId++;
+        activeServeLeases.add(id);
+        if (appContext != null) {
+            SyncLog.info(appContext, "ThumbnailServer",
+                    "acquireServeLease: id=" + id + " activeCount=" + activeServeLeases.size());
+        }
+        intentionalStop = false;
+        start(context, remote, port, auth);
+        return id;
+    }
+
+    /**
+     * Releases a lease from {@link #acquireServeLease}. When the last lease is released, the serve
+     * process is stopped. Ids cleared by premption are ignored (no-op).
+     */
+    public synchronized void releaseServeLease(int leaseId) {
+        if (leaseId <= 0) {
+            return;
+        }
+        Context ctx = appContext;
+        if (!activeServeLeases.remove(leaseId)) {
+            if (ctx != null) {
+                SyncLog.info(ctx, "ThumbnailServer",
+                        "releaseServeLease: id=" + leaseId + " not active (stale or duplicate)");
+            }
+            return;
+        }
+        if (ctx != null) {
+            SyncLog.info(ctx, "ThumbnailServer",
+                    "releaseServeLease: id=" + leaseId + " remaining=" + activeServeLeases.size());
+        }
+        if (activeServeLeases.isEmpty()) {
+            fullStopInternal();
+        }
+    }
+
+    /** Clears all leases and stops the serve process (service teardown, explicit stop intent). */
+    public synchronized void forceStopAllLeasesAndServer() {
+        activeServeLeases.clear();
+        fullStopInternal();
     }
 
     /** Starts the thumbnail server for the given remote. No-op if already STARTING or READY. */
@@ -134,11 +206,15 @@ public class ThumbnailServerManager {
         spawnProcess();
     }
 
-    /** Stops the server. Cancels any pending readiness checker and destroys the process. */
+    /** Stops the server and drops all leases. Prefer {@link #releaseServeLease} from UI consumers. */
     public synchronized void stop() {
+        forceStopAllLeasesAndServer();
+    }
+
+    private void fullStopInternal() {
         if (appContext != null) {
             SyncLog.info(appContext, "ThumbnailServer",
-                "stop() called. Destroying process, setting intentionalStop=true. Current gen: " + generation);
+                "fullStopInternal: destroying process, intentionalStop=true. gen=" + generation);
         }
         intentionalStop = true;
         cancelReadinessChecker();

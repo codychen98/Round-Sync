@@ -73,6 +73,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     private ThumbnailProgressListener progressListener;
     @Nullable
     private MultiFolderPickerDelegate multiFolderPickerDelegate;
+    /** When {@link #multiFolderPickerDelegate} is set, directory checkboxes only show in this mode. */
+    private boolean folderPolicyPickMode;
     private int thumbnailTotal = 0;
     private final AtomicInteger thumbnailLoaded = new AtomicInteger(0);
     /** Incremented when thumbnail progress accounting resets (new folder / resort). */
@@ -100,6 +102,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         boolean isPathSelected(@NonNull String itemPath);
 
         void onDirectorySelectionClicked(@NonNull FileItem directory, int adapterPosition);
+
+        /** Long-press on a directory in navigate mode; return true if handled (e.g. enter pick mode). */
+        default boolean onDirectoryLongPressToEnterPickMode(@NonNull FileItem directory, int adapterPosition) {
+            return false;
+        }
     }
 
     public FileExplorerRecyclerViewAdapter(Context context, View emptyView, View noSearchResultsView, OnClickListener listener) {
@@ -326,7 +333,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         }
 
         if (holder.folderPolicyPickCheckbox != null) {
-            if (multiFolderPickerDelegate != null && item.isDir()) {
+            if (multiFolderPickerDelegate != null && folderPolicyPickMode && item.isDir()) {
                 holder.folderPolicyPickCheckbox.setVisibility(View.VISIBLE);
                 holder.folderPolicyPickCheckbox.setChecked(
                         multiFolderPickerDelegate.isPathSelected(item.getPath()));
@@ -349,11 +356,30 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             if (isInSelectMode) {
                 onLongClickAction(item, holder);
             } else {
-                onClickAction(item, holder.getAdapterPosition());
+                int pos = holder.getBindingAdapterPosition();
+                if (pos == RecyclerView.NO_POSITION) {
+                    return;
+                }
+                onClickAction(item, pos);
             }
         });
 
         holder.view.setOnLongClickListener(view -> {
+            if (item.isDir() && multiFolderPickerDelegate != null) {
+                int pos = holder.getBindingAdapterPosition();
+                if (pos == RecyclerView.NO_POSITION) {
+                    return true;
+                }
+                if (!folderPolicyPickMode) {
+                    if (multiFolderPickerDelegate.onDirectoryLongPressToEnterPickMode(item, pos)) {
+                        return true;
+                    }
+                } else {
+                    multiFolderPickerDelegate.onDirectorySelectionClicked(item, pos);
+                    notifyItemChanged(pos);
+                    return true;
+                }
+            }
             if (!isInMoveMode && canSelect) {
                 onLongClickAction(item, holder);
             }
@@ -362,6 +388,9 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
         if (holder.icons != null) {
             holder.icons.setOnClickListener(v -> {
+                if (multiFolderPickerDelegate != null && item.isDir()) {
+                    return;
+                }
                 if (!isInMoveMode && canSelect) {
                     onLongClickAction(item, holder);
                 }
@@ -643,6 +672,17 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
     public void setMultiFolderPickerDelegate(@Nullable MultiFolderPickerDelegate delegate) {
         this.multiFolderPickerDelegate = delegate;
+        if (delegate == null) {
+            this.folderPolicyPickMode = false;
+        }
+    }
+
+    public void setFolderPolicyPickMode(boolean folderPolicyPickMode) {
+        if (this.folderPolicyPickMode == folderPolicyPickMode) {
+            return;
+        }
+        this.folderPolicyPickMode = folderPolicyPickMode;
+        notifyDataSetChanged();
     }
 
     private void showEmptyState(Boolean show) {
@@ -662,6 +702,12 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     }
 
     private void onClickAction(FileItem item, int position) {
+        if (item.isDir() && multiFolderPickerDelegate != null && folderPolicyPickMode) {
+            if (position != RecyclerView.NO_POSITION) {
+                multiFolderPickerDelegate.onDirectorySelectionClicked(item, position);
+            }
+            return;
+        }
         if (item.isDir() && null != listener) {
             listener.onDirectoryClicked(item, position);
         } else if (!item.isDir() && !isInMoveMode && null != listener) {

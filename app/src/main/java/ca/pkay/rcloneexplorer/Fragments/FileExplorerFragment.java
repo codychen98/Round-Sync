@@ -189,6 +189,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     private OnPinsChangedListener pinsChangedListener;
     private String thumbnailServerAuth;
     private int thumbnailServerPort;
+    /** Non-zero while this fragment holds a {@link ThumbnailServerManager} serve lease. */
+    private int thumbnailServeLeaseId;
     private boolean wrapFilenames;
     private SharedPreferences.OnSharedPreferenceChangeListener prefChangeListener;
 
@@ -257,9 +259,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             }
             directoryObject.setPath(path);
             ArrayList<FileItem> savedContent = savedInstanceState.getParcelableArrayList(SAVED_CONTENT);
-            if(null == savedContent){
-                directoryObject.clear();
-            } else {
+            if (savedContent != null) {
                 directoryObject.setContent(savedContent);
             }
 
@@ -802,8 +802,24 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     }
 
     private void startThumbnailServer() {
+        if (context == null || remote == null) {
+            return;
+        }
+        thumbnailServeLeaseId = ThumbnailServerManager.getInstance().acquireServeLease(
+                context, remote, thumbnailServerPort, thumbnailServerAuth);
+        if (thumbnailServeLeaseId == 0) {
+            return;
+        }
         ThumbnailServerService.startServing(context, remote, thumbnailServerPort, thumbnailServerAuth,
-                directoryObject.getCurrentPath());
+                directoryObject.getCurrentPath(), true);
+    }
+
+    private void releaseThumbnailServeLease() {
+        int id = thumbnailServeLeaseId;
+        thumbnailServeLeaseId = 0;
+        if (id != 0) {
+            ThumbnailServerManager.getInstance().releaseServeLease(id);
+        }
     }
 
     private void observeThumbnailServerState() {
@@ -1292,10 +1308,12 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             LastFolderThumbnailPrefetchWorker.enqueue(context);
         }
         if (context != null) {
-            SyncLog.info(context, "ThumbnailServer", "Fragment onStop: stopping thumbnail server");
+            SyncLog.info(context, "ThumbnailServer", "Fragment onStop: releasing thumbnail serve lease");
         }
-        ThumbnailServerService.clearProgress(context);
-        ThumbnailServerService.stopServing(context);
+        if (context != null) {
+            ThumbnailServerService.clearProgress(context);
+        }
+        releaseThumbnailServeLease();
 
         LocalBroadcastManager.getInstance(context).unregisterReceiver(backgroundTaskBroadcastReceiver);
     }

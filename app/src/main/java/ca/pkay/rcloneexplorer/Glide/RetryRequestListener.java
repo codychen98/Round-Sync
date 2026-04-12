@@ -53,13 +53,14 @@ public class RetryRequestListener implements RequestListener<Drawable> {
             return false; // let Glide show the error drawable
         }
         ThumbnailServerManager.ServerState state = serverManager.getState().getValue();
-        if (state != ThumbnailServerManager.ServerState.READY) {
-            FLog.d(TAG, "Server not ready during load failure, skipping retry");
-            return false;
-        }
         long delay = RETRY_DELAYS_MS[retryCount];
         retryCount++;
-        FLog.w(TAG, "Scheduling retry " + retryCount + "/" + MAX_RETRIES + " after " + delay + "ms");
+        if (state != ThumbnailServerManager.ServerState.READY) {
+            FLog.d(TAG, "Server state " + state + " (not READY); scheduling retry "
+                    + retryCount + "/" + MAX_RETRIES + " after " + delay + "ms");
+        } else {
+            FLog.w(TAG, "Scheduling retry " + retryCount + "/" + MAX_RETRIES + " after " + delay + "ms");
+        }
         pendingRunnable = () -> loadCallback.load(this);
         HANDLER.postDelayed(pendingRunnable, delay);
         return true; // suppress error drawable while retry is pending

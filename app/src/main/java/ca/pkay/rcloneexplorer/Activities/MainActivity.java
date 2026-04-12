@@ -81,6 +81,7 @@ import ca.pkay.rcloneexplorer.util.ActivityHelper;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.PermissionManager;
 import ca.pkay.rcloneexplorer.util.SharedPreferencesUtil;
+import ca.pkay.rcloneexplorer.util.SyncLog;
 import de.felixnuesse.extract.updates.UpdateChecker;
 import es.dmoral.toasty.Toasty;
 import java9.util.stream.Stream;
@@ -633,6 +634,15 @@ public class MainActivity extends AppCompatActivity
     }
 
     private void startPinnedItem(PinnedItem pinnedItem) {
+        FragmentManager fm = getSupportFragmentManager();
+        int backStackStart = fm.getBackStackEntryCount();
+        String fragDesc = fragment == null ? "null" : fragment.getClass().getSimpleName();
+        SyncLog.info(this, "PinnedNavDbg",
+                "event=startPinnedItemBegin remote=" + pinnedItem.getRemoteName()
+                        + " path=" + (pinnedItem.getPath() == null ? "" : pinnedItem.getPath())
+                        + " backStack=" + backStackStart
+                        + " fragment=" + fragDesc);
+
         List<RemoteItem> remoteItems = rclone.getRemotes();
         RemoteItem remoteItem = null;
         for (RemoteItem item : remoteItems) {
@@ -643,40 +653,55 @@ public class MainActivity extends AppCompatActivity
         }
         if (remoteItem == null) {
             FLog.w(TAG, "startPinnedItem: remote not found for " + pinnedItem.getRemoteName());
+            SyncLog.error(this, "PinnedNavDbg",
+                    "event=startPinnedItemRemoteMissing remote=" + pinnedItem.getRemoteName());
             return;
         }
 
         String startPath = pinnedItem.getPath();
         boolean hasSubPath = startPath != null && !startPath.isEmpty();
 
-        if (fragment != null && fragment instanceof FileExplorerFragment) {
-            FragmentManager fragmentManager = getSupportFragmentManager();
+        try {
+            if (fragment != null && fragment instanceof FileExplorerFragment) {
+                FragmentManager fragmentManager = getSupportFragmentManager();
 
-            // this is the case when remote gets started from a shortcut
-            // therefore back should exit the app, and not go into remotes screen
-            if (fragmentManager.getBackStackEntryCount() == 0) {
-                if (hasSubPath) {
-                    startRemoteAtPath(remoteItem, startPath, false);
+                // this is the case when remote gets started from a shortcut
+                // therefore back should exit the app, and not go into remotes screen
+                if (fragmentManager.getBackStackEntryCount() == 0) {
+                    if (hasSubPath) {
+                        startRemoteAtPath(remoteItem, startPath, false);
+                    } else {
+                        startRemote(remoteItem, false);
+                    }
                 } else {
-                    startRemote(remoteItem, false);
+                    for (int i = 0; i < fragmentManager.getBackStackEntryCount(); i++) {
+                        fragmentManager.popBackStack();
+                    }
+                    if (hasSubPath) {
+                        startRemoteAtPath(remoteItem, startPath, true);
+                    } else {
+                        startRemote(remoteItem, true);
+                    }
                 }
             } else {
-                for (int i = 0; i < fragmentManager.getBackStackEntryCount(); i++) {
-                    fragmentManager.popBackStack();
-                }
                 if (hasSubPath) {
                     startRemoteAtPath(remoteItem, startPath, true);
                 } else {
                     startRemote(remoteItem, true);
                 }
             }
-        } else {
-            if (hasSubPath) {
-                startRemoteAtPath(remoteItem, startPath, true);
-            } else {
-                startRemote(remoteItem, true);
-            }
+        } catch (RuntimeException e) {
+            SyncLog.error(this, "PinnedNavDbg",
+                    "event=startPinnedItemRuntimeException type=" + e.getClass().getSimpleName()
+                            + " msg=" + (e.getMessage() == null ? "" : e.getMessage())
+                            + " remote=" + remoteItem.getName());
+            throw e;
         }
+
+        SyncLog.info(this, "PinnedNavDbg",
+                "event=startPinnedItemEnd remote=" + remoteItem.getName()
+                        + " path=" + (startPath == null ? "" : startPath)
+                        + " backStackEnd=" + getSupportFragmentManager().getBackStackEntryCount());
 
         DrawerLayout drawer = findViewById(R.id.drawer_layout);
         drawer.closeDrawer(GravityCompat.START);

@@ -48,6 +48,9 @@ public class ThumbnailServerService extends android.app.Service {
     public static final String EXTRA_FOLDER_DISPLAY = "ca.pkay.rcexplorer.ThumbnailServerService.EXTRA_FOLDER_DISPLAY";
     public static final String EXTRA_CACHE_LOADED = "ca.pkay.rcexplorer.ThumbnailServerService.EXTRA_CACHE_LOADED";
     public static final String EXTRA_CACHE_TOTAL  = "ca.pkay.rcexplorer.ThumbnailServerService.EXTRA_CACHE_TOTAL";
+    /** When true, {@link ThumbnailServerManager#acquireServeLease} was already invoked by the caller. */
+    public static final String EXTRA_SKIP_INTERNAL_ACQUIRE =
+            "ca.pkay.rcexplorer.ThumbnailServerService.EXTRA_SKIP_INTERNAL_ACQUIRE";
 
     /** Shared with {@code LastFolderThumbnailPrefetchWorker} WorkManager foreground (Q16 / E.3). */
     public static final String NOTIFICATION_CHANNEL_ID = "ca.pkay.rcexplorer.thumbnail_server_channel";
@@ -94,7 +97,7 @@ public class ThumbnailServerService extends android.app.Service {
 
     /** Starts the service and instructs the manager to begin serving thumbnails. */
     public static void startServing(Context context, RemoteItem remote, int port, String auth) {
-        startServing(context, remote, port, auth, null);
+        startServing(context, remote, port, auth, null, false);
     }
 
     /**
@@ -103,6 +106,16 @@ public class ThumbnailServerService extends android.app.Service {
      */
     public static void startServing(Context context, RemoteItem remote, int port, String auth,
             @Nullable String folderDisplayPath) {
+        startServing(context, remote, port, auth, folderDisplayPath, false);
+    }
+
+    /**
+     * @param skipInternalAcquire when {@code true}, the caller already called
+     *                            {@link ThumbnailServerManager#acquireServeLease}; {@link #handleStart}
+     *                            only runs {@link ThumbnailServerManager#start}.
+     */
+    public static void startServing(Context context, RemoteItem remote, int port, String auth,
+            @Nullable String folderDisplayPath, boolean skipInternalAcquire) {
         if (remote.isRemoteType(RemoteItem.SAFW)) {
             FLog.d(TAG, "Skipping SAFW remote — no thumbnail server needed");
             SyncLog.info(context, "ThumbnailServer",
@@ -110,12 +123,14 @@ public class ThumbnailServerService extends android.app.Service {
             return;
         }
         SyncLog.info(context, "ThumbnailServer",
-            "startServing: remote=" + remote.getName() + ", port=" + port);
+            "startServing: remote=" + remote.getName() + ", port=" + port
+                    + ", skipInternalAcquire=" + skipInternalAcquire);
         Intent intent = new Intent(context, ThumbnailServerService.class);
         intent.setAction(ACTION_START);
         intent.putExtra(EXTRA_REMOTE, remote);
         intent.putExtra(EXTRA_PORT, port);
         intent.putExtra(EXTRA_AUTH, auth);
+        intent.putExtra(EXTRA_SKIP_INTERNAL_ACQUIRE, skipInternalAcquire);
         if (folderDisplayPath != null && !folderDisplayPath.isEmpty()) {
             intent.putExtra(EXTRA_FOLDER_DISPLAY, folderDisplayPath);
         }
@@ -207,7 +222,7 @@ public class ThumbnailServerService extends android.app.Service {
         serverEverStarted = false;
         BackgroundMediaPrepWorkTracker.setExplorerThumbnailBatchInProgress(false);
         BackgroundMediaPrepWorkTracker.setCacheWorkInProgress(false);
-        ThumbnailServerManager.getInstance().stop();
+        ThumbnailServerManager.getInstance().forceStopAllLeasesAndServer();
     }
 
     @Nullable
@@ -245,6 +260,8 @@ public class ThumbnailServerService extends android.app.Service {
             folderDisplayPath = "//" + remote.getName();
         }
 
+        boolean skipInternalAcquire = intent.getBooleanExtra(EXTRA_SKIP_INTERNAL_ACQUIRE, false);
+
         lastThumbLoaded = 0;
         lastThumbTotal = 0;
         lastCacheLoaded = 0;
@@ -260,7 +277,11 @@ public class ThumbnailServerService extends android.app.Service {
             manager.getState().observeForever(stateObserver);
             observerRegistered = true;
         }
-        manager.start(this, remote, port, auth);
+        if (skipInternalAcquire) {
+            manager.start(this, remote, port, auth);
+        } else {
+            manager.acquireServeLease(this, remote, port, auth);
+        }
         applyMediaPrepForegroundState();
     }
 
@@ -268,7 +289,7 @@ public class ThumbnailServerService extends android.app.Service {
         SyncLog.info(this, "MediaPrepDbg", "event=serviceHandleStop");
         BackgroundMediaPrepWorkTracker.setExplorerThumbnailBatchInProgress(false);
         BackgroundMediaPrepWorkTracker.setCacheWorkInProgress(false);
-        ThumbnailServerManager.getInstance().stop();
+        ThumbnailServerManager.getInstance().forceStopAllLeasesAndServer();
         // stateObserver will see STOPPED and call stopSelf(); but call it directly too
         // in case the manager was already stopped.
         stopForegroundCompat();
@@ -361,9 +382,20 @@ public class ThumbnailServerService extends android.app.Service {
                 startForeground(NOTIFICATION_ID, notification);
             }
         } else {
-            SyncLog.info(this, "MediaPrepDbg", "event=serviceApplyForeground active=false stopForeground");
-            stopForegroundCompat();
-            notificationManager.cancel(NOTIFICATION_ID);
+            ThumbnailServerManager.ServerState serverState =
+                    ThumbnailServerManager.getInstance().getSyncState();
+            if (serverState == ThumbnailServerManager.ServerState.STARTING
+                    || serverState == ThumbnailServerManager.ServerState.READY
+                    || serverState == ThumbnailServerManager.ServerState.FAILED) {
+                SyncLog.info(this, "MediaPrepDbg", "event=serviceApplyForeground active=false serverState="
+                        + serverState + " keepMinimalForeground=true");
+                startForegroundWithPlaceholder();
+            } else {
+                SyncLog.info(this, "MediaPrepDbg", "event=serviceApplyForeground active=false serverState="
+                        + serverState + " stopForeground");
+                stopForegroundCompat();
+                notificationManager.cancel(NOTIFICATION_ID);
+            }
         }
     }
 

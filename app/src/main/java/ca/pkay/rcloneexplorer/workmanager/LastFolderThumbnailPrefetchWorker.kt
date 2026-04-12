@@ -94,15 +94,18 @@ class LastFolderThumbnailPrefetchWorker(
         setForeground(createPrefetchForegroundInfo(app, snapshot.directoryPath))
 
         var prefetchRefIncremented = false
-        var startedService = false
+        var serveLeaseId = 0
         val auth = randomAuthToken()
         val port = allocatePort(THUMB_PORT_PREFERRED)
         val hidden = ThumbnailPrefetchTargets.hiddenServePath(auth, remote.name)
         try {
             BackgroundMediaPrepWorkTracker.incrementThumbnailPrefetchWork()
             prefetchRefIncremented = true
-            ThumbnailServerService.startServing(app, remote, port, auth, snapshot.directoryPath)
-            startedService = true
+            serveLeaseId = ThumbnailServerManager.getInstance().acquireServeLease(app, remote, port, auth)
+            if (serveLeaseId == 0) {
+                return@withContext Result.success()
+            }
+            ThumbnailServerService.startServing(app, remote, port, auth, snapshot.directoryPath, true)
             if (!waitForThumbnailServerReady()) {
                 FLog.w(TAG, "Prefetch: server did not become READY in time")
                 return@withContext Result.success()
@@ -182,8 +185,8 @@ class LastFolderThumbnailPrefetchWorker(
             if (prefetchRefIncremented) {
                 BackgroundMediaPrepWorkTracker.decrementThumbnailPrefetchWork()
             }
-            if (startedService) {
-                ThumbnailServerService.stopServing(app)
+            if (serveLeaseId != 0) {
+                ThumbnailServerManager.getInstance().releaseServeLease(serveLeaseId)
             }
         }
     }

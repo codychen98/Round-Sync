@@ -18,6 +18,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Toast;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
@@ -30,6 +31,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
+import com.google.android.material.snackbar.Snackbar;
 
 import java.io.IOException;
 import java.net.ServerSocket;
@@ -52,6 +54,7 @@ import ca.pkay.rcloneexplorer.Items.RemoteItem;
 import ca.pkay.rcloneexplorer.R;
 import ca.pkay.rcloneexplorer.Rclone;
 import ca.pkay.rcloneexplorer.RecyclerViewAdapters.FileExplorerRecyclerViewAdapter;
+import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerService;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.LargeParcel;
@@ -72,6 +75,7 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
     private static final String ARG_REMOTE = "remote_param";
     private static final String ARG_MEDIA_FOLDER_POLICY_MULTI = "media_folder_policy_multi_select";
     private static final String SAVED_MULTI_SELECTED_PATHS = "media_folder_policy_multi_paths";
+    private static final String SAVED_PICK_MODE = "media_folder_policy_pick_mode";
     private static final String SHARED_PREFS_SORT_ORDER = "ca.pkay.rcexplorer.sort_order";
 
     private final String SAVED_PATH = "ca.pkay.rcexplorer.FILE_EXPLORER_FRAG_SAVED_PATH";
@@ -108,12 +112,16 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
     private Context context;
     private String thumbnailServerAuth;
     private int thumbnailServerPort;
+    private int thumbnailServeLeaseId;
     private boolean wrapFilenames;
     private SharedPreferences.OnSharedPreferenceChangeListener prefChangeListener;
 
     private FolderSelectorCallback mSelectedFolderCallback;
     private String mInitialPath = "";
     private boolean mediaFolderPolicyMultiSelectMode;
+    /** Navigate-only until long-press; then directory taps toggle selection without changing path. */
+    private boolean mediaFolderPolicyPickMode;
+    private OnBackPressedCallback pickModeBackCallback;
     private final LinkedHashSet<String> selectedFolderPaths = new LinkedHashSet<>();
 
     /**
@@ -172,9 +180,7 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
             }
             directoryObject.setPath(path);
             ArrayList<FileItem> savedContent = savedInstanceState.getParcelableArrayList(SAVED_CONTENT);
-            if(null == savedContent){
-                directoryObject.clear();
-            } else {
+            if (savedContent != null) {
                 directoryObject.setContent(savedContent);
             }
 
@@ -182,6 +188,7 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
         }
 
         if (mediaFolderPolicyMultiSelectMode && savedInstanceState != null) {
+            mediaFolderPolicyPickMode = savedInstanceState.getBoolean(SAVED_PICK_MODE, false);
             ArrayList<String> restoredPaths = savedInstanceState.getStringArrayList(SAVED_MULTI_SELECTED_PATHS);
             if (restoredPaths != null) {
                 selectedFolderPaths.clear();
@@ -262,9 +269,17 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
                     }
                     updateMultiSelectFabUi();
                 }
+
+                @Override
+                public boolean onDirectoryLongPressToEnterPickMode(@NonNull FileItem directory, int adapterPosition) {
+                    enterMediaFolderPolicyPickMode(directory);
+                    return true;
+                }
             });
+            recyclerViewAdapter.setFolderPolicyPickMode(mediaFolderPolicyPickMode);
         }
         recyclerView.setAdapter(recyclerViewAdapter);
+        observeThumbnailServerState();
 
         if (remote.isRemoteType(RemoteItem.SFTP) && !goToDefaultSet & savedInstanceState == null) {
             showSFTPgoToDialog();
@@ -294,10 +309,6 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
             breadcrumbView.addCrumb(remote.getDisplayName(), "//");
         }
 
-        if (showThumbnails) {
-            startThumbnailService();
-        }
-
         if (savedInstanceState != null && savedInstanceState.getBoolean(SAVED_SEARCH_MODE, false)) {
             searchString = savedInstanceState.getString(SAVED_SEARCH_STRING);
             searchClicked();
@@ -306,6 +317,90 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
         configureSelectFab();
 
         return view;
+    }
+
+    @Override
+    public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
+        super.onViewCreated(view, savedInstanceState);
+        pickModeBackCallback = new OnBackPressedCallback(mediaFolderPolicyMultiSelectMode && mediaFolderPolicyPickMode) {
+            @Override
+            public void handleOnBackPressed() {
+                exitMediaFolderPolicyPickMode();
+            }
+        };
+        requireActivity().getOnBackPressedDispatcher().addCallback(getViewLifecycleOwner(), pickModeBackCallback);
+    }
+
+    private void observeThumbnailServerState() {
+        if (!showThumbnails) {
+            return;
+        }
+        ThumbnailServerManager.getInstance().getState().observe(this, state -> {
+            if (context != null) {
+                SyncLog.info(context, "ThumbnailServer",
+                        "Picker observer received state: " + state);
+            }
+            if (state == ThumbnailServerManager.ServerState.READY) {
+                FLog.d(TAG, "Thumbnail server ready — refreshing picker items");
+                if (recyclerViewAdapter != null) {
+                    recyclerViewAdapter.setThumbnailServerReady(true);
+                    recyclerViewAdapter.notifyDataSetChanged();
+                } else if (context != null) {
+                    SyncLog.error(context, "ThumbnailServer",
+                            "READY received but picker recyclerViewAdapter is null");
+                }
+            } else if (state == ThumbnailServerManager.ServerState.STARTING) {
+                if (recyclerViewAdapter != null) {
+                    recyclerViewAdapter.setThumbnailServerReady(false);
+                }
+            } else if (state == ThumbnailServerManager.ServerState.FAILED) {
+                FLog.e(TAG, "Thumbnail server failed to start (picker)");
+                if (recyclerViewAdapter != null) {
+                    recyclerViewAdapter.setThumbnailServerReady(false);
+                }
+                if (context != null) {
+                    Toasty.error(context, getString(R.string.thumbnail_server_failed),
+                            Toast.LENGTH_LONG, true).show();
+                }
+            } else if (state == ThumbnailServerManager.ServerState.STOPPED) {
+                FLog.d(TAG, "Thumbnail server stopped (picker)");
+                if (recyclerViewAdapter != null) {
+                    recyclerViewAdapter.setThumbnailServerReady(false);
+                }
+            }
+        });
+    }
+
+    private void enterMediaFolderPolicyPickMode(@NonNull FileItem directory) {
+        if (!mediaFolderPolicyMultiSelectMode || mediaFolderPolicyPickMode) {
+            return;
+        }
+        mediaFolderPolicyPickMode = true;
+        selectedFolderPaths.add(directory.getPath());
+        if (recyclerViewAdapter != null) {
+            recyclerViewAdapter.setFolderPolicyPickMode(true);
+        }
+        if (pickModeBackCallback != null) {
+            pickModeBackCallback.setEnabled(true);
+        }
+        updateMultiSelectFabUi();
+        View v = getView();
+        if (v != null && isAdded()) {
+            Snackbar.make(v, getString(R.string.media_folder_policy_selection_mode), Snackbar.LENGTH_SHORT).show();
+        }
+    }
+
+    private void exitMediaFolderPolicyPickMode() {
+        if (!mediaFolderPolicyPickMode) {
+            return;
+        }
+        mediaFolderPolicyPickMode = false;
+        if (recyclerViewAdapter != null) {
+            recyclerViewAdapter.setFolderPolicyPickMode(false);
+        }
+        if (pickModeBackCallback != null) {
+            pickModeBackCallback.setEnabled(false);
+        }
     }
 
     @Override
@@ -342,6 +437,7 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
         }
         if (mediaFolderPolicyMultiSelectMode) {
             outState.putStringArrayList(SAVED_MULTI_SELECTED_PATHS, new ArrayList<>(selectedFolderPaths));
+            outState.putBoolean(SAVED_PICK_MODE, mediaFolderPolicyPickMode);
         }
 
         if (LargeParcel.calculateBundleSize(outState) > 250 * 1024) {
@@ -556,8 +652,24 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
     }
 
     private void startThumbnailService() {
+        if (context == null || remote == null) {
+            return;
+        }
+        thumbnailServeLeaseId = ThumbnailServerManager.getInstance().acquireServeLease(
+                context, remote, thumbnailServerPort, thumbnailServerAuth);
+        if (thumbnailServeLeaseId == 0) {
+            return;
+        }
         ThumbnailServerService.startServing(context, remote, thumbnailServerPort, thumbnailServerAuth,
-                directoryObject.getCurrentPath());
+                directoryObject.getCurrentPath(), true);
+    }
+
+    private void releaseThumbnailServeLease() {
+        int id = thumbnailServeLeaseId;
+        thumbnailServeLeaseId = 0;
+        if (id != 0) {
+            ThumbnailServerManager.getInstance().releaseServeLease(id);
+        }
     }
 
     private void initializeThumbnailParams() {
@@ -763,7 +875,7 @@ public class RemoteFolderPickerFragment extends Fragment implements   FileExplor
     @Override
     public void onStop() {
         super.onStop();
-        ThumbnailServerService.stopServing(context);
+        releaseThumbnailServeLease();
         ((FragmentActivity) context).setTitle(originalToolbarTitle);
         LocalBroadcastManager.getInstance(context).unregisterReceiver(backgroundTaskBroadcastReceiver);
     }
