@@ -189,7 +189,7 @@ final class VideoThumbnailExoFallback {
             player.setPlayWhenReady(false);
             player.setVolume(0f);
 
-            DefaultHttpDataSource.Factory httpFactory = new DefaultHttpDataSource.Factory()
+            androidx.media3.datasource.okhttp.OkHttpDataSource.Factory httpFactory = new androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(OkHttpMediaDataSource.getClient())
                     .setUserAgent(Util.getUserAgent(appContext, appContext.getPackageName()));
             ProgressiveMediaSource.Factory progressiveFactory =
                     new ProgressiveMediaSource.Factory(httpFactory);
@@ -198,7 +198,7 @@ final class VideoThumbnailExoFallback {
             VideoThumbnailFetcher.logThumbPipe(appContext, "exoPrepareStart",
                     "basename=" + base + " durationMs=" + durationMs + " "
                             + thumbUrlForSyncLog(url)
-                            + " httpEngine=DefaultHttpDataSource ProgressiveMediaSource"
+                            + " httpEngine=OkHttpDataSource ProgressiveMediaSource"
                             + " extensionRendererMode=on");
             player.prepare();
 

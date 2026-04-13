@@ -234,6 +234,7 @@ dependencies {
     implementation "androidx.media3:media3-ui:$media3_version"
     implementation "androidx.media3:media3-common:$media3_version"
     implementation "androidx.media3:media3-datasource:$media3_version"
+    implementation "androidx.media3:media3-datasource-okhttp:$media3_version"
     implementation "androidx.media3:media3-database:$media3_version"
     // Software decode for thumbnails when MMR returns noFrame (Track E.5 / Apr-P3); matches player Media3 version
     implementation "org.jellyfin.media3:media3-ffmpeg-decoder:$media3_version+2"

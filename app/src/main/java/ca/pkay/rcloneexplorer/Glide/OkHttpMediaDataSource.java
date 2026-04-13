@@ -35,6 +35,10 @@ public class OkHttpMediaDataSource extends MediaDataSource {
             .readTimeout(30, TimeUnit.SECONDS)
             .build();
 
+    static OkHttpClient getClient() {
+        return CLIENT;
+    }
+
     private static final int BUFFER_SIZE = 512 * 1024; // 512 KB read-ahead
 
     private final String url;
