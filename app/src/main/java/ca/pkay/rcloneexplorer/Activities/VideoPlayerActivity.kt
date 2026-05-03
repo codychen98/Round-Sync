@@ -32,14 +32,13 @@ import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Services.StreamingService
 import ca.pkay.rcloneexplorer.util.SyncLog
 import ca.pkay.rcloneexplorer.util.SelectedFolderSimpleCacheProvider
-import ca.pkay.rcloneexplorer.util.VideoDoubleTapHorizontalZone
-import ca.pkay.rcloneexplorer.util.VideoPlayerDoubleTapZones
 import java.io.IOException
 
 class VideoPlayerActivity : AppCompatActivity() {
 
     private lateinit var playerView: PlayerView
-    private lateinit var gestureOverlay: View
+    private lateinit var gestureOverlayLeft: View
+    private lateinit var gestureOverlayRight: View
     private lateinit var topBar: View
     private lateinit var videoTitle: TextView
     private lateinit var episodeCounter: TextView
@@ -72,7 +71,8 @@ class VideoPlayerActivity : AppCompatActivity() {
         setContentView(R.layout.activity_video_player)
 
         playerView = findViewById(R.id.player_view)
-        gestureOverlay = findViewById(R.id.video_gesture_overlay)
+        gestureOverlayLeft = findViewById(R.id.video_gesture_overlay_left)
+        gestureOverlayRight = findViewById(R.id.video_gesture_overlay_right)
         topBar = findViewById(R.id.top_bar)
         videoTitle = findViewById(R.id.video_title)
         episodeCounter = findViewById(R.id.episode_counter)
@@ -88,8 +88,8 @@ class VideoPlayerActivity : AppCompatActivity() {
             }
         )
 
-        gestureOverlay.post { layoutGestureOverlayBand() }
-        setupGestureOverlay()
+        gestureOverlayLeft.post { layoutGestureOverlayBands() }
+        setupGestureOverlays()
 
         btnScaleMode.setOnClickListener { cycleScaleMode() }
 
@@ -221,27 +221,36 @@ class VideoPlayerActivity : AppCompatActivity() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         applyScaleMode()
-        gestureOverlay.post { layoutGestureOverlayBand() }
+        gestureOverlayLeft.post { layoutGestureOverlayBands() }
     }
 
-    private fun layoutGestureOverlayBand() {
-        val parent = gestureOverlay.parent as? View ?: return
+    private fun layoutGestureOverlayBands() {
+        val parent = gestureOverlayLeft.parent as? View ?: return
+        val w = parent.width
         val h = parent.height
-        if (h <= 0) {
+        if (w <= 0 || h <= 0) {
             return
         }
-        val lp = gestureOverlay.layoutParams as FrameLayout.LayoutParams
-        lp.width = FrameLayout.LayoutParams.MATCH_PARENT
-        lp.height = (h * MIDDLE_BAND_HEIGHT_FRACTION).toInt()
-        lp.topMargin = (h * TOP_BOTTOM_EXCLUDE_FRACTION).toInt()
-        lp.leftMargin = 0
-        lp.rightMargin = 0
-        lp.bottomMargin = 0
-        lp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-        gestureOverlay.layoutParams = lp
+        val bandHeight = (h * MIDDLE_BAND_HEIGHT_FRACTION).toInt()
+        val topMargin = (h * TOP_BOTTOM_EXCLUDE_FRACTION).toInt()
+        val stripWidth = (w * SIDE_STRIP_WIDTH_FRACTION).toInt().coerceAtLeast(1)
+
+        gestureOverlayLeft.layoutParams = FrameLayout.LayoutParams(stripWidth, bandHeight).apply {
+            this.topMargin = topMargin
+            gravity = Gravity.TOP or Gravity.START
+        }
+        gestureOverlayRight.layoutParams = FrameLayout.LayoutParams(stripWidth, bandHeight).apply {
+            this.topMargin = topMargin
+            gravity = Gravity.TOP or Gravity.END
+        }
     }
 
-    private fun setupGestureOverlay() {
+    private fun setupGestureOverlays() {
+        attachStripGestures(gestureOverlayLeft, seekDeltaMsOnDoubleTap = -SEEK_STEP_MS)
+        attachStripGestures(gestureOverlayRight, seekDeltaMsOnDoubleTap = SEEK_STEP_MS)
+    }
+
+    private fun attachStripGestures(strip: View, seekDeltaMsOnDoubleTap: Long) {
         val detector = GestureDetectorCompat(
             this,
             object : GestureDetector.SimpleOnGestureListener() {
@@ -258,17 +267,12 @@ class VideoPlayerActivity : AppCompatActivity() {
                         return true
                     }
                     lastDoubleTapHandledAt = now
-                    val widthPx = gestureOverlay.width.coerceAtLeast(1)
-                    when (VideoPlayerDoubleTapZones.horizontalZone(e.x, widthPx)) {
-                        VideoDoubleTapHorizontalZone.LEFT -> seekRelativeMs(-SEEK_STEP_MS)
-                        VideoDoubleTapHorizontalZone.CENTER -> togglePlayPause()
-                        VideoDoubleTapHorizontalZone.RIGHT -> seekRelativeMs(SEEK_STEP_MS)
-                    }
+                    seekRelativeMs(seekDeltaMsOnDoubleTap)
                     return true
                 }
             }
         )
-        gestureOverlay.setOnTouchListener { _, event -> detector.onTouchEvent(event) }
+        strip.setOnTouchListener { _, event -> detector.onTouchEvent(event) }
     }
 
     private fun toggleControllerVisibility() {
@@ -276,15 +280,6 @@ class VideoPlayerActivity : AppCompatActivity() {
             playerView.hideController()
         } else {
             playerView.showController()
-        }
-    }
-
-    private fun togglePlayPause() {
-        val p = player ?: return
-        if (p.isPlaying) {
-            p.pause()
-        } else {
-            p.play()
         }
     }
 
@@ -421,6 +416,8 @@ class VideoPlayerActivity : AppCompatActivity() {
 
         private const val TOP_BOTTOM_EXCLUDE_FRACTION = 0.25f
         private const val MIDDLE_BAND_HEIGHT_FRACTION = 0.5f
+        /** Horizontal fraction per side; center gap avoids blocking Media3 centered transport controls. */
+        private const val SIDE_STRIP_WIDTH_FRACTION = 0.30f
         private const val SEEK_STEP_MS = 10_000L
         private const val DOUBLE_TAP_DEBOUNCE_MS = 400L
     }

@@ -15,8 +15,18 @@
         app:show_subtitle_button="true" />
 
     <View
-        android:id="@+id/video_gesture_overlay"
-        android:layout_width="match_parent"
+        android:id="@+id/video_gesture_overlay_left"
+        android:layout_width="1dp"
+        android:layout_height="1dp"
+        android:background="@android:color/transparent"
+        android:clickable="true"
+        android:focusable="true"
+        android:contentDescription="@null"
+        android:importantForAccessibility="no" />
+
+    <View
+        android:id="@+id/video_gesture_overlay_right"
+        android:layout_width="1dp"
         android:layout_height="1dp"
         android:background="@android:color/transparent"
         android:clickable="true"
