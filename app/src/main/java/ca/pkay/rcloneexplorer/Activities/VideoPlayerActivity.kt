@@ -292,7 +292,7 @@ class VideoPlayerActivity : AppCompatActivity() {
 
                 override fun onScroll(
                     e1: MotionEvent?,
-                    e2: MotionEvent?,
+                    e2: MotionEvent,
                     distanceX: Float,
                     distanceY: Float,
                 ): Boolean =
@@ -302,15 +302,17 @@ class VideoPlayerActivity : AppCompatActivity() {
 
                 override fun onFling(
                     e1: MotionEvent?,
-                    e2: MotionEvent?,
+                    e2: MotionEvent,
                     velocityX: Float,
                     velocityY: Float,
                 ): Boolean {
-                    val a = e1
-                    val b = e2
+                    val down = e1 ?: return false
                     if (
-                        a != null && b != null &&
-                        shouldFinishVideoOnVerticalSwipeBack(a, b, velocityY)
+                        shouldFinishVideoOnVerticalSwipeBack(
+                            down,
+                            e2,
+                            velocityY,
+                        )
                     ) {
                         dismissPlayerFromSwipeNavigation()
                         return true
