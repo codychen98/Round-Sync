@@ -8,6 +8,7 @@ import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.ViewGroup
 import android.widget.ImageView
 import androidx.appcompat.app.AppCompatActivity
@@ -29,6 +30,7 @@ import java.util.concurrent.Executors
 
 class ImageViewerActivity : AppCompatActivity() {
 
+    private lateinit var swipeDismissRoot: VideoSwipeBackInterceptFrameLayout
     private lateinit var toolbar: MaterialToolbar
     private lateinit var pager: ViewPager2
     private lateinit var connectivityManager: ConnectivityManager
@@ -48,6 +50,35 @@ class ImageViewerActivity : AppCompatActivity() {
 
         toolbar = findViewById(R.id.image_viewer_toolbar)
         pager = findViewById(R.id.image_viewer_pager)
+
+        swipeDismissRoot = findViewById(R.id.image_viewer_swipe_root)
+        swipeDismissRoot.swipeDismissDelegate =
+            object : VideoSwipeBackInterceptFrameLayout.SwipeDismissDelegate {
+                override fun shouldObserveCenterSwipeFromDown(ev: MotionEvent): Boolean {
+                    return VideoSwipeBackQualifiers.rawMotionHitsView(ev, pager) &&
+                        !VideoSwipeBackQualifiers.rawMotionHitsView(ev, toolbar)
+                }
+
+                override fun maybeFinishFromSwipeGesture(
+                    down: MotionEvent,
+                    up: MotionEvent,
+                    velocityX: Float,
+                    velocityY: Float,
+                ): Boolean {
+                    val qualifies = VideoSwipeBackQualifiers.qualifiesVerticalSwipeBackDismiss(
+                        resources,
+                        down,
+                        up,
+                        velocityY,
+                        { false },
+                    )
+                    if (!qualifies) {
+                        return false
+                    }
+                    onBackPressedDispatcher.onBackPressed()
+                    return true
+                }
+            }
 
         val urls = intent.getStringArrayExtra(EXTRA_IMAGE_URLS) ?: run {
             finish()
@@ -75,7 +106,7 @@ class ImageViewerActivity : AppCompatActivity() {
         val cachedClient: OkHttpClient? =
             if (useOkHttpDisk) SelectedFolderImageHttpClientHolder.getOrNull(this) else null
 
-        toolbar.setNavigationOnClickListener { finish() }
+        toolbar.setNavigationOnClickListener { onBackPressedDispatcher.onBackPressed() }
         toolbar.title = names.getOrElse(startIndex) { "" }
 
         pager.offscreenPageLimit = 1

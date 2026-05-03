@@ -36,6 +36,7 @@ import java.io.IOException
 
 class VideoPlayerActivity : AppCompatActivity() {
 
+    private lateinit var swipeDismissRoot: VideoSwipeBackInterceptFrameLayout
     private lateinit var playerView: PlayerView
     private lateinit var gestureOverlayLeft: View
     private lateinit var gestureOverlayRight: View
@@ -70,6 +71,8 @@ class VideoPlayerActivity : AppCompatActivity() {
         hideSystemUI()
         setContentView(R.layout.activity_video_player)
 
+        swipeDismissRoot = findViewById(R.id.video_player_swipe_root)
+
         playerView = findViewById(R.id.player_view)
         gestureOverlayLeft = findViewById(R.id.video_gesture_overlay_left)
         gestureOverlayRight = findViewById(R.id.video_gesture_overlay_right)
@@ -87,6 +90,32 @@ class VideoPlayerActivity : AppCompatActivity() {
                 topBar.visibility = visibility
             }
         )
+
+        swipeDismissRoot.swipeDismissDelegate =
+            object : VideoSwipeBackInterceptFrameLayout.SwipeDismissDelegate {
+                override fun shouldObserveCenterSwipeFromDown(ev: MotionEvent): Boolean {
+                    return VideoSwipeBackQualifiers.rawMotionHitsView(ev, playerView) &&
+                        !VideoSwipeBackQualifiers.rawMotionHitsView(ev, gestureOverlayLeft) &&
+                        !VideoSwipeBackQualifiers.rawMotionHitsView(ev, gestureOverlayRight) &&
+                        !(
+                            topBar.visibility == View.VISIBLE &&
+                                VideoSwipeBackQualifiers.rawMotionHitsView(ev, topBar)
+                        )
+                }
+
+                override fun maybeFinishFromSwipeGesture(
+                    down: MotionEvent,
+                    up: MotionEvent,
+                    velocityX: Float,
+                    velocityY: Float,
+                ): Boolean {
+                    if (shouldFinishVideoOnVerticalSwipeBack(down, up, velocityY)) {
+                        dismissPlayerFromSwipeNavigation()
+                        return true
+                    }
+                    return false
+                }
+            }
 
         gestureOverlayLeft.post { layoutGestureOverlayBands() }
         setupGestureOverlays()
@@ -256,6 +285,24 @@ class VideoPlayerActivity : AppCompatActivity() {
             object : GestureDetector.SimpleOnGestureListener() {
                 override fun onDown(e: MotionEvent): Boolean = true
 
+                override fun onFling(
+                    e1: MotionEvent?,
+                    e2: MotionEvent?,
+                    velocityX: Float,
+                    velocityY: Float,
+                ): Boolean {
+                    val a = e1
+                    val b = e2
+                    if (
+                        a != null && b != null &&
+                        shouldFinishVideoOnVerticalSwipeBack(a, b, velocityY)
+                    ) {
+                        dismissPlayerFromSwipeNavigation()
+                        return true
+                    }
+                    return false
+                }
+
                 override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
                     toggleControllerVisibility()
                     return true
@@ -273,6 +320,51 @@ class VideoPlayerActivity : AppCompatActivity() {
             }
         )
         strip.setOnTouchListener { _, event -> detector.onTouchEvent(event) }
+    }
+
+    private fun isSwipeBackStartInBottomExclusion(start: MotionEvent): Boolean {
+        if (!controllerUiVisible) {
+            return false
+        }
+        val player = playerView
+        val loc = IntArray(2)
+        player.getLocationOnScreen(loc)
+        val relativeY = start.rawY - loc[1]
+        if (relativeY < 0f) {
+            return false
+        }
+        val h = player.height
+        if (h <= 0) {
+            return false
+        }
+        val fractionFromTop = relativeY / h.toFloat()
+        return fractionFromTop >=
+            (
+                1f -
+                    VideoSwipeBackSpec.CONTROLLER_VISIBLE_BOTTOM_EXCLUSION_FRACTION
+            )
+    }
+
+    private fun shouldFinishVideoOnVerticalSwipeBack(
+        start: MotionEvent,
+        end: MotionEvent,
+        velocityY: Float,
+    ): Boolean =
+        VideoSwipeBackQualifiers.qualifiesVerticalSwipeBackDismiss(
+            resources,
+            start,
+            end,
+            velocityY,
+            ::isSwipeBackStartInBottomExclusion,
+        )
+
+    /**
+     * Uses the AndroidX back dispatcher instead of finishing directly so gesture-dismiss matches hardware back
+     * and stays compatible with predictive back when the platform invokes the same dispatcher path.
+     * Malformed intent bailouts remain plain `finish()`.
+     */
+    private fun dismissPlayerFromSwipeNavigation() {
+        onBackPressedDispatcher.onBackPressed()
     }
 
     private fun toggleControllerVisibility() {
