@@ -150,7 +150,7 @@ class PolicyFolderPrefetchWorker(
         val auth = randomAuthToken()
         val port = allocatePort(THUMB_PORT_PREFERRED)
         val hidden = ThumbnailPrefetchTargets.hiddenServePath(auth, remote.name)
-        try {
+        return try {
             BackgroundMediaPrepWorkTracker.incrementThumbnailPrefetchWork()
             prefetchRefIncremented = true
             serveLeaseId = ThumbnailServerManager.getInstance()
@@ -234,7 +234,7 @@ class PolicyFolderPrefetchWorker(
         val port = allocatePort(CACHE_PORT_PREFERRED)
         val hidden = ThumbnailPrefetchTargets.hiddenServePath(auth, remote.name)
         var serveLeaseId = 0
-        try {
+        return try {
             serveLeaseId = ThumbnailServerManager.getInstance()
                 .acquireServeLease(app, remote, port, auth)
             if (serveLeaseId == 0) return Result.success()
