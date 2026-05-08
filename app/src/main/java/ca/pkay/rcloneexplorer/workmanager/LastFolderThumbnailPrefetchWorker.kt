@@ -9,6 +9,7 @@ import androidx.core.app.NotificationCompat
 import androidx.preference.PreferenceManager
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
+import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
 import androidx.work.NetworkType
@@ -16,6 +17,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.work.workDataOf
 import ca.pkay.rcloneexplorer.Glide.HttpServeThumbnailGlideUrl
 import ca.pkay.rcloneexplorer.Glide.VideoThumbnailUrl
 import ca.pkay.rcloneexplorer.Items.RemoteItem
@@ -25,11 +27,13 @@ import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerService
 import ca.pkay.rcloneexplorer.util.BackgroundMediaPrepWorkTracker
 import ca.pkay.rcloneexplorer.util.FLog
+import ca.pkay.rcloneexplorer.util.GlideCacheChecker
 import ca.pkay.rcloneexplorer.util.LastFolderSnapshotStore
 import ca.pkay.rcloneexplorer.util.NotificationUtils
 import ca.pkay.rcloneexplorer.util.SyncLog
 import ca.pkay.rcloneexplorer.util.ThumbnailPrefetchTargets
 import ca.pkay.rcloneexplorer.util.WifiConnectivitiyUtil
+import ca.pkay.rcloneexplorer.util.partitionCachedItems
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.engine.DiskCacheStrategy
 import com.bumptech.glide.request.RequestOptions
@@ -58,6 +62,8 @@ class LastFolderThumbnailPrefetchWorker(
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val app = applicationContext
         val prefs = PreferenceManager.getDefaultSharedPreferences(app)
+        val baselineLoaded = inputData.getInt(KEY_BASELINE_LOADED, 0)
+        val baselineTotal  = inputData.getInt(KEY_BASELINE_TOTAL,  0)
         val snapshot = LastFolderSnapshotStore.read(prefs) ?: return@withContext Result.success()
         if (!ThumbnailPrefetchTargets.readShowThumbnails(prefs, app)) {
             return@withContext Result.success()
@@ -75,21 +81,59 @@ class LastFolderThumbnailPrefetchWorker(
         val listing = rclone.getDirectoryContent(remote, snapshot.directoryPath, startAtRoot)
             ?: return@withContext Result.success()
         val sizeLimit = ThumbnailPrefetchTargets.readThumbnailSizeLimitBytes(prefs, app)
-        val targets = ThumbnailPrefetchTargets.filterForHttpThumbnailPrefetch(
+        val targetsRaw = ThumbnailPrefetchTargets.filterForHttpThumbnailPrefetch(
             listing,
             remote,
             prefs,
             sizeLimit,
             showThumbnails = true,
         )
+        val targets = ThumbnailPrefetchTargets.filterOutBlacklisted(targetsRaw, prefs, remote.name)
+        val skippedBlacklisted = targetsRaw.size - targets.size
+        if (skippedBlacklisted > 0) {
+            SyncLog.info(
+                app,
+                "MediaPrepDbg",
+                "event=prefetchSkipBlacklisted count=$skippedBlacklisted path=${snapshot.directoryPath}",
+            )
+        }
         if (targets.isEmpty()) {
             return@withContext Result.success()
         }
 
+        // Probe the Glide DATA disk cache for each target before starting the server.
+        // The probe URL uses a stable dummy auth segment (PROBE_AUTH) so the cache key
+        // (stablePath = /<remoteName>/<filePath>) matches what was stored during prior fetches.
+        val probeHidden = ThumbnailPrefetchTargets.hiddenServePath(PROBE_AUTH, remote.name)
+        val (toFetch, alreadyCached) = partitionCachedItems(targets) { item ->
+            val url = ThumbnailPrefetchTargets.buildThumbnailHttpUrl(probeHidden, PROBE_PORT, item)
+            val mime = item.mimeType ?: ""
+            val model: Any = if (mime.startsWith("video/")) {
+                VideoThumbnailUrl(url)
+            } else {
+                HttpServeThumbnailGlideUrl(url)
+            }
+            GlideCacheChecker.isInDataDiskCache(app, model)
+        }
         SyncLog.info(
             app,
             "MediaPrepDbg",
-            "event=prefetchSetForeground path=${snapshot.directoryPath} targets=${targets.size}",
+            "event=prefetchSkipCached count=${alreadyCached.size} path=${snapshot.directoryPath}",
+        )
+        if (toFetch.isEmpty()) {
+            return@withContext Result.success()
+        }
+
+        // Carry the explorer's last-seen counts so the notification never goes backwards.
+        // adjustedTotal is the larger of the baseline total and the sum of items already loaded
+        // plus the items still to fetch.
+        val adjustedTotal = maxOf(baselineTotal, baselineLoaded + toFetch.size)
+
+        SyncLog.info(
+            app,
+            "MediaPrepDbg",
+            "event=prefetchSetForeground path=${snapshot.directoryPath} targets=${toFetch.size}" +
+                " baselineLoaded=$baselineLoaded baselineTotal=$baselineTotal adjustedTotal=$adjustedTotal",
         )
         setForeground(createPrefetchForegroundInfo(app, snapshot.directoryPath))
 
@@ -110,16 +154,19 @@ class LastFolderThumbnailPrefetchWorker(
                 FLog.w(TAG, "Prefetch: server did not become READY in time")
                 return@withContext Result.success()
             }
+            // Prime the service with the baseline before the first updateProgress so the
+            // notification never shows a lower count than the explorer already displayed.
+            ThumbnailServerService.acceptBaseline(app, baselineLoaded, adjustedTotal)
             SyncLog.info(
                 app,
                 "MediaPrepDbg",
-                "event=prefetchUpdateProgress phase=init loaded=0 total=${targets.size} path=${snapshot.directoryPath}",
+                "event=prefetchUpdateProgress phase=init loaded=$baselineLoaded total=$adjustedTotal path=${snapshot.directoryPath}",
             )
             ThumbnailServerService.updateProgress(
                 app,
                 snapshot.directoryPath,
-                0,
-                targets.size,
+                baselineLoaded,
+                adjustedTotal,
                 0,
                 0,
             )
@@ -128,8 +175,8 @@ class LastFolderThumbnailPrefetchWorker(
                 .diskCacheStrategy(DiskCacheStrategy.DATA)
                 .placeholder(R.drawable.ic_file)
                 .error(R.drawable.ic_file)
-            var loaded = 0
-            for (item in targets) {
+            var loaded = baselineLoaded
+            for (item in toFetch) {
                 if (isStopped) {
                     break
                 }
@@ -138,7 +185,7 @@ class LastFolderThumbnailPrefetchWorker(
                 val isVideo = mime.startsWith("video/")
                 try {
                     val req = if (isVideo) {
-                        Glide.with(app).asDrawable().load(VideoThumbnailUrl(url)).apply(imageOpts)
+                        Glide.with(app).asDrawable().load(VideoThumbnailUrl(url, item.size, item.modTime)).apply(imageOpts)
                     } else {
                         Glide.with(app).asDrawable().load(HttpServeThumbnailGlideUrl(url)).apply(imageOpts)
                     }
@@ -156,13 +203,13 @@ class LastFolderThumbnailPrefetchWorker(
                 SyncLog.info(
                     app,
                     "MediaPrepDbg",
-                    "event=prefetchUpdateProgress phase=item loaded=$loaded total=${targets.size} path=${snapshot.directoryPath}",
+                    "event=prefetchUpdateProgress phase=item loaded=$loaded total=$adjustedTotal path=${snapshot.directoryPath}",
                 )
                 ThumbnailServerService.updateProgress(
                     app,
                     snapshot.directoryPath,
                     loaded,
-                    targets.size,
+                    adjustedTotal,
                     0,
                     0,
                 )
@@ -170,13 +217,13 @@ class LastFolderThumbnailPrefetchWorker(
             SyncLog.info(
                 app,
                 "MediaPrepDbg",
-                "event=prefetchUpdateProgress phase=complete loaded=${targets.size} total=${targets.size} path=${snapshot.directoryPath}",
+                "event=prefetchUpdateProgress phase=complete loaded=$adjustedTotal total=$adjustedTotal path=${snapshot.directoryPath}",
             )
             ThumbnailServerService.updateProgress(
                 app,
                 snapshot.directoryPath,
-                targets.size,
-                targets.size,
+                adjustedTotal,
+                adjustedTotal,
                 0,
                 0,
             )
@@ -252,23 +299,52 @@ class LastFolderThumbnailPrefetchWorker(
         private const val POLL_MS = 100L
         private const val PREFETCH_ITEM_TIMEOUT_S = 45L
         private const val WM_FOREGROUND_NOTIFICATION_ID = 183
+        // Stable dummy values used to build probe URLs for cache-key generation only.
+        // The auth segment is stripped when computing the disk cache key, so any single-segment
+        // value produces the same key as a real per-session auth token.
+        private const val PROBE_AUTH = "probe"
+        private const val PROBE_PORT = 1
 
+        /** WorkData key: thumbnail-loaded count from the explorer at the moment of [enqueue]. */
+        const val KEY_BASELINE_LOADED = "baseline_loaded"
+        /** WorkData key: thumbnail-total count from the explorer at the moment of [enqueue]. */
+        const val KEY_BASELINE_TOTAL  = "baseline_total"
+
+        /**
+         * Enqueues the worker with explorer progress baseline so the foreground notification
+         * counts up monotonically from where the explorer left off.
+         *
+         * @param baselineLoaded thumbnails already loaded by the explorer adapter
+         * @param baselineTotal  total thumbnails the explorer was tracking
+         */
         @JvmStatic
-        fun enqueue(context: Context) {
+        fun enqueue(context: Context, baselineLoaded: Int, baselineTotal: Int) {
             val app = context.applicationContext
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
                 .build()
+            val inputData = workDataOf(
+                KEY_BASELINE_LOADED to baselineLoaded,
+                KEY_BASELINE_TOTAL  to baselineTotal,
+            )
             val request = OneTimeWorkRequestBuilder<LastFolderThumbnailPrefetchWorker>()
                 .setConstraints(constraints)
                 .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                .setInputData(inputData)
                 .build()
             WorkManager.getInstance(app).enqueueUniqueWork(
                 UNIQUE_WORK_NAME,
                 ExistingWorkPolicy.REPLACE,
                 request,
             )
-            SyncLog.info(app, TAG, "Enqueued last-folder thumbnail prefetch work")
+            SyncLog.info(app, TAG,
+                "Enqueued last-folder thumbnail prefetch work baselineLoaded=$baselineLoaded baselineTotal=$baselineTotal")
+        }
+
+        /** Convenience overload with zero baseline (no explorer context available). */
+        @JvmStatic
+        fun enqueue(context: Context) {
+            enqueue(context, 0, 0)
         }
 
         private fun randomAuthToken(): String {

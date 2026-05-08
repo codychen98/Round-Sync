@@ -145,6 +145,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     private final String SAVED_MOVE_START_PATH = "ca.pkay.rcexplorer.FILE_EXPLORER_FRAG_MOVE_START_PATH";
     private final String SAVED_SYNC_DIRECTION = "ca.pkay.rcexplorer.FILE_EXPLORER_FRAG_SYNC_DIRECTION";
     private final String SAVED_SYNC_REMOTE_PATH = "ca.pkay.rcexplorer.FILE_EXPLORER_FRAG_SYNC_REMOTE_PATH";
+    private final String SAVED_THUMB_LOADED = "ca.pkay.rcexplorer.FILE_EXPLORER_FRAG_THUMB_LOADED";
+    private final String SAVED_THUMB_TOTAL = "ca.pkay.rcexplorer.FILE_EXPLORER_FRAG_THUMB_TOTAL";
     private String originalToolbarTitle;
     private Stack<String> pathStack;
     private Map<String, Integer> directoryPosition;
@@ -194,6 +196,9 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     /** Bumped when thumbnail HTTP params or observed serve generation changes; invalidates retries. */
     private int thumbnailUrlEpoch;
     private int lastThumbnailServeGenAtReady = Integer.MIN_VALUE;
+    /** Last thumbnail progress snapshot published by the adapter to the service. */
+    private int lastPublishedThumbLoaded;
+    private int lastPublishedThumbTotal;
     private boolean wrapFilenames;
     private SharedPreferences.OnSharedPreferenceChangeListener prefChangeListener;
 
@@ -326,6 +331,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         recyclerViewAdapter.setThumbnailProgressListener(new FileExplorerRecyclerViewAdapter.ThumbnailProgressListener() {
             @Override
             public void onThumbnailProgress(int loaded, int total) {
+                lastPublishedThumbLoaded = loaded;
+                lastPublishedThumbTotal  = total;
                 String path = directoryObject != null ? directoryObject.getCurrentPath() : "null";
                 SyncLog.info(context, "MediaPrepDbg", "event=explorerThumbProgress source=explorer path=" + path
                         + " loaded=" + loaded + " total=" + total);
@@ -335,6 +342,9 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
 
             @Override
             public void onThumbnailLoadingComplete() {
+                // Reset baseline so the next folder starts fresh.
+                lastPublishedThumbLoaded = 0;
+                lastPublishedThumbTotal  = 0;
                 String path = directoryObject != null ? directoryObject.getCurrentPath() : "null";
                 SyncLog.info(context, "MediaPrepDbg", "event=explorerThumbComplete source=explorer path=" + path);
                 ThumbnailServerService.clearProgress(context);
@@ -493,6 +503,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         if (syncRemotePath != null) {
             outState.putString(SAVED_SYNC_REMOTE_PATH, syncRemotePath);
         }
+        outState.putInt(SAVED_THUMB_LOADED, lastPublishedThumbLoaded);
+        outState.putInt(SAVED_THUMB_TOTAL, lastPublishedThumbTotal);
         if (LargeParcel.calculateBundleSize(outState) > 250 * 1024) {
             outState.remove(SAVED_CONTENT);
         }
@@ -528,6 +540,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         moveStartPath = savedInstanceState.getString(SAVED_MOVE_START_PATH);
         syncDirection = savedInstanceState.getInt(SAVED_SYNC_DIRECTION, -1);
         syncRemotePath = savedInstanceState.getString(SAVED_SYNC_REMOTE_PATH);
+        lastPublishedThumbLoaded = savedInstanceState.getInt(SAVED_THUMB_LOADED, 0);
+        lastPublishedThumbTotal = savedInstanceState.getInt(SAVED_THUMB_TOTAL, 0);
     }
 
     private void setFabBehaviour(boolean enableSnackBarBehaviour) {
@@ -1330,7 +1344,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         super.onStop();
         if (context != null && remoteName != null && directoryObject != null) {
             LastFolderSnapshotStore.persist(context, remoteName, directoryObject.getCurrentPath());
-            LastFolderThumbnailPrefetchWorker.enqueue(context);
+            LastFolderThumbnailPrefetchWorker.enqueue(
+                    context, lastPublishedThumbLoaded, lastPublishedThumbTotal);
         }
         if (context != null) {
             SyncLog.info(context, "ThumbnailServer", "Fragment onStop: releasing thumbnail serve lease");

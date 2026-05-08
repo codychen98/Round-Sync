@@ -21,9 +21,12 @@ import androidx.core.widget.ImageViewCompat;
 import androidx.preference.PreferenceManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import androidx.appcompat.widget.PopupMenu;
+
 import com.bumptech.glide.Glide;
 import com.bumptech.glide.load.engine.DiskCacheStrategy;
 import com.bumptech.glide.request.RequestOptions;
+import com.bumptech.glide.signature.ObjectKey;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -40,10 +43,12 @@ import ca.pkay.rcloneexplorer.Items.FileItem;
 import ca.pkay.rcloneexplorer.Items.RemoteItem;
 import ca.pkay.rcloneexplorer.R;
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
+import ca.pkay.rcloneexplorer.util.BlacklistKey;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.MediaFolderPolicy;
 import ca.pkay.rcloneexplorer.util.PolicyType;
 import ca.pkay.rcloneexplorer.util.SyncLog;
+import ca.pkay.rcloneexplorer.util.ThumbnailFailureBlacklist;
 import io.github.x0b.safdav.SafAccessProvider;
 import io.github.x0b.safdav.file.FileAccessError;
 
@@ -256,6 +261,12 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
                         holder.fileIcon.setImageTintList(holder.defaultIconTint);
                         holder.fileIcon.setImageResource(R.drawable.ic_file);
+                    } else if (isVideoBlacklisted(item)) {
+                        maybeLogThumbPipelineDbg(item, "videoBlacklistSkip", true);
+                        cancelActiveRetryListener(holder);
+                        Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+                        holder.fileIcon.setImageTintList(holder.defaultIconTint);
+                        holder.fileIcon.setImageResource(R.drawable.ic_file);
                     } else {
                         maybeLogThumbPipelineDbg(item, "videoGlideIssued", true);
                         boolean extendedThumbRetry = isExtendedThumbnailRetryPolicy(item);
@@ -266,7 +277,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         RetryRequestListener retryListener = new ProgressTrackingRetryListener(
                                 ThumbnailServerManager.getInstance(),
                                 rl -> Glide.with(context.getApplicationContext())
-                                        .load(new VideoThumbnailUrl(buildThumbnailUrl(item)))
+                                        .load(new VideoThumbnailUrl(buildThumbnailUrl(item), item.getSize(), item.getModTime()))
                                         .apply(glideOption)
                                         .listener(rl)
                                         .into(holder.fileIcon),
@@ -278,7 +289,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         cancelActiveRetryListener(holder);
                         holder.activeRetryListener = retryListener;
                         Glide.with(context.getApplicationContext())
-                                .load(new VideoThumbnailUrl(buildThumbnailUrl(item)))
+                                .load(new VideoThumbnailUrl(buildThumbnailUrl(item), item.getSize(), item.getModTime()))
                                 .apply(glideOption)
                                 .listener(retryListener)
                                 .into(holder.fileIcon);
@@ -395,6 +406,10 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                     return true;
                 }
             }
+            if (!item.isDir() && !isInSelectMode && !isInMoveMode && isVideoBlacklisted(item)) {
+                showRetryThumbnailMenu(view, item, holder);
+                return true;
+            }
             if (!isInMoveMode && canSelect) {
                 onLongClickAction(item, holder);
             }
@@ -462,6 +477,25 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 remote.getName(),
                 item.getPath());
         return MediaFolderPolicy.INSTANCE.isPathAllowed(remote, remote.getName(), pathForPolicy, allowed);
+    }
+
+    /**
+     * Returns true when a terminal thumbnail fetch failure has been recorded for this video file
+     * via [ThumbnailFailureBlacklist]. Blacklisted tiles show the generic file icon without
+     * issuing a Glide request, preventing repeated pipeline retries on known-unfetchable files.
+     */
+    private boolean isVideoBlacklisted(@NonNull FileItem item) {
+        RemoteItem remote = item.getRemote();
+        if (remote == null || remote.getType() == RemoteItem.SAFW) {
+            return false;
+        }
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+        BlacklistKey key = new BlacklistKey(
+                remote.getName(),
+                item.getPath(),
+                item.getSize(),
+                item.getModTime());
+        return ThumbnailFailureBlacklist.isBlacklisted(prefs, key);
     }
 
     /**
@@ -860,6 +894,50 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             listener.onFilesSelected();
         }
         notifyDataSetChanged();
+    }
+
+    private void showRetryThumbnailMenu(@NonNull View anchor, @NonNull FileItem item, @NonNull ViewHolder holder) {
+        PopupMenu popup = new PopupMenu(context, anchor);
+        popup.getMenuInflater().inflate(R.menu.file_explorer_long_press_thumbnail, popup.getMenu());
+        popup.setOnMenuItemClickListener(menuItem -> {
+            if (menuItem.getItemId() == R.id.action_retry_thumbnail) {
+                handleRetryThumbnail(item, holder);
+                return true;
+            }
+            return false;
+        });
+        popup.show();
+    }
+
+    private void handleRetryThumbnail(@NonNull FileItem item, @NonNull ViewHolder holder) {
+        RemoteItem remote = item.getRemote();
+        if (remote == null || remote.getType() == RemoteItem.SAFW) {
+            return;
+        }
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+        BlacklistKey key = new BlacklistKey(
+                remote.getName(),
+                item.getPath(),
+                item.getSize(),
+                item.getModTime());
+        ThumbnailFailureBlacklist.clear(prefs, key);
+        SyncLog.info(context, "VidThumbDbg", "event=thumbForceRetry path=" + item.getPath());
+        THUMB_PIPELINE_LOG_AT.remove(item.getPath() + "|videoBlacklistSkip");
+        if (!serverReady) {
+            return;
+        }
+        RequestOptions glideOption = new RequestOptions()
+                .centerCrop()
+                .diskCacheStrategy(DiskCacheStrategy.DATA)
+                .placeholder(R.drawable.ic_file)
+                .error(R.drawable.ic_file)
+                .signature(new ObjectKey(System.currentTimeMillis()));
+        holder.fileIcon.setImageTintList(null);
+        cancelActiveRetryListener(holder);
+        Glide.with(context.getApplicationContext())
+                .load(new VideoThumbnailUrl(buildThumbnailUrl(item), item.getSize(), item.getModTime()))
+                .apply(glideOption)
+                .into(holder.fileIcon);
     }
 
     private int countThumbnailTargets(@NonNull List<FileItem> items) {

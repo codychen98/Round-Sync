@@ -20,7 +20,11 @@ import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Rclone
 import ca.pkay.rcloneexplorer.util.MediaFolderPolicy
 import ca.pkay.rcloneexplorer.util.MediaFolderPolicyRow
+import ca.pkay.rcloneexplorer.util.MediaFolderPolicyTransitions
+import ca.pkay.rcloneexplorer.util.PolicyType
 import ca.pkay.rcloneexplorer.util.SyncLog
+import ca.pkay.rcloneexplorer.util.TransitionEvent
+import ca.pkay.rcloneexplorer.workmanager.PolicyFolderPrefetchWorker
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
 import es.dmoral.toasty.Toasty
 import io.github.x0b.safdav.file.SafConstants
@@ -202,6 +206,10 @@ class MediaFolderPolicyFragment : Fragment(), MediaFolderPolicyAdapter.Listener 
             "PolicyCrashDbg",
             "event=handleFoldersPicker action=added count=${newRows.size} remote=${remote.name}",
         )
+        dispatchTransitions(
+            ctx,
+            MediaFolderPolicyTransitions.computeTransitions(remote.name, current, updated),
+        )
         refreshRowsFromPreferences()
     }
 
@@ -237,12 +245,41 @@ class MediaFolderPolicyFragment : Fragment(), MediaFolderPolicyAdapter.Listener 
         MediaFolderPolicy.writePolicyRows(editor, remote.name, updated)
         editor.apply()
         SyncLog.info(ctx, "PolicyCrashDbg", "event=handleFolderPicker action=added normalized=$normalized remote=${remote.name}")
+        dispatchTransitions(
+            ctx,
+            MediaFolderPolicyTransitions.computeTransitions(remote.name, current, updated),
+        )
         refreshRowsFromPreferences()
+    }
+
+    private fun dispatchTransitions(ctx: Context, events: List<TransitionEvent>) {
+        for (event in events) {
+            val typeConst = if (event.type == PolicyType.THUMBNAIL) {
+                PolicyFolderPrefetchWorker.TYPE_THUMBNAIL
+            } else {
+                PolicyFolderPrefetchWorker.TYPE_CACHE
+            }
+            if (event.turningOn) {
+                when (event.type) {
+                    PolicyType.THUMBNAIL -> PolicyFolderPrefetchWorker.enqueueThumbnail(
+                        ctx, event.remoteName, event.folderPath,
+                    )
+                    PolicyType.CACHE -> PolicyFolderPrefetchWorker.enqueueCache(
+                        ctx, event.remoteName, event.folderPath,
+                    )
+                }
+            } else {
+                PolicyFolderPrefetchWorker.cancelWork(
+                    ctx, event.remoteName, event.folderPath, typeConst,
+                )
+            }
+        }
     }
 
     override fun onThumbnailToggled(normalizedPath: String, enabled: Boolean) {
         val remote = selectedRemote() ?: return
-        val prefs = PreferenceManager.getDefaultSharedPreferences(requireContext())
+        val ctx = requireContext()
+        val prefs = PreferenceManager.getDefaultSharedPreferences(ctx)
         val current = MediaFolderPolicy.readPolicyRows(prefs, remote.name)
         val updated = current.map { row ->
             if (MediaFolderPolicy.normalizeFolder(row.path) == normalizedPath) {
@@ -254,12 +291,17 @@ class MediaFolderPolicyFragment : Fragment(), MediaFolderPolicyAdapter.Listener 
         val editor = prefs.edit()
         MediaFolderPolicy.writePolicyRows(editor, remote.name, updated)
         editor.apply()
+        dispatchTransitions(
+            ctx,
+            MediaFolderPolicyTransitions.computeTransitions(remote.name, current, updated),
+        )
         refreshRowsFromPreferences()
     }
 
     override fun onCacheToggled(normalizedPath: String, enabled: Boolean) {
         val remote = selectedRemote() ?: return
-        val prefs = PreferenceManager.getDefaultSharedPreferences(requireContext())
+        val ctx = requireContext()
+        val prefs = PreferenceManager.getDefaultSharedPreferences(ctx)
         val current = MediaFolderPolicy.readPolicyRows(prefs, remote.name)
         val updated = current.map { row ->
             if (MediaFolderPolicy.normalizeFolder(row.path) == normalizedPath) {
@@ -271,17 +313,28 @@ class MediaFolderPolicyFragment : Fragment(), MediaFolderPolicyAdapter.Listener 
         val editor = prefs.edit()
         MediaFolderPolicy.writePolicyRows(editor, remote.name, updated)
         editor.apply()
+        dispatchTransitions(
+            ctx,
+            MediaFolderPolicyTransitions.computeTransitions(remote.name, current, updated),
+        )
         refreshRowsFromPreferences()
     }
 
     override fun onRemoveRow(normalizedPath: String) {
         val remote = selectedRemote() ?: return
-        val prefs = PreferenceManager.getDefaultSharedPreferences(requireContext())
-        val updated = MediaFolderPolicy.readPolicyRows(prefs, remote.name)
-            .filter { MediaFolderPolicy.normalizeFolder(it.path) != normalizedPath }
+        val ctx = requireContext()
+        val prefs = PreferenceManager.getDefaultSharedPreferences(ctx)
+        val current = MediaFolderPolicy.readPolicyRows(prefs, remote.name)
+        val updated = current.filter {
+            MediaFolderPolicy.normalizeFolder(it.path) != normalizedPath
+        }
         val editor = prefs.edit()
         MediaFolderPolicy.writePolicyRows(editor, remote.name, updated)
         editor.apply()
+        dispatchTransitions(
+            ctx,
+            MediaFolderPolicyTransitions.computeTransitions(remote.name, current, updated),
+        )
         refreshRowsFromPreferences()
     }
 

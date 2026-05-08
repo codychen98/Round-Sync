@@ -110,6 +110,48 @@ object ThumbnailPrefetchTargets {
         return MediaFolderPolicy.isPathAllowed(listingRemote, remoteName, pathForPolicy, allowed)
     }
 
+    /**
+     * Removes entries whose [BlacklistKey] is present in the failure blacklist.
+     *
+     * Loads the blacklist StringSet once per call for efficiency. The core filtering is delegated
+     * to [filterByBlacklistSet] so it can be exercised in plain-JVM unit tests without
+     * constructing [FileItem] (which carries Android API dependencies).
+     *
+     * @param items      candidates after policy filtering
+     * @param prefs      SharedPreferences that holds [ThumbnailFailureBlacklist.PREF_KEY]
+     * @param remoteName rclone remote name; used as [BlacklistKey.remoteName]
+     */
+    @JvmStatic
+    fun filterOutBlacklisted(
+        items: List<FileItem>,
+        prefs: SharedPreferences,
+        remoteName: String,
+    ): List<FileItem> {
+        val blacklistSet = prefs.getStringSet(ThumbnailFailureBlacklist.PREF_KEY, null)
+            ?: return items
+        return filterByBlacklistSet(items, blacklistSet) { item ->
+            BlacklistKey(
+                remoteName = remoteName,
+                remoteRelativePath = item.path,
+                sizeBytes = item.size,
+                mtimeEpochMs = item.modTime,
+            )
+        }
+    }
+
+    /**
+     * Generic filter that removes items whose [BlacklistKey] encoding appears in [blacklistSet].
+     * Exposed internally so tests can drive it with simple synthetic keys instead of [FileItem].
+     */
+    internal fun <T> filterByBlacklistSet(
+        items: List<T>,
+        blacklistSet: Set<String>,
+        keyOf: (T) -> BlacklistKey,
+    ): List<T> {
+        if (blacklistSet.isEmpty()) return items
+        return items.filter { item -> !blacklistSet.contains(keyOf(item).encode()) }
+    }
+
     @JvmStatic
     fun buildThumbnailHttpUrl(hiddenPath: String, serverPort: Int, item: FileItem): String {
         return buildThumbnailHttpUrl(hiddenPath, serverPort, item.path)

@@ -26,14 +26,26 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import android.content.SharedPreferences;
+
+import androidx.preference.PreferenceManager;
+
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
+import ca.pkay.rcloneexplorer.util.BlacklistKey;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.SyncLog;
+import ca.pkay.rcloneexplorer.util.ThumbnailFailureBlacklist;
 
 public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
 
     private static final String TAG = "VideoThumbnailFetcher";
     private static final ExecutorService VIDEO_POOL = Executors.newFixedThreadPool(2);
+    /**
+     * When true, a terminal failure (MMR + Exo both return no frame, and not cancelled) writes a
+     * marker to {@link ThumbnailFailureBlacklist}. B2 (Step 5) will extend this to also cover its
+     * own failure path before the mark is written, reusing the same method.
+     */
+    private static final boolean BLACKLIST_ON_FETCH_FAIL = true;
     /** Limits sync.log spam when many parallel loads fail for the same URL. */
     private static final int MAX_FAILURE_LOG_URLS = 512;
     private static final Set<String> loggedSyncFailureUrls =
@@ -47,13 +59,23 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
     private static final int MAX_THUMB_PIPE_LOGS = 2500;
 
     private final String url;
+    private final long fileSize;
+    private final long fileMtime;
     private final Context appContext;
     private volatile boolean cancelled;
     private volatile Future<?> pendingTask;
 
-    public VideoThumbnailFetcher(@NonNull String url, @NonNull Context appContext) {
+    /** Full constructor: file metadata is carried directly, avoiding sidecar lookup failures. */
+    public VideoThumbnailFetcher(@NonNull String url, long fileSize, long fileMtime, @NonNull Context appContext) {
         this.url = url;
+        this.fileSize = fileSize;
+        this.fileMtime = fileMtime;
         this.appContext = appContext;
+    }
+
+    /** Backwards-compatible 2-arg constructor; metadata defaults to 0 (unknown). */
+    public VideoThumbnailFetcher(@NonNull String url, @NonNull Context appContext) {
+        this(url, 0L, 0L, appContext);
     }
 
     /**
@@ -84,6 +106,33 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
             return "";
         }
         return msg.replace('\n', ' ').replace('\r', ' ');
+    }
+
+    /**
+     * Writes a {@link ThumbnailFailureBlacklist} marker after all extraction strategies have been
+     * exhausted and the fetch was not cancelled by the user scrolling away.
+     *
+     * Derives remoteName and remoteRelativePath from the URL's stable path segment
+     * (shape: {@code /<remoteName>/<remoteRelativePath>}).
+     * File metadata comes from the instance fields set at construction time by
+     * {@link VideoThumbnailLoader}, which reads them from the {@link VideoThumbnailUrl} model.
+     * This avoids the static sidecar map whose capacity and zero-value guards can cause metadata
+     * to be missing at the call site.
+     */
+    private void blacklistTerminalFailure(@NonNull String thumbUrl) {
+        String stablePath = VideoThumbnailUrl.stablePathFor(thumbUrl);
+        if (stablePath.length() < 2) {
+            return;
+        }
+        String noLeadSlash = stablePath.startsWith("/") ? stablePath.substring(1) : stablePath;
+        int slashIdx = noLeadSlash.indexOf('/');
+        String remoteName = slashIdx > 0 ? noLeadSlash.substring(0, slashIdx) : noLeadSlash;
+        String remotePath = slashIdx > 0 ? noLeadSlash.substring(slashIdx + 1) : "";
+        BlacklistKey key = new BlacklistKey(remoteName, remotePath, fileSize, fileMtime);
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(appContext);
+        ThumbnailFailureBlacklist.mark(prefs, key);
+        logThumbPipe(appContext, "blacklistMark",
+                "basename=" + basenameForThumbUrl(thumbUrl) + " remote=" + remoteName);
     }
 
     @Override
@@ -142,7 +191,23 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                         logThumbPipe(appContext, "exoSkip",
                                 "basename=" + base + " reason=cancelledBeforeExo " + mgrDebugSuffix());
                     }
+                    // B2 sparse-local fallback: download HEAD + TAIL byte ranges and run MMR locally.
+                    // Handles non-progressive containers (e.g. MKV with cues at end-of-file) that
+                    // defeat MMR-over-HTTP and ExoPlayer within their prepare budgets.
+                    if (frame == null && !cancelled) {
+                        long tB2 = SystemClock.elapsedRealtime();
+                        frame = SparseLocalThumbnailExtractor.tryExtract(
+                                appContext, url, fileSize, VideoThumbnailFetcher.this,
+                                SparseLocalThumbnailExtractor.buildHandoffSink(appContext, url));
+                        logThumbPipe(appContext, "b2End",
+                                "basename=" + base + " result=" + (frame != null ? "frame" : "null")
+                                        + " cancelled=" + cancelled + " b2Ms="
+                                        + (SystemClock.elapsedRealtime() - tB2) + " " + mgrDebugSuffix());
+                    }
                     if (frame == null) {
+                        if (BLACKLIST_ON_FETCH_FAIL && !cancelled) {
+                            blacklistTerminalFailure(url);
+                        }
                         logThumbnailSyncFailureOnce(
                                 "event=videoFetchFail reason=noFrame "
                                         + debugSuffix

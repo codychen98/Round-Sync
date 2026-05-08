@@ -30,8 +30,9 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Services.StreamingService
-import ca.pkay.rcloneexplorer.util.SyncLog
+import ca.pkay.rcloneexplorer.util.RemotePathCacheKeyFactory
 import ca.pkay.rcloneexplorer.util.SelectedFolderSimpleCacheProvider
+import ca.pkay.rcloneexplorer.util.SyncLog
 import java.io.IOException
 
 class VideoPlayerActivity : AppCompatActivity() {
@@ -149,8 +150,11 @@ class VideoPlayerActivity : AppCompatActivity() {
             .setUserAgent(Util.getUserAgent(this, packageName ?: "RoundSync"))
 
         val cacheDataSourceFactory = if (simpleCache != null) {
+            // RemotePathCacheKeyFactory must be used here so that cached bytes written by
+            // SparseLocalThumbnailExtractor (Step 7) and playback share the same stable key space.
             CacheDataSource.Factory()
                 .setCache(simpleCache)
+                .setCacheKeyFactory(SelectedFolderSimpleCacheProvider.keyFactory())
                 .setUpstreamDataSourceFactory(upstreamFactory)
                 .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
         } else {

@@ -34,10 +34,16 @@ public class ThumbnailServerService extends android.app.Service {
 
     private static final String TAG = "ThumbnailServerService";
 
-    public static final String ACTION_START           = "ca.pkay.rcexplorer.ThumbnailServerService.ACTION_START";
-    public static final String ACTION_STOP            = "ca.pkay.rcexplorer.ThumbnailServerService.ACTION_STOP";
-    public static final String ACTION_UPDATE_PROGRESS = "ca.pkay.rcexplorer.ThumbnailServerService.ACTION_UPDATE_PROGRESS";
-    public static final String ACTION_CLEAR_PROGRESS  = "ca.pkay.rcexplorer.ThumbnailServerService.ACTION_CLEAR_PROGRESS";
+    public static final String ACTION_START            = "ca.pkay.rcexplorer.ThumbnailServerService.ACTION_START";
+    public static final String ACTION_STOP             = "ca.pkay.rcexplorer.ThumbnailServerService.ACTION_STOP";
+    public static final String ACTION_UPDATE_PROGRESS  = "ca.pkay.rcexplorer.ThumbnailServerService.ACTION_UPDATE_PROGRESS";
+    public static final String ACTION_CLEAR_PROGRESS   = "ca.pkay.rcexplorer.ThumbnailServerService.ACTION_CLEAR_PROGRESS";
+    /**
+     * Silently seeds {@link #lastThumbLoaded} and {@link #lastThumbTotal} without redrawing the
+     * notification. Called by the prefetch worker before its first {@link #ACTION_UPDATE_PROGRESS}
+     * so the service fields are primed with the explorer's last-known counts.
+     */
+    public static final String ACTION_ACCEPT_BASELINE  = "ca.pkay.rcexplorer.ThumbnailServerService.ACTION_ACCEPT_BASELINE";
 
     public static final String EXTRA_REMOTE = "ca.pkay.rcexplorer.ThumbnailServerService.EXTRA_REMOTE";
     public static final String EXTRA_PORT   = "ca.pkay.rcexplorer.ThumbnailServerService.EXTRA_PORT";
@@ -175,6 +181,20 @@ public class ThumbnailServerService extends android.app.Service {
         context.startService(intent);
     }
 
+    /**
+     * Seeds the service's thumbnail progress counters with the explorer's last-known values
+     * without triggering a notification redraw. The prefetch worker calls this immediately after
+     * the thumbnail server becomes ready, before its first per-item {@link #updateProgress} call,
+     * so that the two progress streams stay monotonic.
+     */
+    public static void acceptBaseline(Context context, int loaded, int total) {
+        Intent intent = new Intent(context, ThumbnailServerService.class);
+        intent.setAction(ACTION_ACCEPT_BASELINE);
+        intent.putExtra(EXTRA_LOADED, loaded);
+        intent.putExtra(EXTRA_TOTAL, total);
+        context.startService(intent);
+    }
+
     // endregion
 
     // region — Service lifecycle
@@ -210,6 +230,10 @@ public class ThumbnailServerService extends android.app.Service {
             handleUpdateProgress(folder, loaded, total, cacheLoaded, cacheTotal);
         } else if (ACTION_CLEAR_PROGRESS.equals(action)) {
             handleClearProgress();
+        } else if (ACTION_ACCEPT_BASELINE.equals(action)) {
+            int loaded = intent.getIntExtra(EXTRA_LOADED, 0);
+            int total  = intent.getIntExtra(EXTRA_TOTAL,  0);
+            handleAcceptBaseline(loaded, total);
         }
         return START_STICKY;
     }
@@ -336,6 +360,18 @@ public class ThumbnailServerService extends android.app.Service {
         boolean cacheWork = lastCacheTotal > 0 && lastCacheLoaded < lastCacheTotal;
         BackgroundMediaPrepWorkTracker.setCacheWorkInProgress(cacheWork);
         applyMediaPrepForegroundState();
+    }
+
+    /**
+     * Silently primes {@link #lastThumbLoaded} and {@link #lastThumbTotal} with the explorer's
+     * last-known counts. Does NOT call {@link #applyMediaPrepForegroundState()} — the caller's
+     * next {@link #ACTION_UPDATE_PROGRESS} intent will trigger the first visible redraw.
+     */
+    private void handleAcceptBaseline(int loaded, int total) {
+        lastThumbLoaded = loaded;
+        lastThumbTotal  = total;
+        SyncLog.info(this, "MediaPrepDbg",
+            "event=serviceAcceptBaseline loaded=" + loaded + " total=" + total);
     }
 
     // endregion

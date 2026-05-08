@@ -2,6 +2,7 @@ package ca.pkay.rcloneexplorer.util
 
 import android.content.Context
 import androidx.media3.database.StandaloneDatabaseProvider
+import androidx.media3.datasource.cache.CacheKeyFactory
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.preference.PreferenceManager
@@ -15,6 +16,16 @@ object SelectedFolderSimpleCacheProvider {
 
     @Volatile
     private var cache: SimpleCache? = null
+
+    /**
+     * Returns the [CacheKeyFactory] that MUST be used whenever this cache is read or written.
+     * Using [CacheKeyFactory.DEFAULT] alongside this cache would make cached bytes inaccessible
+     * to any component that goes through this accessor.
+     *
+     * Pre-existing cache entries keyed by full URL (written before [RemotePathCacheKeyFactory] was
+     * introduced) will be ignored and evicted naturally by the LRU evictor over time.
+     */
+    fun keyFactory(): CacheKeyFactory = RemotePathCacheKeyFactory
 
     @Synchronized
     fun getOrNull(context: Context): SimpleCache? {

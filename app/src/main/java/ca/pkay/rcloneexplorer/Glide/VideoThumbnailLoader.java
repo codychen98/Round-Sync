@@ -28,7 +28,7 @@ public class VideoThumbnailLoader implements ModelLoader<VideoThumbnailUrl, Inpu
                                                 @NonNull Options options) {
         return new LoadData<>(
                 new ObjectKey(model.getStablePath()),
-                new VideoThumbnailFetcher(model.getUrl(), appContext)
+                new VideoThumbnailFetcher(model.getUrl(), model.getSizeBytes(), model.getMtimeEpochMs(), appContext)
         );
     }
 

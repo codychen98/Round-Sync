@@ -647,6 +647,12 @@
     <string name="app_update_title">Updates</string>
     <string name="preference_dialog_filesize_label">Filesize</string>
     <string name="preference_category_header_thumbnails">Thumbnails</string>
+    <string name="pref_clear_thumbnail_cache_title">Clear thumbnail cache</string>
+    <string name="pref_clear_thumbnail_cache_summary">Remove on-device cached thumbnails. Thumbnails will reload on next folder visit. Also clears the failure list for previously un-loadable thumbnails.</string>
+    <string name="clear_thumbnail_cache_dialog_title">Clear thumbnail cache?</string>
+    <string name="clear_thumbnail_cache_dialog_message">This deletes all cached thumbnails from persistent storage. They will be re-fetched the next time you browse each folder.</string>
+    <string name="clear_thumbnail_cache_done">Thumbnail cache cleared</string>
+    <string name="retry_thumbnail">Retry thumbnail</string>
     <string name="preference_category_header_selected_folder_media_cache">Selected-folder media cache</string>
     <string name="preference_category_header_proxy">Proxy</string>
     <string name="preference_category_header_background_work">Background Work</string>

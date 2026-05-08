@@ -18,6 +18,7 @@ import ca.pkay.rcloneexplorer.Items.RemoteItem
 import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Rclone
 import ca.pkay.rcloneexplorer.util.FLog
+import ca.pkay.rcloneexplorer.util.GlideThumbnailCacheClearance
 import ca.pkay.rcloneexplorer.util.SelectedFolderMediaCacheClearance
 import de.felixnuesse.extract.extensions.TAG
 import de.felixnuesse.extract.settings.language.LanguagePicker
@@ -77,6 +78,19 @@ class GeneralPreferencesFragment : PreferenceFragmentCompat() {
             true
         }
 
+        val clearThumbnailCachePreference = findPreference("clearThumbnailCacheKey") as Preference?
+        clearThumbnailCachePreference?.setOnPreferenceClickListener {
+            AlertDialog.Builder(requireContext())
+                .setTitle(R.string.clear_thumbnail_cache_dialog_title)
+                .setMessage(R.string.clear_thumbnail_cache_dialog_message)
+                .setNegativeButton(R.string.cancel, null)
+                .setPositiveButton(R.string.ok) { _: DialogInterface, _: Int ->
+                    runThumbnailCacheClear()
+                }
+                .show()
+            true
+        }
+
     }
 
     private fun runSelectedFolderMediaCacheClear() {
@@ -111,6 +125,21 @@ class GeneralPreferencesFragment : PreferenceFragmentCompat() {
                 }
             }
         }.start()
+    }
+
+    private fun runThumbnailCacheClear() {
+        val activity = requireActivity()
+        GlideThumbnailCacheClearance.clearAsync(requireContext()) {
+            if (!isAdded) {
+                return@clearAsync
+            }
+            Toasty.success(
+                activity,
+                getString(R.string.clear_thumbnail_cache_done),
+                Toast.LENGTH_SHORT,
+                true,
+            ).show()
+        }
     }
 
     private fun showThumbnailSizeDialog(preference: Preference) {
