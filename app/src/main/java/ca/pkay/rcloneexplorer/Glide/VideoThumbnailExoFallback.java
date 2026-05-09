@@ -27,6 +27,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.util.FLog;
 
 /**
@@ -115,10 +116,10 @@ final class VideoThumbnailExoFallback {
     @Nullable
     static Bitmap tryGrabFirstFrame(
             @NonNull Context appContext,
-            @NonNull String url,
+            @NonNull String stablePath,
             long durationMs,
             @NonNull VideoThumbnailFetcher owner) {
-        final String base = VideoThumbnailFetcher.basenameForThumbUrl(url);
+        final String base = stablePath.substring(stablePath.lastIndexOf('/') + 1);
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
             VideoThumbnailFetcher.logThumbPipe(appContext, "exoSkip",
                     "basename=" + base + " reason=apiLtN");
@@ -140,7 +141,7 @@ final class VideoThumbnailExoFallback {
         AtomicReference<String> errorMsg = new AtomicReference<>();
         exoH.post(() -> {
             try {
-                result.set(grabOnExoLooper(appContext, url, durationMs, owner));
+                result.set(grabOnExoLooper(appContext, stablePath, durationMs, owner));
             } catch (Exception e) {
                 errorMsg.set(e.getMessage());
                 FLog.w(TAG, "Exo thumbnail fallback failed: %s", e.getMessage());
@@ -172,10 +173,40 @@ final class VideoThumbnailExoFallback {
     @Nullable
     private static Bitmap grabOnExoLooper(
             @NonNull Context appContext,
-            @NonNull String url,
+            @NonNull String stablePath,
             long durationMs,
             @NonNull VideoThumbnailFetcher owner) throws Exception {
-        final String base = VideoThumbnailFetcher.basenameForThumbUrl(url);
+        final String base = stablePath.substring(stablePath.lastIndexOf('/') + 1);
+
+        // Resolve the live base URL before constructing MediaItem. One resolution at prepare time
+        // is sufficient — ProgressiveMediaSource holds the connection open through prepare, and
+        // OkHttpDataSource's own retry handles any mid-prepare TCP blip.
+        ThumbnailServerManager mgr = ThumbnailServerManager.getInstance();
+        String baseUrl = mgr.getCurrentBaseUrlOrNull();
+        if (baseUrl == null) {
+            if (!mgr.awaitReady(3000L)) {
+                VideoThumbnailFetcher.logThumbPipe(appContext, "exoSkip",
+                        "basename=" + base + " reason=mgrNotReady");
+                return null;
+            }
+            baseUrl = mgr.getCurrentBaseUrlOrNull();
+            if (baseUrl == null) return null;
+        }
+        String resolvedUrl = baseUrl + stablePath;
+        String resolvedPath = Uri.parse(resolvedUrl).getPath();
+        String auth6 = "?";
+        if (resolvedPath != null && resolvedPath.length() > 1) {
+            String noSlash = resolvedPath.substring(1);
+            int slashIdx = noSlash.indexOf('/');
+            String auth = slashIdx > 0 ? noSlash.substring(0, slashIdx) : noSlash;
+            auth6 = auth.length() >= 6 ? auth.substring(0, 6) : auth;
+        }
+        VideoThumbnailFetcher.logThumbPipe(appContext, "exoResolve",
+                "basename=" + base
+                        + " resolvedPort=" + Uri.parse(resolvedUrl).getPort()
+                        + " resolvedAuth6=" + auth6
+                        + " stable=" + stablePath);
+
         ExoPlayer player = null;
         ImageReader reader = null;
         try {
@@ -193,11 +224,11 @@ final class VideoThumbnailExoFallback {
                     .setUserAgent(Util.getUserAgent(appContext, appContext.getPackageName()));
             ProgressiveMediaSource.Factory progressiveFactory =
                     new ProgressiveMediaSource.Factory(httpFactory);
-            MediaItem item = MediaItem.fromUri(url);
+            MediaItem item = MediaItem.fromUri(resolvedUrl);
             player.setMediaSource(progressiveFactory.createMediaSource(item));
             VideoThumbnailFetcher.logThumbPipe(appContext, "exoPrepareStart",
                     "basename=" + base + " durationMs=" + durationMs + " "
-                            + thumbUrlForSyncLog(url)
+                            + thumbUrlForSyncLog(resolvedUrl)
                             + " httpEngine=OkHttpDataSource ProgressiveMediaSource"
                             + " extensionRendererMode=on");
             player.prepare();

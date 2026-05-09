@@ -104,6 +104,38 @@ public class ThumbnailServerManager {
         return generation;
     }
 
+    /**
+     * Returns the current base URL ({@code http://127.0.0.1:<port>/<auth>}) snapshot, or null if
+     * the server is not READY. Synchronized read so port + auth are observed atomically.
+     */
+    public synchronized String getCurrentBaseUrlOrNull() {
+        if (currentState != ServerState.READY || currentAuth == null || currentPort <= 0) {
+            return null;
+        }
+        return "http://127.0.0.1:" + currentPort + "/" + currentAuth;
+    }
+
+    /**
+     * Polls {@link #currentState} every 100 ms up to {@code timeoutMs}, returning true once READY.
+     * Must be called off the main thread. Returns false on timeout or interrupt.
+     */
+    public boolean awaitReady(long timeoutMs) {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            synchronized (this) {
+                if (currentState == ServerState.READY) return true;
+                if (currentState == ServerState.FAILED) return false;
+            }
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false;
+    }
+
     private boolean matchesCurrentParams(RemoteItem remote, int port, String auth) {
         if (remote == null || currentRemote == null || auth == null || currentAuth == null) {
             return false;

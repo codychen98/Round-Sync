@@ -80,6 +80,7 @@ import ca.pkay.rcloneexplorer.Services.TriggerService;
 import ca.pkay.rcloneexplorer.util.ActivityHelper;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.PermissionManager;
+import ca.pkay.rcloneexplorer.util.BlacklistMigrationV2;
 import ca.pkay.rcloneexplorer.util.PolicyPrefetchMigrationV1;
 import ca.pkay.rcloneexplorer.util.SharedPreferencesUtil;
 import ca.pkay.rcloneexplorer.util.SyncLog;
@@ -221,6 +222,7 @@ public class MainActivity extends AppCompatActivity
         triggerService.queueTrigger();
 
         PolicyPrefetchMigrationV1.runIfNeeded(getApplicationContext());
+        BlacklistMigrationV2.runIfNeeded(getApplicationContext());
 
         (new UpdateChecker(this)).schedule();
     }

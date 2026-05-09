@@ -41,11 +41,17 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
     private static final String TAG = "VideoThumbnailFetcher";
     private static final ExecutorService VIDEO_POOL = Executors.newFixedThreadPool(2);
     /**
-     * When true, a terminal failure (MMR + Exo both return no frame, and not cancelled) writes a
-     * marker to {@link ThumbnailFailureBlacklist}. B2 (Step 5) will extend this to also cover its
-     * own failure path before the mark is written, reusing the same method.
+     * Legacy gate — kept for diff-readability. Effectively disabled: the active check is
+     * {@link #BLACKLIST_ON_FETCH_FAIL_V2}, which is {@code false} until Step 19.
      */
     private static final boolean BLACKLIST_ON_FETCH_FAIL = true;
+    /**
+     * V2 gate: blacklist only when {@link SparseLocalThumbnailExtractor.B2Result#BYTES_OK_NO_FRAME}
+     * is observed — the only outcome that genuinely means the container is unsupported.
+     * Default {@code false} so that the URL-staleness fix (Step 14) can be validated without any
+     * new blacklist writes. Flip to {@code true} in Step 19 after one telemetry cycle.
+     */
+    private static final boolean BLACKLIST_ON_FETCH_FAIL_V2 = false;
     /** Limits sync.log spam when many parallel loads fail for the same URL. */
     private static final int MAX_FAILURE_LOG_URLS = 512;
     private static final Set<String> loggedSyncFailureUrls =
@@ -59,6 +65,8 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
     private static final int MAX_THUMB_PIPE_LOGS = 2500;
 
     private final String url;
+    /** Auth-stripped stable path derived from {@code url}; reused by OkHttpMediaDataSource (Step 17) and Exo (Step 18). */
+    final String stablePath;
     private final long fileSize;
     private final long fileMtime;
     private final Context appContext;
@@ -68,6 +76,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
     /** Full constructor: file metadata is carried directly, avoiding sidecar lookup failures. */
     public VideoThumbnailFetcher(@NonNull String url, long fileSize, long fileMtime, @NonNull Context appContext) {
         this.url = url;
+        this.stablePath = VideoThumbnailUrl.stablePathFor(url);
         this.fileSize = fileSize;
         this.fileMtime = fileMtime;
         this.appContext = appContext;
@@ -155,7 +164,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
             final String base = basenameForThumbUrl(url);
             logThumbPipe(appContext, "fetcherStart", "basename=" + base + " " + mgrDebugSuffix());
             MediaMetadataRetriever mmr = new MediaMetadataRetriever();
-            OkHttpMediaDataSource dataSource = new OkHttpMediaDataSource(url, appContext);
+            OkHttpMediaDataSource dataSource = new OkHttpMediaDataSource(stablePath, appContext);
             boolean mmrReleased = false;
             boolean dataSourceClosed = false;
             try {
@@ -182,7 +191,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                     if (!cancelled) {
                         long tExo = SystemClock.elapsedRealtime();
                         frame = VideoThumbnailExoFallback.tryGrabFirstFrame(
-                                appContext, url, durationMs, VideoThumbnailFetcher.this);
+                                appContext, stablePath, durationMs, VideoThumbnailFetcher.this);
                         long exoMs = SystemClock.elapsedRealtime() - tExo;
                         logThumbPipe(appContext, "exoEnd",
                                 "basename=" + base + " result=" + (frame != null ? "frame" : "null")
@@ -194,18 +203,23 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                     // B2 sparse-local fallback: download HEAD + TAIL byte ranges and run MMR locally.
                     // Handles non-progressive containers (e.g. MKV with cues at end-of-file) that
                     // defeat MMR-over-HTTP and ExoPlayer within their prepare budgets.
+                    SparseLocalThumbnailExtractor.B2Outcome b2 = null;
                     if (frame == null && !cancelled) {
                         long tB2 = SystemClock.elapsedRealtime();
-                        frame = SparseLocalThumbnailExtractor.tryExtract(
+                        b2 = SparseLocalThumbnailExtractor.tryExtract(
                                 appContext, url, fileSize, VideoThumbnailFetcher.this,
                                 SparseLocalThumbnailExtractor.buildHandoffSink(appContext, url));
+                        frame = b2.getBitmap();
                         logThumbPipe(appContext, "b2End",
-                                "basename=" + base + " result=" + (frame != null ? "frame" : "null")
+                                "basename=" + base + " result=" + b2.getResult()
+                                        + " hasFrame=" + (frame != null)
                                         + " cancelled=" + cancelled + " b2Ms="
                                         + (SystemClock.elapsedRealtime() - tB2) + " " + mgrDebugSuffix());
                     }
                     if (frame == null) {
-                        if (BLACKLIST_ON_FETCH_FAIL && !cancelled) {
+                        boolean genuineUnsupported = b2 != null
+                                && b2.getResult() == SparseLocalThumbnailExtractor.B2Result.BYTES_OK_NO_FRAME;
+                        if (BLACKLIST_ON_FETCH_FAIL_V2 && genuineUnsupported && !cancelled) {
                             blacklistTerminalFailure(url);
                         }
                         logThumbnailSyncFailureOnce(
