@@ -52,6 +52,15 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
      * new blacklist writes. Flip to {@code true} in Step 19 after one telemetry cycle.
      */
     private static final boolean BLACKLIST_ON_FETCH_FAIL_V2 = false;
+    /**
+     * Files at or above this size try {@link SparseLocalThumbnailExtractor} first, before MMR-over-HTTP.
+     * Rationale: MMR's {@code setDataSource} performs many sequential range reads to parse
+     * non-progressive containers (e.g. MKV with cues at end-of-file), which can exceed Glide's
+     * typical ImageView-bind lifetime when many items are visible. Cancellation during that phase
+     * prevents the post-MMR B2 fallback from ever running. For large files we skip directly to
+     * B2, which downloads HEAD (24 MiB) + TAIL (8 MiB) and runs MMR on the local file.
+     */
+    private static final long LARGE_VIDEO_THRESHOLD_BYTES = 500L * 1024L * 1024L;
     /** Limits sync.log spam when many parallel loads fail for the same URL. */
     private static final int MAX_FAILURE_LOG_URLS = 512;
     private static final Set<String> loggedSyncFailureUrls =
@@ -128,6 +137,33 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
      * This avoids the static sidecar map whose capacity and zero-value guards can cause metadata
      * to be missing at the call site.
      */
+    /**
+     * For files at or above {@link #LARGE_VIDEO_THRESHOLD_BYTES}, runs B2 sparse-local extraction
+     * directly before MMR-over-HTTP. The returned {@link SparseLocalThumbnailExtractor.B2Outcome}
+     * is stored via the {@code outResult} single-element array so the post-MMR block can reuse
+     * it (and skip a duplicate B2 run) regardless of whether B2 produced a frame here.
+     *
+     * Returns the extracted bitmap, or {@code null} when B2 did not produce a frame (caller
+     * either falls through to MMR/Exo, or reports cancel if {@link #cancelled} is set).
+     */
+    @Nullable
+    private Bitmap tryB2First(@NonNull String base,
+                              @NonNull SparseLocalThumbnailExtractor.B2Outcome[] outResult) {
+        long tB2 = SystemClock.elapsedRealtime();
+        SparseLocalThumbnailExtractor.B2Outcome b2 = SparseLocalThumbnailExtractor.tryExtract(
+                appContext, url, fileSize, VideoThumbnailFetcher.this,
+                SparseLocalThumbnailExtractor.buildHandoffSink(appContext, url));
+        outResult[0] = b2;
+        Bitmap frame = b2.getBitmap();
+        logThumbPipe(appContext, "b2FirstEnd",
+                "basename=" + base + " result=" + b2.getResult()
+                        + " hasFrame=" + (frame != null)
+                        + " cancelled=" + cancelled
+                        + " b2Ms=" + (SystemClock.elapsedRealtime() - tB2)
+                        + " " + mgrDebugSuffix());
+        return frame;
+    }
+
     private void blacklistTerminalFailure(@NonNull String thumbUrl) {
         String stablePath = VideoThumbnailUrl.stablePathFor(thumbUrl);
         if (stablePath.length() < 2) {
@@ -163,6 +199,34 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
             final long t0 = SystemClock.elapsedRealtime();
             final String base = basenameForThumbUrl(url);
             logThumbPipe(appContext, "fetcherStart", "basename=" + base + " " + mgrDebugSuffix());
+
+            // Large-file fast path: skip MMR-over-HTTP and go directly to B2 sparse-local.
+            // See LARGE_VIDEO_THRESHOLD_BYTES Javadoc for rationale. b2FirstHolder threads the
+            // outcome to the post-MMR block so we never run B2 twice for the same fetch.
+            SparseLocalThumbnailExtractor.B2Outcome[] b2FirstHolder = { null };
+            boolean useB2First = fileSize >= LARGE_VIDEO_THRESHOLD_BYTES;
+            if (useB2First) {
+                logThumbPipe(appContext, "b2FirstStart",
+                        "basename=" + base + " fileSize=" + fileSize + " " + mgrDebugSuffix());
+                Bitmap b2Frame = tryB2First(base, b2FirstHolder);
+                if (b2Frame != null) {
+                    ByteArrayOutputStream baos = new ByteArrayOutputStream(64 * 1024);
+                    b2Frame.compress(Bitmap.CompressFormat.JPEG, 75, baos);
+                    b2Frame.recycle();
+                    logThumbPipe(appContext, "decodeOk",
+                            "basename=" + base + " path=b2First totalMs="
+                                    + (SystemClock.elapsedRealtime() - t0) + " " + mgrDebugSuffix());
+                    callback.onDataReady(new ByteArrayInputStream(baos.toByteArray()));
+                    return;
+                }
+                if (cancelled) {
+                    logThumbPipe(appContext, "fetcherEarlyCancel",
+                            "basename=" + base + " when=postB2First " + mgrDebugSuffix());
+                    callback.onLoadFailed(new RuntimeException("Cancelled"));
+                    return;
+                }
+            }
+
             MediaMetadataRetriever mmr = new MediaMetadataRetriever();
             OkHttpMediaDataSource dataSource = new OkHttpMediaDataSource(stablePath, appContext);
             boolean mmrReleased = false;
@@ -203,8 +267,10 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                     // B2 sparse-local fallback: download HEAD + TAIL byte ranges and run MMR locally.
                     // Handles non-progressive containers (e.g. MKV with cues at end-of-file) that
                     // defeat MMR-over-HTTP and ExoPlayer within their prepare budgets.
-                    SparseLocalThumbnailExtractor.B2Outcome b2 = null;
-                    if (frame == null && !cancelled) {
+                    // If the large-file fast path already ran B2 (b2FirstHolder[0] != null), reuse
+                    // that outcome instead of running B2 a second time.
+                    SparseLocalThumbnailExtractor.B2Outcome b2 = b2FirstHolder[0];
+                    if (frame == null && !cancelled && b2 == null) {
                         long tB2 = SystemClock.elapsedRealtime();
                         b2 = SparseLocalThumbnailExtractor.tryExtract(
                                 appContext, url, fileSize, VideoThumbnailFetcher.this,
