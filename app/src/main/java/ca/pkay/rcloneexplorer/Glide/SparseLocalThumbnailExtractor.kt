@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Build
 import androidx.media3.datasource.DataSpec
 import androidx.preference.PreferenceManager
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager
@@ -16,6 +17,7 @@ import okhttp3.Request
 import java.io.File
 import java.io.RandomAccessFile
 import java.security.MessageDigest
+import java.util.LinkedHashSet
 import java.util.concurrent.Semaphore
 
 /**
@@ -378,26 +380,160 @@ internal object SparseLocalThumbnailExtractor {
     }
 
     /**
-     * Probes early timestamps only, since only HEAD_BYTES worth of video data is
-     * present in the sparse file. The container header in the first bytes is
-     * sufficient for MMR to parse metadata and decode early keyframes.
+     * Upper bound on timeline position (microseconds) likely decodable from [HEAD_BYTES] alone.
+     * Beyond this, keyframes may reference packet data not present in the sparse file.
+     */
+    private const val LOCAL_HEAD_PROBE_MAX_US = 9_000_000L
+
+    /** Matches [VideoThumbnailFetcher.BrightestSoFar] threshold — skip fade-from-black opening frames. */
+    private const val LOCAL_BRIGHT_THRESHOLD = 30.0
+
+    /**
+     * Probe times for sparse local MMR: early timeline inside the HEAD window, plus positions near
+     * file end (decodable from [TAIL_BYTES]). Mirrors [VideoThumbnailFetcher.extractNonBlackFrame]
+     * brightness selection but avoids mid-file seeks that would hit sparse holes.
+     */
+    private fun buildLocalSparseProbeTimesUs(durationUs: Long): LongArray {
+        val ordered = LinkedHashSet<Long>()
+        longArrayOf(
+            0L, 500_000L, 1_000_000L, 2_000_000L, 3_000_000L, 4_000_000L,
+            5_000_000L, 6_000_000L, 7_000_000L, 8_000_000L, 9_000_000L,
+        ).forEach { t ->
+            if (t <= LOCAL_HEAD_PROBE_MAX_US) ordered.add(t)
+        }
+        if (durationUs > 0) {
+            ordered.add(clampLocalProbeUs(durationUs - 500_000L, durationUs))
+            ordered.add(clampLocalProbeUs(durationUs - 1_500_000L, durationUs))
+            ordered.add(clampLocalProbeUs(durationUs - 3_000_000L, durationUs))
+            if (durationUs > 8_000_000L) {
+                ordered.add(clampLocalProbeUs(durationUs - 6_000_000L, durationUs))
+            }
+        }
+        return ordered.toLongArray()
+    }
+
+    private fun clampLocalProbeUs(timeUs: Long, durationUs: Long): Long = when {
+        timeUs < 0L -> 0L
+        durationUs > 0L && timeUs > durationUs -> durationUs
+        else -> timeUs
+    }
+
+    private fun retrieveLocalFrameAtTime(mmr: MediaMetadataRetriever, timeUs: Long, option: Int): Bitmap? {
+        var frame = try { mmr.getFrameAtTime(timeUs, option) } catch (_: Exception) { null }
+        if (frame == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            frame = try {
+                mmr.getScaledFrameAtTime(timeUs, option, 384, 216)
+            } catch (_: RuntimeException) {
+                null
+            }
+        }
+        return frame
+    }
+
+    /**
+     * Same 8x8 sampling strategy as [VideoThumbnailFetcher.averageBrightness].
+     */
+    private fun averageBrightnessLocal(bitmap: Bitmap): Double {
+        val sampleSize = 8
+        val w = bitmap.width
+        val h = bitmap.height
+        var totalBrightness = 0L
+        var samples = 0
+        for (x in 0 until sampleSize) {
+            for (y in 0 until sampleSize) {
+                val px = w * x / sampleSize
+                val py = h * y / sampleSize
+                val pixel = bitmap.getPixel(px, py)
+                val r = (pixel shr 16) and 0xFF
+                val g = (pixel shr 8) and 0xFF
+                val b = pixel and 0xFF
+                totalBrightness += (r + g + b)
+                samples++
+            }
+        }
+        return totalBrightness.toDouble() / (samples * 3)
+    }
+
+    private inner class BrightestSoFarLocal {
+        private var frame: Bitmap? = null
+        private var score = -1.0
+
+        fun consider(candidate: Bitmap) {
+            val brightness = averageBrightnessLocal(candidate)
+            when {
+                brightness >= LOCAL_BRIGHT_THRESHOLD -> {
+                    frame?.recycle()
+                    frame = candidate
+                    score = brightness
+                }
+                brightness > score -> {
+                    frame?.recycle()
+                    frame = candidate
+                    score = brightness
+                }
+                else -> candidate.recycle()
+            }
+        }
+
+        fun isBrightEnough(): Boolean = frame != null && score >= LOCAL_BRIGHT_THRESHOLD
+
+        /** Returns the chosen bitmap and clears internal state; caller owns the bitmap. */
+        fun consume(): Bitmap? {
+            val out = frame
+            frame = null
+            score = -1.0
+            return out
+        }
+    }
+
+    /**
+     * Runs MMR on the sparse local file. Picks the brightest frame among decoded probes (same idea
+     * as [VideoThumbnailFetcher.extractNonBlackFrame]) so opening black frames are not returned as
+     * the thumbnail when a later sync frame inside HEAD/TAIL data is brighter.
      */
     private fun runMmrOnLocalFile(path: String, owner: VideoThumbnailFetcher): Bitmap? {
-        val earlyTimesUs = longArrayOf(0L, 500_000L, 1_000_000L, 2_000_000L, 5_000_000L, 10_000_000L)
         val mmr = MediaMetadataRetriever()
         return try {
             mmr.setDataSource(path)
-            earlyTimesUs.asSequence()
-                .takeWhile { !owner.isCancelled }
-                .mapNotNull { ts ->
-                    try { mmr.getFrameAtTime(ts, MediaMetadataRetriever.OPTION_CLOSEST_SYNC) }
-                    catch (_: Exception) { null }
+            val durationStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            val durationMs = durationStr?.toLongOrNull() ?: 0L
+            val durationUs = if (durationMs > 0L) durationMs * 1000L else 0L
+            val probes = buildLocalSparseProbeTimesUs(durationUs)
+            val best = BrightestSoFarLocal()
+
+            for (ts in probes) {
+                if (owner.isCancelled) break
+                val bmp = retrieveLocalFrameAtTime(
+                    mmr,
+                    ts,
+                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                )
+                if (bmp != null) {
+                    best.consider(bmp)
+                    if (best.isBrightEnough()) return best.consume()
                 }
-                .firstOrNull()
+            }
+            for (ts in probes) {
+                if (owner.isCancelled) break
+                for (option in intArrayOf(
+                    MediaMetadataRetriever.OPTION_PREVIOUS_SYNC,
+                    MediaMetadataRetriever.OPTION_NEXT_SYNC,
+                )) {
+                    val bmp = retrieveLocalFrameAtTime(mmr, ts, option)
+                    if (bmp != null) {
+                        best.consider(bmp)
+                        if (best.isBrightEnough()) return best.consume()
+                    }
+                }
+            }
+            best.consume()
         } catch (_: Exception) {
             null
         } finally {
-            try { mmr.release() } catch (_: Exception) {}
+            try {
+                mmr.release()
+            } catch (_: Exception) {
+            }
         }
     }
 
