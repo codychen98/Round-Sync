@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.preference.PreferenceManager;
 
 import org.json.JSONArray;
@@ -111,6 +112,40 @@ public class PinnedItemStore {
         PinnedItem moved = items.remove(fromPos);
         items.add(toPos, moved);
         save(context, items);
+    }
+
+    /**
+     * Raw JSON array string stored for backup export (v2 pins including per-remote path).
+     * Empty or missing pins yield {@code null}.
+     */
+    @Nullable
+    public static String serializedPinnedItemsForBackup(@NonNull Context context) {
+        migrateIfNeeded(context);
+        String json = PreferenceManager.getDefaultSharedPreferences(context).getString(PREF_KEY_V2, null);
+        if (json == null || json.isEmpty()) {
+            return null;
+        }
+        return json;
+    }
+
+    /**
+     * Restores pins from a backup. Invalid JSON is ignored. Null or blank string is a no-op
+     * (does not erase existing pins), so restores from older backups without this field stay safe.
+     */
+    public static void restorePinnedItemsFromBackup(@NonNull Context context, @Nullable String jsonArrayString) {
+        if (jsonArrayString == null || jsonArrayString.trim().isEmpty()) {
+            return;
+        }
+        try {
+            new JSONArray(jsonArrayString);
+        } catch (JSONException e) {
+            FLog.e(TAG, "restorePinnedItemsFromBackup: invalid pinned JSON in backup", e);
+            return;
+        }
+        PreferenceManager.getDefaultSharedPreferences(context)
+                .edit()
+                .putString(PREF_KEY_V2, jsonArrayString)
+                .apply();
     }
 
     /**

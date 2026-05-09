@@ -17,6 +17,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
+import ca.pkay.rcloneexplorer.Items.PinnedItemStore;
 import ca.pkay.rcloneexplorer.R;
 
 public class SharedPreferencesBackup {
@@ -81,6 +82,11 @@ public class SharedPreferencesBackup {
         main.put("isWrapFilenames", isWrapFilenames);
         main.put("appUpdates", appUpdates);
         main.put("useLogs", useLogs);
+
+        String pinnedItemsV2 = PinnedItemStore.serializedPinnedItemsForBackup(context);
+        if (pinnedItemsV2 != null) {
+            main.put("pinnedItemsV2", pinnedItemsV2);
+        }
 
         JSONArray mediaPolicyEntries = new JSONArray();
         for (Map.Entry<String, ?> entry : sharedPreferences.getAll().entrySet()) {
@@ -159,6 +165,10 @@ public class SharedPreferencesBackup {
         editor.putBoolean(context.getString(R.string.pref_key_logs), jsonObject.getBoolean("useLogs"));
 
         importMediaFolderPolicyIfPresent(sharedPreferences, editor, jsonObject);
+
+        if (jsonObject.has("pinnedItemsV2") && !jsonObject.isNull("pinnedItemsV2")) {
+            PinnedItemStore.restorePinnedItemsFromBackup(context, jsonObject.optString("pinnedItemsV2"));
+        }
 
         editor.apply();
     }
