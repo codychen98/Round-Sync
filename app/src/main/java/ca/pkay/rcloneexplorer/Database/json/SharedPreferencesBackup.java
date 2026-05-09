@@ -9,12 +9,26 @@ import android.content.SharedPreferences;
 
 import androidx.preference.PreferenceManager;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 
 import ca.pkay.rcloneexplorer.R;
 
 public class SharedPreferencesBackup {
+
+    private static final String MEDIA_FOLDER_POLICY_PREF_PREFIX = "media_policy_";
+    private static final String JSON_MEDIA_FOLDER_POLICY_ENTRIES = "mediaFolderPolicyEntries";
+    /** Field on each exported entry */
+    private static final String ENTRY_KEY_FIELD = "key";
+    /** "string" or "stringSet" */
+    private static final String ENTRY_KIND_FIELD = "kind";
+    private static final String KIND_STRING = "string";
+    private static final String KIND_STRING_SET = "stringSet";
 
     public static String export(Context context) throws JSONException {
 
@@ -68,6 +82,31 @@ public class SharedPreferencesBackup {
         main.put("appUpdates", appUpdates);
         main.put("useLogs", useLogs);
 
+        JSONArray mediaPolicyEntries = new JSONArray();
+        for (Map.Entry<String, ?> entry : sharedPreferences.getAll().entrySet()) {
+            String key = entry.getKey();
+            if (key == null || !key.startsWith(MEDIA_FOLDER_POLICY_PREF_PREFIX)) {
+                continue;
+            }
+            Object value = entry.getValue();
+            JSONObject row = new JSONObject();
+            row.put(ENTRY_KEY_FIELD, key);
+            if (value instanceof String) {
+                row.put(ENTRY_KIND_FIELD, KIND_STRING);
+                row.put("value", value);
+                mediaPolicyEntries.put(row);
+            } else if (value instanceof Set) {
+                JSONArray valuesArr = new JSONArray();
+                for (Object o : (Set<?>) value) {
+                    valuesArr.put(o != null ? String.valueOf(o) : "");
+                }
+                row.put(ENTRY_KIND_FIELD, KIND_STRING_SET);
+                row.put("values", valuesArr);
+                mediaPolicyEntries.put(row);
+            }
+        }
+        main.put(JSON_MEDIA_FOLDER_POLICY_ENTRIES, mediaPolicyEntries);
+
         return main.toString();
     }
 
@@ -119,7 +158,52 @@ public class SharedPreferencesBackup {
         // Logging
         editor.putBoolean(context.getString(R.string.pref_key_logs), jsonObject.getBoolean("useLogs"));
 
+        importMediaFolderPolicyIfPresent(sharedPreferences, editor, jsonObject);
+
         editor.apply();
+    }
+
+    private static void importMediaFolderPolicyIfPresent(
+            SharedPreferences prefs,
+            SharedPreferences.Editor editor,
+            JSONObject jsonObject) throws JSONException {
+        if (!jsonObject.has(JSON_MEDIA_FOLDER_POLICY_ENTRIES)) {
+            return;
+        }
+        JSONArray arr = jsonObject.getJSONArray(JSON_MEDIA_FOLDER_POLICY_ENTRIES);
+        Set<String> allKeys = prefs.getAll().keySet();
+        for (String key : allKeys) {
+            if (key != null && key.startsWith(MEDIA_FOLDER_POLICY_PREF_PREFIX)) {
+                editor.remove(key);
+            }
+        }
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject row = arr.getJSONObject(i);
+            String key = row.getString(ENTRY_KEY_FIELD);
+            if (key.isEmpty() || !key.startsWith(MEDIA_FOLDER_POLICY_PREF_PREFIX)) {
+                continue;
+            }
+            String kind = row.optString(ENTRY_KIND_FIELD, KIND_STRING);
+            if (KIND_STRING_SET.equals(kind)) {
+                JSONArray values = row.optJSONArray("values");
+                if (values == null) {
+                    continue;
+                }
+                HashSet<String> set = new HashSet<>();
+                for (int j = 0; j < values.length(); j++) {
+                    Object v = values.get(j);
+                    if (v != null) {
+                        set.add(String.valueOf(v));
+                    }
+                }
+                editor.putStringSet(key, set);
+            } else {
+                String value = row.optString("value", null);
+                if (value != null) {
+                    editor.putString(key, value);
+                }
+            }
+        }
     }
 
 }
