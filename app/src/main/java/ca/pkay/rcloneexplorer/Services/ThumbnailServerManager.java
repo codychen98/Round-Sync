@@ -97,6 +97,54 @@ public class ThumbnailServerManager {
     }
 
     /**
+     * Returns the current thumbnail serve base URL without the remote path, or {@code null} if the
+     * server is not ready. The returned value is suitable for runtime URL reconstruction:
+     * {@code baseUrl + stablePath}.
+     */
+    public synchronized String getCurrentBaseUrlOrNull() {
+        if (currentState != ServerState.READY || currentAuth == null || currentPort <= 0) {
+            return null;
+        }
+        return "http://127.0.0.1:" + currentPort + "/" + currentAuth;
+    }
+
+    /**
+     * Blocks the calling background thread until the server reaches READY, enters FAILED/STOPPED,
+     * or the timeout elapses.
+     *
+     * @return {@code true} when READY is reached before timeout, otherwise {@code false}.
+     */
+    public synchronized boolean awaitReady(long timeoutMs) {
+        if (currentState == ServerState.READY) {
+            return true;
+        }
+        if (currentState == ServerState.FAILED || currentState == ServerState.STOPPED) {
+            return false;
+        }
+        if (timeoutMs <= 0L) {
+            return false;
+        }
+        final long deadlineMs = System.currentTimeMillis() + timeoutMs;
+        long remainingMs = timeoutMs;
+        while (currentState == ServerState.STARTING && remainingMs > 0L) {
+            try {
+                wait(remainingMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+            if (currentState == ServerState.READY) {
+                return true;
+            }
+            if (currentState == ServerState.FAILED || currentState == ServerState.STOPPED) {
+                return false;
+            }
+            remainingMs = deadlineMs - System.currentTimeMillis();
+        }
+        return currentState == ServerState.READY;
+    }
+
+    /**
      * rclone serve process generation (incremented on each spawn). For correlating thumbnail
      * failures with server restarts in {@code sync.log}.
      */
@@ -490,6 +538,7 @@ public class ThumbnailServerManager {
     private void setState(ServerState newState) {
         ServerState oldState = currentState;
         currentState = newState;
+        notifyAll();
         FLog.d(TAG, "State -> %s", newState);
         stateLiveData.postValue(newState);
         if (appContext != null) {

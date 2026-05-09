@@ -25,7 +25,7 @@ object SelectedFolderImageHttpClientHolder {
             return null
         }
         client?.let { return it }
-        val dir = SelectedFolderMediaCacheLayout.okHttpHttpCacheDir(app)
+        val dir = resolveHttpCacheDirWithSoftMigration(app) ?: return null
         if (!dir.exists() && !dir.mkdirs()) {
             return null
         }
@@ -51,7 +51,40 @@ object SelectedFolderImageHttpClientHolder {
             }
         }
         val app = context.applicationContext
-        deleteTreeBestEffort(SelectedFolderMediaCacheLayout.okHttpHttpCacheDir(app))
+        val mediaRoot = CanonicalCachePathResolver.mediaCacheDirOrNull(app)
+        val httpDir = mediaRoot?.let { File(it, SelectedFolderMediaCacheLayout.SUBDIR_OKHTTP_HTTP_CACHE) }
+        if (httpDir != null) {
+            deleteTreeBestEffort(httpDir)
+        }
+    }
+
+    private fun resolveHttpCacheDirWithSoftMigration(context: Context): File? {
+        val mediaRoot = CanonicalCachePathResolver.mediaCacheDirOrNull(context) ?: return null
+        val newDir = File(mediaRoot, SelectedFolderMediaCacheLayout.SUBDIR_OKHTTP_HTTP_CACHE)
+        if (newDir.exists()) {
+            return newDir
+        }
+        val legacyDir = SelectedFolderMediaCacheLayout.okHttpHttpCacheDir(context)
+        if (legacyDir.exists()) {
+            promoteLegacyDir(legacyDir, newDir)
+        }
+        return newDir
+    }
+
+    private fun promoteLegacyDir(legacyDir: File, newDir: File) {
+        if (newDir.exists()) {
+            return
+        }
+        runCatching {
+            newDir.parentFile?.mkdirs()
+            if (!legacyDir.renameTo(newDir)) {
+                // Keep transition non-blocking: leave legacy in place if promotion fails.
+                FLog.w("SelectedFolderImageCache", "Soft migration: could not promote legacy dir %s -> %s",
+                    legacyDir.absolutePath, newDir.absolutePath)
+            }
+        }.onFailure {
+            FLog.w("SelectedFolderImageCache", "Soft migration: exception promoting legacy dir", it)
+        }
     }
 
     private fun deleteTreeBestEffort(dir: File) {

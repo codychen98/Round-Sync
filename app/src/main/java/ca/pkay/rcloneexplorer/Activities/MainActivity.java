@@ -78,6 +78,7 @@ import ca.pkay.rcloneexplorer.RuntimeConfiguration;
 import ca.pkay.rcloneexplorer.Services.StreamingService;
 import ca.pkay.rcloneexplorer.Services.TriggerService;
 import ca.pkay.rcloneexplorer.util.ActivityHelper;
+import ca.pkay.rcloneexplorer.util.CanonicalCachePathResolver;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.PermissionManager;
 import ca.pkay.rcloneexplorer.util.SharedPreferencesUtil;
@@ -101,6 +102,15 @@ public class MainActivity extends AppCompatActivity
     private static final int REQUEST_PERMISSION_CODE_POST_NOTIFICATIONS = 63;
     private static final int SETTINGS_CODE = 71; // code when coming back from settings
     private static final int WRITE_REQUEST_CODE = 81; // code when exporting config
+    private static final String PREF_KEY_THUMBNAIL_PREFS_MIGRATION_V1_DONE =
+            "thumbnail_prefs_migration_v1_done";
+    private static final String[] LEGACY_THUMBNAIL_SUPPRESSION_KEYS = new String[]{
+            "thumbnail_failure_blacklist",
+            "thumbnail_failure_blacklist_json",
+            "thumbnail_unsupported_files",
+            "thumbnail_network_failed_blacklist",
+            "thumb_fail_blacklist"
+    };
     private final String FILE_EXPLORER_FRAGMENT_TAG = "ca.pkay.rcexplorer.MAIN_ACTIVITY_FILE_EXPLORER_TAG";
     private NavigationView navigationView;
     private DrawerLayout drawer;
@@ -117,6 +127,7 @@ public class MainActivity extends AppCompatActivity
         ActivityHelper.applyTheme(this);
 
         SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(this);
+        runThumbnailPrefsMigrationIfNeeded(sharedPreferences);
         boolean allPermissionsGranted = (new PermissionManager(this)).hasAllRequiredPermissions();
         boolean completedIntroOnce = OnboardingActivity.Companion.completedIntro(this);
         if(!allPermissionsGranted || !completedIntroOnce) {
@@ -308,13 +319,46 @@ public class MainActivity extends AppCompatActivity
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        // TODO: document deletion on exit
-        File dir = getExternalCacheDir();
-        if (dir != null && dir.isDirectory()) {
-            String[] children = dir.list();
-            for (String aChildren : children) {
-                new File(dir, aChildren).delete();
+        clearOwnedCacheSubfoldersOnDestroy();
+    }
+
+    /**
+     * Cleanup is restricted to app-owned canonical subfolders only.
+     * Avoids deleting arbitrary children under external cache during transition windows.
+     */
+    private void clearOwnedCacheSubfoldersOnDestroy() {
+        File cacheRoot = getExternalCacheDir();
+        if (cacheRoot == null || !cacheRoot.isDirectory()) {
+            return;
+        }
+        String[] ownedSubdirs = new String[]{
+                CanonicalCachePathResolver.THUMBNAILS_DIR_NAME,
+                CanonicalCachePathResolver.MEDIA_CACHE_DIR_NAME,
+        };
+        for (String name : ownedSubdirs) {
+            File target = new File(cacheRoot, name);
+            deleteTreeBestEffort(target);
+        }
+    }
+
+    private void deleteTreeBestEffort(@NonNull File target) {
+        if (!target.exists()) {
+            return;
+        }
+        try {
+            if (target.isDirectory()) {
+                File[] children = target.listFiles();
+                if (children != null) {
+                    for (File child : children) {
+                        deleteTreeBestEffort(child);
+                    }
+                }
             }
+            if (!target.delete()) {
+                FLog.w(TAG, "Could not delete cache path: %s", target.getAbsolutePath());
+            }
+        } catch (SecurityException e) {
+            FLog.w(TAG, "SecurityException deleting cache path: %s", e, target.getAbsolutePath());
         }
     }
 
@@ -1101,5 +1145,23 @@ public class MainActivity extends AppCompatActivity
                 AppShortcutsHelper.populateAppShortcuts(context, rclone.getRemotes());
             }
         }
+    }
+
+    /**
+     * One-time cleanup of legacy thumbnail suppression preferences from older builds.
+     * Guarded by a migration flag; no-op when keys are absent.
+     */
+    private void runThumbnailPrefsMigrationIfNeeded(@NonNull SharedPreferences prefs) {
+        if (prefs.getBoolean(PREF_KEY_THUMBNAIL_PREFS_MIGRATION_V1_DONE, false)) {
+            return;
+        }
+        SharedPreferences.Editor editor = prefs.edit();
+        for (String key : LEGACY_THUMBNAIL_SUPPRESSION_KEYS) {
+            if (prefs.contains(key)) {
+                editor.remove(key);
+            }
+        }
+        editor.putBoolean(PREF_KEY_THUMBNAIL_PREFS_MIGRATION_V1_DONE, true);
+        editor.apply();
     }
 }

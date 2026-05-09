@@ -26,7 +26,7 @@ object SelectedFolderSimpleCacheProvider {
             return null
         }
         cache?.let { return it }
-        val dir: File = SelectedFolderMediaCacheLayout.exoSimpleCacheDir(app)
+        val dir = resolveExoCacheDirWithSoftMigration(app) ?: return null
         if (!dir.exists() && !dir.mkdirs()) {
             return null
         }
@@ -49,7 +49,40 @@ object SelectedFolderSimpleCacheProvider {
             runCatching { previous.release() }
         }
         val app = context.applicationContext
-        deleteTreeBestEffort(SelectedFolderMediaCacheLayout.exoSimpleCacheDir(app))
+        val mediaRoot = CanonicalCachePathResolver.mediaCacheDirOrNull(app)
+        val exoDir = mediaRoot?.let { File(it, SelectedFolderMediaCacheLayout.SUBDIR_EXO_SIMPLE_CACHE) }
+        if (exoDir != null) {
+            deleteTreeBestEffort(exoDir)
+        }
+    }
+
+    private fun resolveExoCacheDirWithSoftMigration(context: Context): File? {
+        val mediaRoot = CanonicalCachePathResolver.mediaCacheDirOrNull(context) ?: return null
+        val newDir = File(mediaRoot, SelectedFolderMediaCacheLayout.SUBDIR_EXO_SIMPLE_CACHE)
+        if (newDir.exists()) {
+            return newDir
+        }
+        val legacyDir = SelectedFolderMediaCacheLayout.exoSimpleCacheDir(context)
+        if (legacyDir.exists()) {
+            promoteLegacyDir(legacyDir, newDir)
+        }
+        return newDir
+    }
+
+    private fun promoteLegacyDir(legacyDir: File, newDir: File) {
+        if (newDir.exists()) {
+            return
+        }
+        runCatching {
+            newDir.parentFile?.mkdirs()
+            if (!legacyDir.renameTo(newDir)) {
+                // Keep transition non-blocking: leave legacy in place if promotion fails.
+                FLog.w("SelectedFolderSimpleCache", "Soft migration: could not promote legacy dir %s -> %s",
+                    legacyDir.absolutePath, newDir.absolutePath)
+            }
+        }.onFailure {
+            FLog.w("SelectedFolderSimpleCache", "Soft migration: exception promoting legacy dir", it)
+        }
     }
 
     private fun deleteTreeBestEffort(dir: File) {

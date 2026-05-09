@@ -45,6 +45,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
     private static final java.util.concurrent.atomic.AtomicInteger thumbPipeLogCount =
             new java.util.concurrent.atomic.AtomicInteger(0);
     private static final int MAX_THUMB_PIPE_LOGS = 2500;
+    private static final long LARGE_VIDEO_THRESHOLD_BYTES = 500L * 1024L * 1024L;
 
     private final String url;
     private final Context appContext;
@@ -110,15 +111,46 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
             boolean mmrReleased = false;
             boolean dataSourceClosed = false;
             try {
+                long fileSizeBytes = dataSource.getSize();
+                boolean largeVideo = fileSizeBytes >= LARGE_VIDEO_THRESHOLD_BYTES;
                 mmr.setDataSource(dataSource);
                 final String debugSuffix = frameExtractDebugSuffix(mmr);
                 final long durationMs = readDurationMsFromRetriever(mmr);
-                long tMmr = SystemClock.elapsedRealtime();
-                Bitmap frame = extractNonBlackFrame(mmr);
-                long mmrMs = SystemClock.elapsedRealtime() - tMmr;
-                logThumbPipe(appContext, "mmrEnd",
-                        "basename=" + base + " result=" + (frame != null ? "frame" : "noFrame")
-                                + " cancelled=" + cancelled + " mmrMs=" + mmrMs + " " + mgrDebugSuffix());
+                Bitmap frame = null;
+                boolean exoAttempted = false;
+
+                if (largeVideo && !cancelled) {
+                    long tB2 = SystemClock.elapsedRealtime();
+                    exoAttempted = true;
+                    logThumbPipe(appContext, "b2FirstStart",
+                            "basename=" + base + " fileSizeBytes=" + fileSizeBytes
+                                    + " thresholdBytes=" + LARGE_VIDEO_THRESHOLD_BYTES
+                                    + " durationMs=" + durationMs + " " + mgrDebugSuffix());
+                    frame = VideoThumbnailExoFallback.tryGrabFirstFrame(
+                            appContext, url, durationMs, VideoThumbnailFetcher.this);
+                    long b2Ms = SystemClock.elapsedRealtime() - tB2;
+                    logThumbPipe(appContext, "b2FirstEnd",
+                            "basename=" + base + " result=" + (frame != null ? "OK" : "null")
+                                    + " hasFrame=" + (frame != null)
+                                    + " cancelled=" + cancelled + " b2Ms=" + b2Ms + " " + mgrDebugSuffix());
+                }
+
+                if (frame == null && cancelled) {
+                    callback.onLoadFailed(new RuntimeException("Cancelled"));
+                    return;
+                }
+
+                if (frame == null) {
+                    long tMmr = SystemClock.elapsedRealtime();
+                    frame = extractNonBlackFrame(mmr);
+                    long mmrMs = SystemClock.elapsedRealtime() - tMmr;
+                    logThumbPipe(appContext, "mmrEnd",
+                            "basename=" + base + " result=" + (frame != null ? "frame" : "noFrame")
+                                    + " cancelled=" + cancelled + " mmrMs=" + mmrMs + " " + mgrDebugSuffix());
+                } else {
+                    logThumbPipe(appContext, "mmrSkip",
+                            "basename=" + base + " reason=b2FirstHasFrame " + mgrDebugSuffix());
+                }
                 if (frame == null) {
                     try {
                         mmr.release();
@@ -130,7 +162,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                     } catch (Exception ignore) {
                     }
                     dataSourceClosed = true;
-                    if (!cancelled) {
+                    if (!cancelled && !exoAttempted) {
                         long tExo = SystemClock.elapsedRealtime();
                         frame = VideoThumbnailExoFallback.tryGrabFirstFrame(
                                 appContext, url, durationMs, VideoThumbnailFetcher.this);
@@ -140,7 +172,9 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                                         + " cancelled=" + cancelled + " exoMs=" + exoMs + " " + mgrDebugSuffix());
                     } else {
                         logThumbPipe(appContext, "exoSkip",
-                                "basename=" + base + " reason=cancelledBeforeExo " + mgrDebugSuffix());
+                                "basename=" + base + " reason="
+                                        + (cancelled ? "cancelledBeforeExo" : "exoAlreadyAttempted")
+                                        + " " + mgrDebugSuffix());
                     }
                     if (frame == null) {
                         logThumbnailSyncFailureOnce(
@@ -292,18 +326,23 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
             return longSetToArray(u);
         }
         LinkedHashSet<Long> ordered = new LinkedHashSet<>();
-        ordered.add(clampTimeUs(durationUs / 10, durationUs));
-        ordered.add(clampTimeUs(durationUs / 4, durationUs));
-        ordered.add(clampTimeUs(durationUs / 2, durationUs));
+        // Prefer sparse-safe windows: early head probes and near-tail probes, avoiding deep mid-file
+        // seeks that can be unreliable with sparse/range-constrained sources.
         ordered.add(clampTimeUs(Math.max(1L, durationUs / 100), durationUs));
         ordered.add(clampTimeUs(durationUs / 20, durationUs));
-        ordered.add(clampTimeUs(durationUs * 3 / 4, durationUs));
-        ordered.add(clampTimeUs(durationUs * 9 / 10, durationUs));
+        ordered.add(clampTimeUs(durationUs / 10, durationUs));
+        ordered.add(clampTimeUs(durationUs / 8, durationUs));
+        ordered.add(clampTimeUs(durationUs / 6, durationUs));
         ordered.add(clampTimeUs(2_000_000L, durationUs));
         ordered.add(clampTimeUs(500_000L, durationUs));
         ordered.add(clampTimeUs(1_000_000L, durationUs));
         if (durationUs > 3_000_000L) {
             ordered.add(clampTimeUs(durationUs - 1_000_000L, durationUs));
+            ordered.add(clampTimeUs(durationUs - 1_500_000L, durationUs));
+            ordered.add(clampTimeUs(durationUs - 3_000_000L, durationUs));
+        }
+        if (durationUs > 8_000_000L) {
+            ordered.add(clampTimeUs(durationUs - 6_000_000L, durationUs));
         }
         ordered.add(0L);
         return longSetToArray(ordered);

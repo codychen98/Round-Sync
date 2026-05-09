@@ -27,6 +27,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.util.FLog;
 
 /**
@@ -76,6 +77,29 @@ final class VideoThumbnailExoFallback {
         } catch (Exception e) {
             return "uriParseFail urlChars=" + url.length();
         }
+    }
+
+    @NonNull
+    private static String stablePathForUrl(@NonNull String url) {
+        Uri u = Uri.parse(url);
+        java.util.List<String> segs = u.getPathSegments();
+        if (segs == null || segs.size() < 2) {
+            return u.getPath() != null ? u.getPath() : "/";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 1; i < segs.size(); i++) {
+            sb.append('/').append(segs.get(i));
+        }
+        return sb.length() > 0 ? sb.toString() : "/";
+    }
+
+    @Nullable
+    private static String resolveLiveUrlOrNull(@NonNull String stablePath) {
+        String base = ThumbnailServerManager.getInstance().getCurrentBaseUrlOrNull();
+        if (base == null || base.isEmpty()) {
+            return null;
+        }
+        return stablePath.startsWith("/") ? base + stablePath : base + "/" + stablePath;
     }
 
     @NonNull
@@ -176,6 +200,7 @@ final class VideoThumbnailExoFallback {
             long durationMs,
             @NonNull VideoThumbnailFetcher owner) throws Exception {
         final String base = VideoThumbnailFetcher.basenameForThumbUrl(url);
+        final String stablePath = stablePathForUrl(url);
         ExoPlayer player = null;
         ImageReader reader = null;
         try {
@@ -193,11 +218,17 @@ final class VideoThumbnailExoFallback {
                     .setUserAgent(Util.getUserAgent(appContext, appContext.getPackageName()));
             ProgressiveMediaSource.Factory progressiveFactory =
                     new ProgressiveMediaSource.Factory(httpFactory);
-            MediaItem item = MediaItem.fromUri(url);
+            String liveUrl = resolveLiveUrlOrNull(stablePath);
+            if (liveUrl == null) {
+                VideoThumbnailFetcher.logThumbPipe(appContext, "exoSkip",
+                        "basename=" + base + " reason=serveNotReady");
+                return null;
+            }
+            MediaItem item = MediaItem.fromUri(liveUrl);
             player.setMediaSource(progressiveFactory.createMediaSource(item));
             VideoThumbnailFetcher.logThumbPipe(appContext, "exoPrepareStart",
                     "basename=" + base + " durationMs=" + durationMs + " "
-                            + thumbUrlForSyncLog(url)
+                            + thumbUrlForSyncLog(liveUrl)
                             + " httpEngine=OkHttpDataSource ProgressiveMediaSource"
                             + " extensionRendererMode=on");
             player.prepare();

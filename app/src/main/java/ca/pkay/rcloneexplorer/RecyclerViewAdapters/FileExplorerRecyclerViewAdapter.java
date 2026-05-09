@@ -34,6 +34,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import ca.pkay.rcloneexplorer.Glide.RetryRequestListener;
+import ca.pkay.rcloneexplorer.Glide.FolderThumbnailGlideUrl;
 import ca.pkay.rcloneexplorer.Glide.HttpServeThumbnailGlideUrl;
 import ca.pkay.rcloneexplorer.Glide.VideoThumbnailUrl;
 import ca.pkay.rcloneexplorer.Items.FileItem;
@@ -185,7 +186,54 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             if (holder.interpunct != null) holder.interpunct.setVisibility(View.VISIBLE);
         }
 
-        if (showThumbnails && !item.isDir()) {
+        if (showThumbnails && item.isDir()) {
+            if (isNetworkFolderThumbnailCandidate(item) && serverReady) {
+                holder.fileIcon.setVisibility(View.VISIBLE);
+                holder.dirIcon.setVisibility(View.GONE);
+                holder.fileIcon.setImageTintList(null);
+                RequestOptions folderGlideOption = new RequestOptions()
+                        .centerCrop()
+                        .diskCacheStrategy(DiskCacheStrategy.DATA)
+                        .placeholder(R.drawable.ic_folder)
+                        .error(R.drawable.ic_folder);
+                maybeLogThumbPipelineDbg(item, "folderGlideIssued", true);
+                boolean extendedThumbRetry = isExtendedThumbnailRetryPolicy(item);
+                RetryRequestListener.ThumbnailExtendedRetryScheduleGate extendedGate =
+                        extendedThumbRetry
+                                ? () -> thumbnailHostResumed && serverReady
+                                : null;
+                RetryRequestListener retryListener = new ProgressTrackingRetryListener(
+                        ThumbnailServerManager.getInstance(),
+                        rl -> Glide.with(context.getApplicationContext())
+                                .load(new FolderThumbnailGlideUrl(buildThumbnailUrl(item)))
+                                .apply(folderGlideOption)
+                                .thumbnail(0.1f)
+                                .listener(rl)
+                                .into(holder.fileIcon),
+                        context.getApplicationContext(),
+                        item.getPath() + "|folder",
+                        () -> listener.getThumbnailUrlEpoch(),
+                        extendedThumbRetry,
+                        extendedGate);
+                cancelActiveRetryListener(holder);
+                holder.activeRetryListener = retryListener;
+                Glide.with(context.getApplicationContext())
+                        .load(new FolderThumbnailGlideUrl(buildThumbnailUrl(item)))
+                        .apply(folderGlideOption)
+                        .thumbnail(0.1f)
+                        .listener(retryListener)
+                        .into(holder.fileIcon);
+            } else {
+                maybeLogThumbPipelineDbg(item, serverReady ? "folderPolicySkip" : "folderPlaceholderNotReady",
+                        isHttpThumbnailPolicyAllowedForNetworkThumbnail(item));
+                cancelActiveRetryListener(holder);
+                Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+                holder.fileIcon.setImageTintList(holder.defaultIconTint);
+                holder.fileIcon.setImageResource(R.drawable.ic_file);
+                holder.fileIcon.setVisibility(View.GONE);
+                holder.dirIcon.setVisibility(View.VISIBLE);
+            }
+        } else if (showThumbnails && !item.isDir()) {
             boolean localLoad = item.getRemote().getType() == RemoteItem.SAFW;
             String mimeType = item.getMimeType();
 
@@ -573,9 +621,9 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     }
 
     /**
-     * Cancels scheduled Glide retries and clears in-flight thumbnail loads for visible file rows
+     * Cancels scheduled Glide retries and clears in-flight thumbnail loads for visible rows
      * before the thumbnail serve lease is released (fragment {@code onStop}). Idempotent.
-     * Only runs when {@link #showThumbnails} is true; directory rows are skipped.
+     * Only runs when {@link #showThumbnails} is true.
      */
     public void clearVisibleThumbnailGlideRequestsOnStop(@NonNull RecyclerView recyclerView) {
         if (!showThumbnails || context == null) {
@@ -593,13 +641,15 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 continue;
             }
             FileItem item = holder.fileItem;
-            if (item == null || item.isDir()) {
+            if (item == null) {
                 continue;
             }
             cancelActiveRetryListener(holder);
             Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
             holder.fileIcon.setImageTintList(holder.defaultIconTint);
-            holder.fileIcon.setImageResource(R.drawable.ic_file);
+            holder.fileIcon.setImageResource(item.isDir() ? R.drawable.ic_folder : R.drawable.ic_file);
+            holder.fileIcon.setVisibility(item.isDir() ? View.GONE : View.VISIBLE);
+            holder.dirIcon.setVisibility(item.isDir() ? View.VISIBLE : View.GONE);
         }
     }
 
@@ -868,14 +918,17 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             return 0;
         }
         for (FileItem item : items) {
-            if (item.isDir()) {
-                continue;
-            }
             if (item.getRemote() == null) {
                 continue;
             }
             boolean localLoad = item.getRemote().getType() == RemoteItem.SAFW;
             if (localLoad) {
+                continue;
+            }
+            if (item.isDir()) {
+                if (isNetworkFolderThumbnailCandidate(item)) {
+                    total++;
+                }
                 continue;
             }
             String mime = item.getMimeType();
@@ -887,6 +940,17 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             }
         }
         return total;
+    }
+
+    private boolean isNetworkFolderThumbnailCandidate(@NonNull FileItem item) {
+        if (!item.isDir()) {
+            return false;
+        }
+        RemoteItem remote = item.getRemote();
+        if (remote == null || remote.getType() == RemoteItem.SAFW) {
+            return false;
+        }
+        return isHttpThumbnailPolicyAllowedForNetworkThumbnail(item);
     }
 
     private void notifyThumbnailIdleIfNoTargets() {

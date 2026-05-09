@@ -15,6 +15,8 @@ import java.io.InputStream;
 
 public class VideoThumbnailLoader implements ModelLoader<VideoThumbnailUrl, InputStream> {
 
+    private static final String THUMB_CACHE_VERSION_TOKEN = "|thumbV2";
+
     private final Context appContext;
 
     public VideoThumbnailLoader(@NonNull Context appContext) {
@@ -27,7 +29,9 @@ public class VideoThumbnailLoader implements ModelLoader<VideoThumbnailUrl, Inpu
                                                 int width, int height,
                                                 @NonNull Options options) {
         return new LoadData<>(
-                new ObjectKey(model.getStablePath()),
+                new ObjectKey(ReadableCacheKey.fromStablePath(
+                        model.getStablePath() + THUMB_CACHE_VERSION_TOKEN,
+                        "thumbVideo")),
                 new VideoThumbnailFetcher(model.getUrl(), appContext)
         );
     }

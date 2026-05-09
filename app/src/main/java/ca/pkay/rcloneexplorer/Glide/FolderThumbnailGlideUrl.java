@@ -6,12 +6,12 @@ import java.net.MalformedURLException;
 import java.net.URL;
 
 /**
- * Glide URL for rclone HTTP-serve thumbnails; disk cache key ignores the random auth segment
- * so thumbnails survive per-session auth rotation.
+ * Glide URL for folder preview thumbnails. Cache key uses the stable path and
+ * a folder-specific namespace prefix to avoid collisions with file thumbnails.
  */
-public class HttpServeThumbnailGlideUrl extends GlideUrl {
+public class FolderThumbnailGlideUrl extends GlideUrl {
 
-    public HttpServeThumbnailGlideUrl(String url) {
+    public FolderThumbnailGlideUrl(String url) {
         super(url);
     }
 
@@ -21,9 +21,9 @@ public class HttpServeThumbnailGlideUrl extends GlideUrl {
             URL url = super.toURL();
             String path = url.getPath();
             String stablePath = path.substring(path.indexOf('/', 1));
-            return ReadableCacheKey.fromStablePath(stablePath, "thumbFile");
+            return ReadableCacheKey.fromStablePath(stablePath, "thumbFolder");
         } catch (MalformedURLException e) {
-            return ReadableCacheKey.fromStablePath(super.getCacheKey(), "thumbFile");
+            return ReadableCacheKey.fromStablePath(super.getCacheKey(), "thumbFolder");
         }
     }
 }

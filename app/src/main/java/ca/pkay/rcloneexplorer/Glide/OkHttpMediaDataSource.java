@@ -9,9 +9,12 @@ import androidx.annotation.Nullable;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.util.SyncLog;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -41,7 +44,9 @@ public class OkHttpMediaDataSource extends MediaDataSource {
 
     private static final int BUFFER_SIZE = 512 * 1024; // 512 KB read-ahead
 
-    private final String url;
+    private static final int MAX_ATTEMPTS = 2; // one retry on transient failures
+
+    private final String stablePath;
     @Nullable
     private final Context appContext;
     private final AtomicBoolean httpDiagLogged = new AtomicBoolean(false);
@@ -53,7 +58,7 @@ public class OkHttpMediaDataSource extends MediaDataSource {
     private int bufferLength = 0;
 
     public OkHttpMediaDataSource(@NonNull String url, @Nullable Context appContextForDiag) {
-        this.url = url;
+        this.stablePath = extractStablePath(url);
         this.appContext = appContextForDiag != null ? appContextForDiag.getApplicationContext() : null;
     }
 
@@ -61,7 +66,7 @@ public class OkHttpMediaDataSource extends MediaDataSource {
         if (appContext == null || !httpDiagLogged.compareAndSet(false, true)) {
             return;
         }
-        String file = Uri.parse(url).getLastPathSegment();
+        String file = Uri.parse(stablePath).getLastPathSegment();
         if (file == null) {
             file = "(unknown)";
         }
@@ -95,69 +100,145 @@ public class OkHttpMediaDataSource extends MediaDataSource {
             if (fetchSize <= 0) return -1;
         }
 
-        Request request = new Request.Builder()
-                .url(url)
-                .header("Range", "bytes=" + position + "-" + end)
-                .build();
-
-        try (Response response = CLIENT.newCall(request).execute()) {
-            if (response.code() == 416) {
-                return -1; // Range not satisfiable
-            }
-            if (!response.isSuccessful()) {
-                logHttpIssueOnce("readAt", response.code(), response.message());
+        IOException lastIo = null;
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            String resolvedUrl = resolveCurrentUrlOrNull();
+            if (resolvedUrl == null) {
+                logHttpIssueOnce("readAt", -1, "serveNotReady");
                 return -1;
             }
 
-            ResponseBody body = response.body();
-            if (body == null) {
-                logHttpIssueOnce("readAt", response.code(), "null body");
-                return -1;
-            }
+            Request request = new Request.Builder()
+                    .url(resolvedUrl)
+                    .header("Range", "bytes=" + position + "-" + end)
+                    .build();
 
-            try (InputStream is = body.byteStream()) {
-                if (readBuffer == null || readBuffer.length < fetchSize) {
-                    readBuffer = new byte[fetchSize];
+            try (Response response = CLIENT.newCall(request).execute()) {
+                int code = response.code();
+                if (code == 416) {
+                    return -1; // Range not satisfiable
                 }
-                int totalRead = 0;
-                while (totalRead < fetchSize) {
-                    int read = is.read(readBuffer, totalRead, fetchSize - totalRead);
-                    if (read < 0) break;
-                    totalRead += read;
+                if (!response.isSuccessful()) {
+                    if (attempt < MAX_ATTEMPTS && shouldRetryStatus(code)) {
+                        continue;
+                    }
+                    logHttpIssueOnce("readAt", code, response.message());
+                    return -1;
                 }
-                if (totalRead == 0) return -1;
 
-                bufferStart = position;
-                bufferLength = totalRead;
+                ResponseBody body = response.body();
+                if (body == null) {
+                    if (attempt < MAX_ATTEMPTS) {
+                        continue;
+                    }
+                    logHttpIssueOnce("readAt", code, "null body");
+                    return -1;
+                }
 
-                int toCopy = Math.min(size, totalRead);
-                System.arraycopy(readBuffer, 0, buffer, offset, toCopy);
-                return toCopy;
+                try (InputStream is = body.byteStream()) {
+                    if (readBuffer == null || readBuffer.length < fetchSize) {
+                        readBuffer = new byte[fetchSize];
+                    }
+                    int totalRead = 0;
+                    while (totalRead < fetchSize) {
+                        int read = is.read(readBuffer, totalRead, fetchSize - totalRead);
+                        if (read < 0) break;
+                        totalRead += read;
+                    }
+                    if (totalRead == 0) return -1;
+
+                    bufferStart = position;
+                    bufferLength = totalRead;
+
+                    int toCopy = Math.min(size, totalRead);
+                    System.arraycopy(readBuffer, 0, buffer, offset, toCopy);
+                    return toCopy;
+                }
+            } catch (IOException e) {
+                lastIo = e;
+                if (attempt < MAX_ATTEMPTS) {
+                    continue;
+                }
+                throw e;
             }
         }
+        if (lastIo != null) {
+            throw lastIo;
+        }
+        return -1;
     }
 
     @Override
     public long getSize() throws IOException {
         if (cachedSize >= 0) return cachedSize;
 
-        Request request = new Request.Builder()
-                .url(url)
-                .head()
-                .build();
-
-        try (Response response = CLIENT.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                logHttpIssueOnce("headSize", response.code(), response.message());
+        IOException lastIo = null;
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            String resolvedUrl = resolveCurrentUrlOrNull();
+            if (resolvedUrl == null) {
+                logHttpIssueOnce("headSize", -1, "serveNotReady");
                 return -1;
             }
-            String contentLength = response.header("Content-Length");
-            if (contentLength != null) {
-                cachedSize = Long.parseLong(contentLength);
-                return cachedSize;
+
+            Request request = new Request.Builder()
+                    .url(resolvedUrl)
+                    .head()
+                    .build();
+
+            try (Response response = CLIENT.newCall(request).execute()) {
+                int code = response.code();
+                if (!response.isSuccessful()) {
+                    if (attempt < MAX_ATTEMPTS && shouldRetryStatus(code)) {
+                        continue;
+                    }
+                    logHttpIssueOnce("headSize", code, response.message());
+                    return -1;
+                }
+                String contentLength = response.header("Content-Length");
+                if (contentLength != null) {
+                    cachedSize = Long.parseLong(contentLength);
+                    return cachedSize;
+                }
+            } catch (IOException e) {
+                lastIo = e;
+                if (attempt < MAX_ATTEMPTS) {
+                    continue;
+                }
+                throw e;
             }
         }
+        if (lastIo != null) {
+            throw lastIo;
+        }
         return -1; // Unknown size
+    }
+
+    @Nullable
+    private String resolveCurrentUrlOrNull() {
+        String base = ThumbnailServerManager.getInstance().getCurrentBaseUrlOrNull();
+        if (base == null || base.isEmpty()) {
+            return null;
+        }
+        return stablePath.startsWith("/") ? base + stablePath : base + "/" + stablePath;
+    }
+
+    private static boolean shouldRetryStatus(int code) {
+        return code == 401 || code == 404 || code >= 500;
+    }
+
+    @NonNull
+    private static String extractStablePath(@NonNull String fullUrl) {
+        try {
+            URL parsed = new URL(fullUrl);
+            String path = parsed.getPath();
+            int secondSlash = path.indexOf('/', 1);
+            if (secondSlash > 0) {
+                return path.substring(secondSlash);
+            }
+            return path;
+        } catch (MalformedURLException e) {
+            return fullUrl;
+        }
     }
 
     @Override
