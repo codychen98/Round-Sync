@@ -431,37 +431,17 @@ internal object SparseLocalThumbnailExtractor {
     }
 
     /**
-     * Same 8x8 sampling strategy as [VideoThumbnailFetcher.averageBrightness].
+     * Cannot be `inner` (illegal inside `object`). Threshold passed from [LOCAL_BRIGHT_THRESHOLD].
+     * Uses [sparseLocalThumbnailAverageBrightness] (file-level, same module).
      */
-    private fun averageBrightnessLocal(bitmap: Bitmap): Double {
-        val sampleSize = 8
-        val w = bitmap.width
-        val h = bitmap.height
-        var totalBrightness = 0L
-        var samples = 0
-        for (x in 0 until sampleSize) {
-            for (y in 0 until sampleSize) {
-                val px = w * x / sampleSize
-                val py = h * y / sampleSize
-                val pixel = bitmap.getPixel(px, py)
-                val r = (pixel shr 16) and 0xFF
-                val g = (pixel shr 8) and 0xFF
-                val b = pixel and 0xFF
-                totalBrightness += (r + g + b)
-                samples++
-            }
-        }
-        return totalBrightness.toDouble() / (samples * 3)
-    }
-
-    private inner class BrightestSoFarLocal {
+    private class BrightestSoFarLocal(private val brightThreshold: Double) {
         private var frame: Bitmap? = null
         private var score = -1.0
 
         fun consider(candidate: Bitmap) {
-            val brightness = averageBrightnessLocal(candidate)
+            val brightness = sparseLocalThumbnailAverageBrightness(candidate)
             when {
-                brightness >= LOCAL_BRIGHT_THRESHOLD -> {
+                brightness >= brightThreshold -> {
                     frame?.recycle()
                     frame = candidate
                     score = brightness
@@ -475,7 +455,7 @@ internal object SparseLocalThumbnailExtractor {
             }
         }
 
-        fun isBrightEnough(): Boolean = frame != null && score >= LOCAL_BRIGHT_THRESHOLD
+        fun isBrightEnough(): Boolean = frame != null && score >= brightThreshold
 
         /** Returns the chosen bitmap and clears internal state; caller owns the bitmap. */
         fun consume(): Bitmap? {
@@ -499,7 +479,7 @@ internal object SparseLocalThumbnailExtractor {
             val durationMs = durationStr?.toLongOrNull() ?: 0L
             val durationUs = if (durationMs > 0L) durationMs * 1000L else 0L
             val probes = buildLocalSparseProbeTimesUs(durationUs)
-            val best = BrightestSoFarLocal()
+            val best = BrightestSoFarLocal(LOCAL_BRIGHT_THRESHOLD)
 
             for (ts in probes) {
                 if (owner.isCancelled) break
@@ -545,4 +525,30 @@ internal object SparseLocalThumbnailExtractor {
     private fun log(appContext: Context, phase: String, attrs: String) {
         SyncLog.info(appContext.applicationContext, "VidThumbDbg", "event=thumbPipe phase=$phase $attrs")
     }
+}
+
+/**
+ * Same 8x8 sampling strategy as [VideoThumbnailFetcher.averageBrightness].
+ * File-level so [SparseLocalThumbnailExtractor.BrightestSoFarLocal] can use it — `inner` classes are
+ * not allowed inside Kotlin `object` declarations.
+ */
+private fun sparseLocalThumbnailAverageBrightness(bitmap: Bitmap): Double {
+    val sampleSize = 8
+    val w = bitmap.width
+    val h = bitmap.height
+    var totalBrightness = 0L
+    var samples = 0
+    for (x in 0 until sampleSize) {
+        for (y in 0 until sampleSize) {
+            val px = w * x / sampleSize
+            val py = h * y / sampleSize
+            val pixel = bitmap.getPixel(px, py)
+            val r = (pixel shr 16) and 0xFF
+            val g = (pixel shr 8) and 0xFF
+            val b = pixel and 0xFF
+            totalBrightness += (r + g + b)
+            samples++
+        }
+    }
+    return totalBrightness.toDouble() / (samples * 3)
 }
