@@ -24,12 +24,15 @@ public class SharedPreferencesBackup {
 
     private static final String MEDIA_FOLDER_POLICY_PREF_PREFIX = "media_policy_";
     private static final String JSON_MEDIA_FOLDER_POLICY_ENTRIES = "mediaFolderPolicyEntries";
+    private static final String JSON_VIEW_MODE_ENTRIES = "viewModeEntries";
+    private static final String JSON_PATH_LOCK_ENTRIES = "pathLockEntries";
     /** Field on each exported entry */
     private static final String ENTRY_KEY_FIELD = "key";
-    /** "string" or "stringSet" */
+    /** "string", "stringSet", or "boolean" */
     private static final String ENTRY_KIND_FIELD = "kind";
     private static final String KIND_STRING = "string";
     private static final String KIND_STRING_SET = "stringSet";
+    private static final String KIND_BOOLEAN = "boolean";
 
     public static String export(Context context) throws JSONException {
 
@@ -113,6 +116,64 @@ public class SharedPreferencesBackup {
         }
         main.put(JSON_MEDIA_FOLDER_POLICY_ENTRIES, mediaPolicyEntries);
 
+        String viewModePrefix = context.getString(R.string.pref_key_view_mode_prefix);
+        String viewModeRemoteDefaultPrefix = context.getString(R.string.pref_key_view_mode_remote_default_prefix);
+        JSONArray viewModeEntries = new JSONArray();
+        for (Map.Entry<String, ?> entry : sharedPreferences.getAll().entrySet()) {
+            String key = entry.getKey();
+            if (key == null || !isViewModeBackupKey(key, viewModePrefix, viewModeRemoteDefaultPrefix)) {
+                continue;
+            }
+            Object value = entry.getValue();
+            JSONObject row = new JSONObject();
+            row.put(ENTRY_KEY_FIELD, key);
+            if (value instanceof String) {
+                row.put(ENTRY_KIND_FIELD, KIND_STRING);
+                row.put("value", value);
+                viewModeEntries.put(row);
+            } else if (value instanceof Set) {
+                JSONArray valuesArr = new JSONArray();
+                for (Object o : (Set<?>) value) {
+                    valuesArr.put(o != null ? String.valueOf(o) : "");
+                }
+                row.put(ENTRY_KIND_FIELD, KIND_STRING_SET);
+                row.put("values", valuesArr);
+                viewModeEntries.put(row);
+            }
+        }
+        main.put(JSON_VIEW_MODE_ENTRIES, viewModeEntries);
+
+        String pathLockEnabledPrefix = context.getString(R.string.pref_key_remote_path_lock_enabled_prefix);
+        String pathLockPrefixesPrefix = context.getString(R.string.pref_key_remote_path_lock_prefixes_prefix);
+        JSONArray pathLockEntries = new JSONArray();
+        for (Map.Entry<String, ?> entry : sharedPreferences.getAll().entrySet()) {
+            String key = entry.getKey();
+            if (key == null || !isPathLockBackupKey(key, pathLockEnabledPrefix, pathLockPrefixesPrefix)) {
+                continue;
+            }
+            Object value = entry.getValue();
+            JSONObject row = new JSONObject();
+            row.put(ENTRY_KEY_FIELD, key);
+            if (value instanceof Boolean) {
+                row.put(ENTRY_KIND_FIELD, KIND_BOOLEAN);
+                row.put("value", value);
+                pathLockEntries.put(row);
+            } else if (value instanceof String) {
+                row.put(ENTRY_KIND_FIELD, KIND_STRING);
+                row.put("value", value);
+                pathLockEntries.put(row);
+            } else if (value instanceof Set) {
+                JSONArray valuesArr = new JSONArray();
+                for (Object o : (Set<?>) value) {
+                    valuesArr.put(o != null ? String.valueOf(o) : "");
+                }
+                row.put(ENTRY_KIND_FIELD, KIND_STRING_SET);
+                row.put("values", valuesArr);
+                pathLockEntries.put(row);
+            }
+        }
+        main.put(JSON_PATH_LOCK_ENTRIES, pathLockEntries);
+
         return main.toString();
     }
 
@@ -165,6 +226,8 @@ public class SharedPreferencesBackup {
         editor.putBoolean(context.getString(R.string.pref_key_logs), jsonObject.getBoolean("useLogs"));
 
         importMediaFolderPolicyIfPresent(sharedPreferences, editor, jsonObject);
+        importViewModeEntriesIfPresent(context, sharedPreferences, editor, jsonObject);
+        importPathLockEntriesIfPresent(context, sharedPreferences, editor, jsonObject);
 
         if (jsonObject.has("pinnedItemsV2") && !jsonObject.isNull("pinnedItemsV2")) {
             PinnedItemStore.restorePinnedItemsFromBackup(context, jsonObject.optString("pinnedItemsV2"));
@@ -195,6 +258,111 @@ public class SharedPreferencesBackup {
             }
             String kind = row.optString(ENTRY_KIND_FIELD, KIND_STRING);
             if (KIND_STRING_SET.equals(kind)) {
+                JSONArray values = row.optJSONArray("values");
+                if (values == null) {
+                    continue;
+                }
+                HashSet<String> set = new HashSet<>();
+                for (int j = 0; j < values.length(); j++) {
+                    Object v = values.get(j);
+                    if (v != null) {
+                        set.add(String.valueOf(v));
+                    }
+                }
+                editor.putStringSet(key, set);
+            } else {
+                String value = row.optString("value", null);
+                if (value != null) {
+                    editor.putString(key, value);
+                }
+            }
+        }
+    }
+
+    private static boolean isViewModeBackupKey(
+            String key, String viewModePrefix, String viewModeRemoteDefaultPrefix) {
+        return key.startsWith(viewModePrefix) || key.startsWith(viewModeRemoteDefaultPrefix);
+    }
+
+    private static boolean isPathLockBackupKey(
+            String key, String pathLockEnabledPrefix, String pathLockPrefixesPrefix) {
+        return key.startsWith(pathLockEnabledPrefix) || key.startsWith(pathLockPrefixesPrefix);
+    }
+
+    private static void importViewModeEntriesIfPresent(
+            Context context,
+            SharedPreferences prefs,
+            SharedPreferences.Editor editor,
+            JSONObject jsonObject) throws JSONException {
+        if (!jsonObject.has(JSON_VIEW_MODE_ENTRIES)) {
+            return;
+        }
+        String viewModePrefix = context.getString(R.string.pref_key_view_mode_prefix);
+        String viewModeRemoteDefaultPrefix =
+                context.getString(R.string.pref_key_view_mode_remote_default_prefix);
+        JSONArray arr = jsonObject.getJSONArray(JSON_VIEW_MODE_ENTRIES);
+        Set<String> allKeys = prefs.getAll().keySet();
+        for (String key : allKeys) {
+            if (key != null && isViewModeBackupKey(key, viewModePrefix, viewModeRemoteDefaultPrefix)) {
+                editor.remove(key);
+            }
+        }
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject row = arr.getJSONObject(i);
+            String key = row.getString(ENTRY_KEY_FIELD);
+            if (key.isEmpty() || !isViewModeBackupKey(key, viewModePrefix, viewModeRemoteDefaultPrefix)) {
+                continue;
+            }
+            String kind = row.optString(ENTRY_KIND_FIELD, KIND_STRING);
+            if (KIND_STRING_SET.equals(kind)) {
+                JSONArray values = row.optJSONArray("values");
+                if (values == null) {
+                    continue;
+                }
+                HashSet<String> set = new HashSet<>();
+                for (int j = 0; j < values.length(); j++) {
+                    Object v = values.get(j);
+                    if (v != null) {
+                        set.add(String.valueOf(v));
+                    }
+                }
+                editor.putStringSet(key, set);
+            } else {
+                String value = row.optString("value", null);
+                if (value != null) {
+                    editor.putString(key, value);
+                }
+            }
+        }
+    }
+
+    private static void importPathLockEntriesIfPresent(
+            Context context,
+            SharedPreferences prefs,
+            SharedPreferences.Editor editor,
+            JSONObject jsonObject) throws JSONException {
+        if (!jsonObject.has(JSON_PATH_LOCK_ENTRIES)) {
+            return;
+        }
+        String pathLockEnabledPrefix = context.getString(R.string.pref_key_remote_path_lock_enabled_prefix);
+        String pathLockPrefixesPrefix = context.getString(R.string.pref_key_remote_path_lock_prefixes_prefix);
+        JSONArray arr = jsonObject.getJSONArray(JSON_PATH_LOCK_ENTRIES);
+        Set<String> allKeys = prefs.getAll().keySet();
+        for (String key : allKeys) {
+            if (key != null && isPathLockBackupKey(key, pathLockEnabledPrefix, pathLockPrefixesPrefix)) {
+                editor.remove(key);
+            }
+        }
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject row = arr.getJSONObject(i);
+            String key = row.getString(ENTRY_KEY_FIELD);
+            if (key.isEmpty() || !isPathLockBackupKey(key, pathLockEnabledPrefix, pathLockPrefixesPrefix)) {
+                continue;
+            }
+            String kind = row.optString(ENTRY_KIND_FIELD, KIND_STRING);
+            if (KIND_BOOLEAN.equals(kind)) {
+                editor.putBoolean(key, row.optBoolean("value", false));
+            } else if (KIND_STRING_SET.equals(kind)) {
                 JSONArray values = row.optJSONArray("values");
                 if (values == null) {
                     continue;

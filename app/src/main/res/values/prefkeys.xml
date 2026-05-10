@@ -33,4 +33,7 @@
     <string name="pref_key_local_alias_remotes" translatable="false">local_alias_remotes</string>
     <string name="pref_key_refresh_local_aliases" translatable="false">refresh_local_aliases</string>
     <string name="pref_key_view_mode_prefix" translatable="false">view_mode:</string>
+    <string name="pref_key_view_mode_remote_default_prefix" translatable="false">view_mode_remote_default:</string>
+    <string name="pref_key_remote_path_lock_enabled_prefix" translatable="false">remote_path_lock_enabled:</string>
+    <string name="pref_key_remote_path_lock_prefixes_prefix" translatable="false">remote_path_lock_prefixes:</string>
 </resources>

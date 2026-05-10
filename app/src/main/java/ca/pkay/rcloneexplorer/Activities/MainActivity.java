@@ -81,6 +81,7 @@ import ca.pkay.rcloneexplorer.util.ActivityHelper;
 import ca.pkay.rcloneexplorer.util.CanonicalCachePathResolver;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.PermissionManager;
+import ca.pkay.rcloneexplorer.util.RemotePathUnlockSession;
 import ca.pkay.rcloneexplorer.util.SharedPreferencesUtil;
 import ca.pkay.rcloneexplorer.util.SyncLog;
 import de.felixnuesse.extract.updates.UpdateChecker;
@@ -241,6 +242,18 @@ public class MainActivity extends AppCompatActivity
             startLogFragment();
             navigationView.setCheckedItem(R.id.nav_logs);
         }
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        RemotePathUnlockSession.attach(this);
+    }
+
+    @Override
+    protected void onStop() {
+        RemotePathUnlockSession.detach(this);
+        super.onStop();
     }
 
     @Override

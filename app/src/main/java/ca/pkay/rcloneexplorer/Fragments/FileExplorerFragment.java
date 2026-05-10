@@ -102,6 +102,9 @@ import ca.pkay.rcloneexplorer.util.PolicyType;
 import ca.pkay.rcloneexplorer.util.SyncLog;
 import ca.pkay.rcloneexplorer.workmanager.LastFolderThumbnailPrefetchWorker;
 import ca.pkay.rcloneexplorer.util.ServerReadinessChecker;
+import ca.pkay.rcloneexplorer.util.PathLockBiometricHelper;
+import ca.pkay.rcloneexplorer.util.RemotePathLock;
+import ca.pkay.rcloneexplorer.util.RemotePathUnlockSession;
 import ca.pkay.rcloneexplorer.util.LargeParcel;
 import ca.pkay.rcloneexplorer.workmanager.EphemeralTaskManager;
 import ca.pkay.rcloneexplorer.workmanager.SyncManager;
@@ -348,7 +351,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             showSFTPgoToDialog();
         } else {
             if (directoryObject.isDirectoryContentEmpty()) {
-                fetchDirectoryTask = new FetchDirectoryContent().execute();
+                scheduleFetchDirectoryContent(false);
                 swipeRefreshLayout.setRefreshing(true);
             } else {
                 recyclerViewAdapter.newData(directoryObject.getDirectoryContent());
@@ -445,7 +448,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             fetchDirectoryTask.cancel(true);
         }
         swipeRefreshLayout.setRefreshing(true);
-        fetchDirectoryTask = new FetchDirectoryContent(true).execute();
+        scheduleFetchDirectoryContent(true);
     }
 
     @Override
@@ -593,7 +596,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                 if (directoryObject.isPathInCache(broadcastPath)) {
                     directoryObject.removePathFromCache(broadcastPath);
                 }
-                fetchDirectoryTask = new FetchDirectoryContent(true).execute();
+                scheduleFetchDirectoryContent(true);
             } else if (directoryObject.isPathInCache(broadcastPath)) {
                 directoryObject.removePathFromCache(broadcastPath);
             }
@@ -610,7 +613,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                 if (directoryObject.isPathInCache(broadcastPath2)) {
                     directoryObject.removePathFromCache(broadcastPath2);
                 }
-                fetchDirectoryTask = new FetchDirectoryContent(true).execute();
+                scheduleFetchDirectoryContent(true);
             } else if (directoryObject.isPathInCache(broadcastPath2)) {
                 directoryObject.removePathFromCache(broadcastPath2);
             }
@@ -817,7 +820,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         if (fetchDirectoryTask != null) {
             fetchDirectoryTask.cancel(true);
         }
-        fetchDirectoryTask = new FetchDirectoryContent(true).execute();
+        scheduleFetchDirectoryContent(true);
     }
 
     private void startThumbnailServer() {
@@ -909,22 +912,93 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         throw new IllegalStateException("No port available");
     }
 
-    private String getViewModeKey() {
-        return getString(R.string.pref_key_view_mode_prefix)
-                + remote.getName() + ":" + directoryObject.getCurrentPath();
+    /**
+     * Per-remote list vs grid preference; applies to the entire remote subtree (not per folder).
+     * Keys: {@code view_mode_remote_default:&lt;remoteName&gt;} - values {@code grid} | {@code list}.
+     */
+    private String getViewModeRemoteDefaultKey() {
+        return getString(R.string.pref_key_view_mode_remote_default_prefix) + remote.getName();
+    }
+
+    /**
+     * Legacy root-path key (when start path was {@code //remoteName}), used only as a read fallback
+     * until the user saves a per-remote default.
+     */
+    private String getViewModeLegacyRootKey() {
+        String name = remote.getName();
+        return getString(R.string.pref_key_view_mode_prefix) + name + ":" + "//" + name;
     }
 
     private boolean loadViewModeForCurrentFolder() {
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
-        String mode = prefs.getString(getViewModeKey(), "list");
+        String remoteDefaultKey = getViewModeRemoteDefaultKey();
+        final String mode;
+        if (prefs.contains(remoteDefaultKey)) {
+            mode = prefs.getString(remoteDefaultKey, "list");
+        } else {
+            mode = prefs.getString(getViewModeLegacyRootKey(), "list");
+        }
         return "grid".equals(mode);
     }
 
     private void saveViewModeForCurrentFolder(boolean gridMode) {
         PreferenceManager.getDefaultSharedPreferences(context)
                 .edit()
-                .putString(getViewModeKey(), gridMode ? "grid" : "list")
+                .putString(getViewModeRemoteDefaultKey(), gridMode ? "grid" : "list")
                 .apply();
+    }
+
+    private void scheduleFetchDirectoryContent(boolean silentFetch) {
+        if (context == null || remoteName == null) {
+            return;
+        }
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+        if (!RemotePathLock.isAuthenticationRequired(prefs, context, remoteName,
+                directoryObject.getCurrentPath())) {
+            fetchDirectoryTask = new FetchDirectoryContent(silentFetch).execute();
+            return;
+        }
+        if (RemotePathUnlockSession.isUnlocked(remoteName)) {
+            fetchDirectoryTask = new FetchDirectoryContent(silentFetch).execute();
+            return;
+        }
+        FragmentActivity fa = getActivity();
+        if (fa == null) {
+            return;
+        }
+        PathLockBiometricHelper.requestUnlock(fa, remoteName, () -> {
+            RemotePathUnlockSession.markUnlocked(remoteName);
+            if (context == null || !isAdded()) {
+                return;
+            }
+            fetchDirectoryTask = new FetchDirectoryContent(silentFetch).execute();
+        });
+    }
+
+    private void runAfterPathAuthForExplorerPath(String explorerPath, Runnable onAllowed) {
+        if (context == null || remoteName == null) {
+            return;
+        }
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+        if (!RemotePathLock.isAuthenticationRequired(prefs, context, remoteName, explorerPath)) {
+            onAllowed.run();
+            return;
+        }
+        if (RemotePathUnlockSession.isUnlocked(remoteName)) {
+            onAllowed.run();
+            return;
+        }
+        FragmentActivity fa = getActivity();
+        if (fa == null) {
+            return;
+        }
+        PathLockBiometricHelper.requestUnlock(fa, remoteName, () -> {
+            RemotePathUnlockSession.markUnlocked(remoteName);
+            if (context == null || !isAdded()) {
+                return;
+            }
+            onAllowed.run();
+        });
     }
 
     private void applyViewMode(boolean save) {
@@ -1013,22 +1087,26 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
      */
     @Override
     public void onClickText(FileItem fileItem) {
-        new DownloadAndOpen(DownloadAndOpen.OPEN_AS_TEXT).execute(fileItem);
+        runAfterPathAuthForExplorerPath(fileItem.getPath(), () ->
+                new DownloadAndOpen(DownloadAndOpen.OPEN_AS_TEXT).execute(fileItem));
     }
 
     @Override
     public void onClickAudio(FileItem fileItem) {
-        new StreamTask(StreamTask.OPEN_AS_AUDIO).execute(fileItem);
+        runAfterPathAuthForExplorerPath(fileItem.getPath(), () ->
+                new StreamTask(StreamTask.OPEN_AS_AUDIO).execute(fileItem));
     }
 
     @Override
     public void onClickVideo(FileItem fileItem) {
-        new VideoStreamTask().execute(fileItem);
+        runAfterPathAuthForExplorerPath(fileItem.getPath(), () ->
+                new VideoStreamTask().execute(fileItem));
     }
 
     @Override
     public void onClickImage(FileItem fileItem) {
-        new ImageStreamTask().execute(fileItem);
+        runAfterPathAuthForExplorerPath(fileItem.getPath(), () ->
+                new ImageStreamTask().execute(fileItem));
     }
 
     private void showFileProperties(FileItem fileItem) {
@@ -1059,7 +1137,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             if (mt == null || !mt.startsWith("image/")) {
                 return;
             }
-            new DownloadAndOpen(DownloadAndOpen.OPEN_AS_IMAGE, true).execute(item);
+            runAfterPathAuthForExplorerPath(item.getPath(), () ->
+                    new DownloadAndOpen(DownloadAndOpen.OPEN_AS_IMAGE, true).execute(item));
         });
 
         view.findViewById(R.id.file_move).setOnClickListener(v -> moveFiles(recyclerViewAdapter.getSelectedItems()));
@@ -1142,7 +1221,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             } else {
                 directoryObject.setPath(moveStartPath);
                 recyclerViewAdapter.clear();
-                fetchDirectoryTask = new FetchDirectoryContent(true).execute();
+                scheduleFetchDirectoryContent(true);
             }
             buildStackFromPath(remoteName, moveStartPath);
             breadcrumbView.clearCrumbs();
@@ -1379,93 +1458,103 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         if (!isInMoveMode && !recyclerViewAdapter.isInSelectMode()) {
             fab.show();
         }
-        if (fetchDirectoryTask != null) {
-            fetchDirectoryTask.cancel(true);
-        }
-        swipeRefreshLayout.setRefreshing(false);
-        if (fetchDirectoryTask != null) {
-            fetchDirectoryTask.cancel(true);
-        }
-        breadcrumbView.removeLastCrumb();
-        String path = pathStack.pop();
-        recyclerViewAdapter.clear();
-        if (!directoryObject.isContentValid(path)) {
-            swipeRefreshLayout.setRefreshing(true);
-            directoryObject.restoreFromCache(path);
-            sortDirectory();
-            recyclerViewAdapter.newData(directoryObject.getDirectoryContent());
-            if (directoryPosition.containsKey(directoryObject.getCurrentPath())) {
-                int position = directoryPosition.get(directoryObject.getCurrentPath());
-                recyclerViewLinearLayoutManager.scrollToPositionWithOffset(position, 10);
+        final String targetPath = pathStack.peek();
+        runAfterPathAuthForExplorerPath(targetPath, () -> {
+            if (pathStack.isEmpty() || targetPath == null || !targetPath.equals(pathStack.peek())) {
+                return;
             }
-            fetchDirectoryTask = new FetchDirectoryContent(true).execute();
-        } else if (directoryObject.isPathInCache(path)) {
-            directoryObject.restoreFromCache(path);
-            sortDirectory();
-            recyclerViewAdapter.newData(directoryObject.getDirectoryContent());
-            if (directoryPosition.containsKey(directoryObject.getCurrentPath())) {
-                int position = directoryPosition.get(directoryObject.getCurrentPath());
-                recyclerViewLinearLayoutManager.scrollToPositionWithOffset(position, 10);
+            if (fetchDirectoryTask != null) {
+                fetchDirectoryTask.cancel(true);
             }
-        } else {
-            directoryObject.setPath(path);
-            fetchDirectoryTask = new FetchDirectoryContent().execute();
-        }
-        isGridMode = loadViewModeForCurrentFolder();
-        applyViewMode(false);
+            swipeRefreshLayout.setRefreshing(false);
+            if (fetchDirectoryTask != null) {
+                fetchDirectoryTask.cancel(true);
+            }
+            breadcrumbView.removeLastCrumb();
+            String path = pathStack.pop();
+            recyclerViewAdapter.clear();
+            if (!directoryObject.isContentValid(path)) {
+                swipeRefreshLayout.setRefreshing(true);
+                directoryObject.restoreFromCache(path);
+                sortDirectory();
+                recyclerViewAdapter.newData(directoryObject.getDirectoryContent());
+                if (directoryPosition.containsKey(directoryObject.getCurrentPath())) {
+                    int position = directoryPosition.get(directoryObject.getCurrentPath());
+                    recyclerViewLinearLayoutManager.scrollToPositionWithOffset(position, 10);
+                }
+                scheduleFetchDirectoryContent(true);
+            } else if (directoryObject.isPathInCache(path)) {
+                directoryObject.restoreFromCache(path);
+                sortDirectory();
+                recyclerViewAdapter.newData(directoryObject.getDirectoryContent());
+                if (directoryPosition.containsKey(directoryObject.getCurrentPath())) {
+                    int position = directoryPosition.get(directoryObject.getCurrentPath());
+                    recyclerViewLinearLayoutManager.scrollToPositionWithOffset(position, 10);
+                }
+            } else {
+                directoryObject.setPath(path);
+                scheduleFetchDirectoryContent(false);
+            }
+            isGridMode = loadViewModeForCurrentFolder();
+            applyViewMode(false);
+        });
         return true;
     }
 
     @Override
     public void onFileClicked(FileItem fileItem) {
-        String type = fileItem.getMimeType();
-        if (type != null && type.startsWith("video/")) {
-            new VideoStreamTask().execute(fileItem);
-        } else if (type != null && type.startsWith("audio/")) {
-            new StreamTask().execute(fileItem);
-        } else if (type != null && type.startsWith("image/")) {
-            new ImageStreamTask().execute(fileItem);
-        } else {
-            new DownloadAndOpen().execute(fileItem);
-        }
+        runAfterPathAuthForExplorerPath(fileItem.getPath(), () -> {
+            String type = fileItem.getMimeType();
+            if (type != null && type.startsWith("video/")) {
+                new VideoStreamTask().execute(fileItem);
+            } else if (type != null && type.startsWith("audio/")) {
+                new StreamTask().execute(fileItem);
+            } else if (type != null && type.startsWith("image/")) {
+                new ImageStreamTask().execute(fileItem);
+            } else {
+                new DownloadAndOpen().execute(fileItem);
+            }
+        });
     }
 
     @Override
     public void onDirectoryClicked(FileItem fileItem, int position) {
-        directoryPosition.put(directoryObject.getCurrentPath(), position);
-        breadcrumbView.addCrumb(fileItem.getName(), fileItem.getPath());
-        swipeRefreshLayout.setRefreshing(true);
-        pathStack.push(directoryObject.getCurrentPath());
-        if (!isInMoveMode && !recyclerViewAdapter.isInSelectMode()) {
-            fab.show();
-        }
-
-        if (isSearchMode) {
-            searchClicked();
-        }
-
-        if (fetchDirectoryTask != null) {
-            fetchDirectoryTask.cancel(true);
-        }
-
-        if (!directoryObject.isContentValid(fileItem.getPath())) {
+        runAfterPathAuthForExplorerPath(fileItem.getPath(), () -> {
+            directoryPosition.put(directoryObject.getCurrentPath(), position);
+            breadcrumbView.addCrumb(fileItem.getName(), fileItem.getPath());
             swipeRefreshLayout.setRefreshing(true);
-            directoryObject.restoreFromCache(fileItem.getPath());
-            sortDirectory();
-            recyclerViewAdapter.newData(directoryObject.getDirectoryContent());
-            fetchDirectoryTask = new FetchDirectoryContent(true).execute();
-        } else if (directoryObject.isPathInCache(fileItem.getPath())) {
-            directoryObject.restoreFromCache(fileItem.getPath());
-            sortDirectory();
-            recyclerViewAdapter.newData(directoryObject.getDirectoryContent());
-            swipeRefreshLayout.setRefreshing(false);
-        } else {
-            directoryObject.setPath(fileItem.getPath());
-            recyclerViewAdapter.clear();
-            fetchDirectoryTask = new FetchDirectoryContent().execute();
-        }
-        isGridMode = loadViewModeForCurrentFolder();
-        applyViewMode(false);
+            pathStack.push(directoryObject.getCurrentPath());
+            if (!isInMoveMode && !recyclerViewAdapter.isInSelectMode()) {
+                fab.show();
+            }
+
+            if (isSearchMode) {
+                searchClicked();
+            }
+
+            if (fetchDirectoryTask != null) {
+                fetchDirectoryTask.cancel(true);
+            }
+
+            if (!directoryObject.isContentValid(fileItem.getPath())) {
+                swipeRefreshLayout.setRefreshing(true);
+                directoryObject.restoreFromCache(fileItem.getPath());
+                sortDirectory();
+                recyclerViewAdapter.newData(directoryObject.getDirectoryContent());
+                scheduleFetchDirectoryContent(true);
+            } else if (directoryObject.isPathInCache(fileItem.getPath())) {
+                directoryObject.restoreFromCache(fileItem.getPath());
+                sortDirectory();
+                recyclerViewAdapter.newData(directoryObject.getDirectoryContent());
+                swipeRefreshLayout.setRefreshing(false);
+            } else {
+                directoryObject.setPath(fileItem.getPath());
+                recyclerViewAdapter.clear();
+                scheduleFetchDirectoryContent(false);
+            }
+            isGridMode = loadViewModeForCurrentFolder();
+            applyViewMode(false);
+        });
     }
 
     @Override
@@ -1666,7 +1755,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                 int position = directoryPosition.get(directoryObject.getCurrentPath());
                 recyclerViewLinearLayoutManager.scrollToPositionWithOffset(position, 10);
             }
-            fetchDirectoryTask = new FetchDirectoryContent(true).execute();
+            scheduleFetchDirectoryContent(true);
         } else if (directoryObject.isPathInCache(path)) {
             directoryObject.restoreFromCache(path);
             sortDirectory();
@@ -1676,7 +1765,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                 recyclerViewLinearLayoutManager.scrollToPositionWithOffset(position, 10);
             }
         } else {
-            fetchDirectoryTask = new FetchDirectoryContent().execute();
+            scheduleFetchDirectoryContent(false);
         }
         isGridMode = loadViewModeForCurrentFolder();
         applyViewMode(false);
@@ -1851,7 +1940,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         String path = "//" + remoteName;
         directoryObject.setPath(path);
         swipeRefreshLayout.setRefreshing(true);
-        fetchDirectoryTask = new FetchDirectoryContent().execute();
+        scheduleFetchDirectoryContent(false);
 
         SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
         SharedPreferences.Editor editor = sharedPreferences.edit();
@@ -1874,7 +1963,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         String path = "//" + remoteName;
         directoryObject.setPath(path);
         swipeRefreshLayout.setRefreshing(true);
-        fetchDirectoryTask = new FetchDirectoryContent().execute();
+        scheduleFetchDirectoryContent(false);
 
         SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
         SharedPreferences.Editor editor = sharedPreferences.edit();
@@ -2003,7 +2092,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             }
             swipeRefreshLayout.setRefreshing(false);
 
-            fetchDirectoryTask = new FetchDirectoryContent(true).execute();
+            scheduleFetchDirectoryContent(true);
         }
     }
 
@@ -2044,7 +2133,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             if (fetchDirectoryTask != null) {
                 fetchDirectoryTask.cancel(true);
             }
-            fetchDirectoryTask = new FetchDirectoryContent(true).execute();
+            scheduleFetchDirectoryContent(true);
         }
     }
 

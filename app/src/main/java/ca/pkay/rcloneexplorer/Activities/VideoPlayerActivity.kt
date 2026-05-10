@@ -18,6 +18,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.ParserException
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.Util
@@ -30,6 +31,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Services.StreamingService
+import ca.pkay.rcloneexplorer.util.Media3ExtensionRenderers
 import ca.pkay.rcloneexplorer.util.SyncLog
 import ca.pkay.rcloneexplorer.util.SelectedFolderSimpleCacheProvider
 import java.io.IOException
@@ -170,7 +172,8 @@ class VideoPlayerActivity : AppCompatActivity() {
             }
         }
 
-        player = ExoPlayer.Builder(this).build().also { exo ->
+        val renderersFactory = Media3ExtensionRenderers.newDefaultRenderersFactory(this)
+        player = ExoPlayer.Builder(this, renderersFactory).build().also { exo ->
             playerView.player = exo
 
             exo.setMediaSources(sources, startIndex, 0L)
@@ -199,7 +202,8 @@ class VideoPlayerActivity : AppCompatActivity() {
 
     /**
      * Correlates in-app playback (scrub / seek commands) with thumbnail HTTP path: same
-     * [DefaultHttpDataSource] + progressive source as [VideoThumbnailExoFallback].
+     * [DefaultHttpDataSource] + progressive source and extension renderer mode as
+     * [VideoThumbnailExoFallback].
      */
     private fun maybeLogPlaybackReadySeekDiag(exo: ExoPlayer, names: Array<String>) {
         val idx = exo.currentMediaItemIndex
@@ -219,6 +223,7 @@ class VideoPlayerActivity : AppCompatActivity() {
             append(" durationMs=").append(durStr)
             append(" commandSeekInCurrentWindow=").append(cmdSeekInWindow)
             append(" httpEngine=DefaultHttpDataSource ProgressiveMediaSource")
+            append(" extensionRendererMode=on")
             if (uri.isNotEmpty()) {
                 append(" uri=").append(uri)
             }
@@ -490,17 +495,69 @@ class VideoPlayerActivity : AppCompatActivity() {
     }
 
     private fun classifyError(error: PlaybackException): ErrorType {
-        val cause = error.cause
+        val code = error.errorCode
         return when {
-            cause is IOException -> ErrorType.NETWORK
-            error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> ErrorType.NETWORK
-            error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> ErrorType.SERVER
-            error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
-            error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED -> ErrorType.FORMAT
+            isPlaybackFormatOrDecodeErrorCode(code) -> ErrorType.FORMAT
+            code == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
+                code == PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE -> ErrorType.SERVER
+            code == PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE -> ErrorType.SEEKING
+            isPlaybackNetworkIoErrorCode(code) ||
+                code == PlaybackException.ERROR_CODE_TIMEOUT -> ErrorType.NETWORK
             error.message?.contains("seek", ignoreCase = true) == true ||
-            error.message?.contains("range", ignoreCase = true) == true -> ErrorType.SEEKING
+                error.message?.contains("range", ignoreCase = true) == true -> ErrorType.SEEKING
+            playbackErrorCauseIndicatesFormatOrCodec(error) -> ErrorType.FORMAT
+            error.cause is IOException -> ErrorType.NETWORK
             else -> ErrorType.UNKNOWN
         }
+    }
+
+    /**
+     * Media3 parsing/decoding error codes (prefer over generic [IOException] causes: e.g.
+     * [ParserException] is an [IOException] but must not be shown as a network failure).
+     */
+    private fun isPlaybackFormatOrDecodeErrorCode(code: Int): Boolean {
+        return when (code) {
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+            PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+            PlaybackException.ERROR_CODE_DECODING_FAILED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED,
+            PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED,
+            -> true
+            else -> false
+        }
+    }
+
+    private fun isPlaybackNetworkIoErrorCode(code: Int): Boolean {
+        return when (code) {
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+            PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND,
+            PlaybackException.ERROR_CODE_IO_NO_PERMISSION,
+            PlaybackException.ERROR_CODE_IO_CLEARTEXT_NOT_PERMITTED,
+            -> true
+            else -> false
+        }
+    }
+
+    private fun playbackErrorCauseIndicatesFormatOrCodec(error: PlaybackException): Boolean {
+        var t: Throwable? = error
+        var depth = 0
+        while (t != null && depth < 8) {
+            when {
+                t is ParserException -> return true
+                t is android.media.MediaCodec.CodecException -> return true
+                t.javaClass.name.endsWith("DecoderException") -> return true
+            }
+            t = t.cause
+            depth++
+        }
+        return false
     }
 
     private enum class ErrorType {

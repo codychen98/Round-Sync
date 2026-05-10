@@ -19,7 +19,6 @@ import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.Util;
 import androidx.media3.datasource.DefaultHttpDataSource;
-import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.ProgressiveMediaSource;
 
@@ -29,6 +28,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.util.FLog;
+import ca.pkay.rcloneexplorer.util.Media3ExtensionRenderers;
 
 /**
  * One-frame grab via Media3 + FFmpeg extension when {@link android.media.MediaMetadataRetriever}
@@ -204,9 +204,7 @@ final class VideoThumbnailExoFallback {
         ExoPlayer player = null;
         ImageReader reader = null;
         try {
-            DefaultRenderersFactory renderersFactory = new DefaultRenderersFactory(appContext)
-                    .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON);
-            player = new ExoPlayer.Builder(appContext, renderersFactory)
+            player = new ExoPlayer.Builder(appContext, Media3ExtensionRenderers.newDefaultRenderersFactory(appContext))
                     .setLooper(Looper.myLooper())
                     .build();
             reader = ImageReader.newInstance(OUT_W, OUT_H, PixelFormat.RGBA_8888, 2);

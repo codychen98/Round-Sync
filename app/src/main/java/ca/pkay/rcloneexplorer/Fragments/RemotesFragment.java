@@ -49,6 +49,7 @@ import ca.pkay.rcloneexplorer.Rclone;
 import ca.pkay.rcloneexplorer.RecyclerViewAdapters.RemotesRecyclerViewAdapter;
 import ca.pkay.rcloneexplorer.RemoteConfig.RemoteConfig;
 import ca.pkay.rcloneexplorer.util.ActivityHelper;
+import ca.pkay.rcloneexplorer.util.RemotePathLockEditor;
 import jp.wasabeef.recyclerview.animators.LandingAnimator;
 
 public class RemotesFragment extends Fragment implements RemotesRecyclerViewAdapter.OnRemoteOptionsClick {
@@ -279,6 +280,8 @@ public class RemotesFragment extends Fragment implements RemotesRecyclerViewAdap
 
             if(itemID == R.id.action_remote_properties) {
                 showRemotePropertiesDialog(remoteItem);
+            } else if (itemID == R.id.action_remote_path_lock) {
+                RemotePathLockEditor.show(RemotesFragment.this, remoteItem);
             } else if (itemID == R.id.action_edit_remote) {
                 Intent intent = new Intent(context, RemoteConfig.class);
                 intent.putExtra(CONFIG_EDIT_TARGET, remoteItem.getName());
