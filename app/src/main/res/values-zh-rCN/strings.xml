@@ -131,8 +131,8 @@
     <string name="pref_locale">语言</string>
     <string name="pref_locale_dlg_title">选择语言</string>
     <string name="pref_locale_restart_notice">语言更改将在重新启动应用后生效</string>
-    <string name="use_logs">记录 Rclone 错误</string>
-    <string name="use_logs_summary">错误日志保存在 Android/data/de.felixnuesse.extract/ 下，文件名为 log_&lt;时间戳&gt;.log（每次启动应用会新建）</string>
+    <string name="use_logs">保存日志文件</string>
+    <string name="use_logs_summary">开启后，会捕获详细 rclone 输出并将应用诊断行保存到 Android/data/de.felixnuesse.extract/，文件名易读（例如 log_May_10_2026_3_00_PM.log）。在此选项开启时开始记录会创建新文件。默认关闭。</string>
     <string name="notifications_pref_title">消息通知</string>
     <string name="content_description_circle">圈</string>
     <string name="loading">加载中</string>

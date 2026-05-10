@@ -1,7 +1,10 @@
 package ca.pkay.rcloneexplorer.util;
 
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.util.Log;
+
+import androidx.preference.PreferenceManager;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -14,8 +17,13 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
+import java.util.Locale;
+
+import ca.pkay.rcloneexplorer.R;
 
 /**
  * Copyright (C) 2021  Felix Nüsse
@@ -29,20 +37,55 @@ public class SyncLog {
 
     private static int loglength = 4;
 
-    /** One log file per app process (Millis-based filename prefix log_) under Android/data Package dir. Lazily assigned if {@link #startSession} never ran. */
+    /** One session log file per process when {@link #isFileLoggingEnabled} is true; lazily created on first write. */
     private static volatile File sessionLogFile;
+
+    /**
+     * Whether JSON session logs are written to disk (same preference as Logging settings and verbose rclone).
+     * Off by default.
+     */
+    public static boolean isFileLoggingEnabled(Context context) {
+        Context app = context.getApplicationContext();
+        return PreferenceManager.getDefaultSharedPreferences(app)
+                .getBoolean(app.getString(R.string.pref_key_logs), false);
+    }
+
+    @SuppressLint("SimpleDateFormat")
+    private static String buildReadableLogFileName() {
+        SimpleDateFormat sdf = new SimpleDateFormat("MMM_dd_yyyy_h_mm_a", Locale.US);
+        String stamp = sdf.format(new Date());
+        stamp = stamp.replace(':', '_').replace(' ', '_');
+        return "log_" + stamp + ".log";
+    }
+
+    private static File createUniqueSessionLogFile(File directory) {
+        String name = buildReadableLogFileName();
+        File candidate = new File(directory, name);
+        int suffix = 0;
+        while (candidate.exists()) {
+            suffix++;
+            int dot = name.lastIndexOf('.');
+            String base = dot > 0 ? name.substring(0, dot) : name;
+            String ext = dot > 0 ? name.substring(dot) : "";
+            candidate = new File(directory, base + "_" + suffix + ext);
+        }
+        return candidate;
+    }
 
     /**
      * Resolves directory {@code Context#getExternalFilesDir(null)}'s parent (e.g.
      * {@code .../Android/data/de.felixnuesse.extract}), or falls back to internal storage when external is unavailable.
+     * No file is created until the first {@link #log} when file logging is enabled.
      */
     public static synchronized void startSession(Context context) {
         if (sessionLogFile != null) {
             return;
         }
         Context app = context.getApplicationContext();
-        sessionLogFile = new File(resolveSessionLogDirectory(app),
-                "log_" + System.currentTimeMillis() + ".log");
+        if (!isFileLoggingEnabled(app)) {
+            return;
+        }
+        sessionLogFile = createUniqueSessionLogFile(resolveSessionLogDirectory(app));
     }
 
     private static File resolveSessionLogDirectory(Context context) {
@@ -60,6 +103,10 @@ public class SyncLog {
     }
 
     private static File getLogFile(Context c) {
+        Context app = c.getApplicationContext();
+        if (!isFileLoggingEnabled(app)) {
+            return null;
+        }
         if (sessionLogFile == null) {
             synchronized (SyncLog.class) {
                 if (sessionLogFile == null) {
@@ -79,6 +126,9 @@ public class SyncLog {
 
     public static ArrayList<JSONObject> getLog(Context c){
         File log = getLogFile(c);
+        if (log == null || !log.exists()) {
+            return new ArrayList<>();
+        }
         StringBuilder file = new StringBuilder();
         try {
             char[] buffer = new char[4096];
@@ -105,8 +155,13 @@ public class SyncLog {
     }
 
     private static void appendLog(Context c, String entry){
-
+        if (!isFileLoggingEnabled(c.getApplicationContext())) {
+            return;
+        }
         File log = getLogFile(c);
+        if (log == null) {
+            return;
+        }
         try {
             FileWriter writer = new FileWriter(log, true);
             writer.append(System.lineSeparator());
@@ -142,7 +197,10 @@ public class SyncLog {
     }
 
     public static void delete(Context c){
-        File log = getLogFile(c);
+        File log = sessionLogFile;
+        if (log == null) {
+            return;
+        }
         if (log.exists() && !log.delete()) {
             Log.w(SyncLog.class.getSimpleName(), "Could not delete log file: " + log.getAbsolutePath());
         }

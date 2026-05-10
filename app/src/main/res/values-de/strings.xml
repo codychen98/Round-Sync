@@ -119,8 +119,8 @@
     <string name="pref_locale">Sprache</string>
     <string name="pref_locale_dlg_title">Sprache auswählen</string>
     <string name="pref_locale_restart_notice">Sprache wird beim nächsten neustart der App geändert.</string>
-    <string name="use_logs">Rclone-Fehler protokollieren</string>
-    <string name="use_logs_summary">Fehler werden unter Android/data/de.felixnuesse.extract/ als log_&lt;Zeitstempel&gt;.log gespeichert (bei jedem App-Start neue Datei)</string>
+    <string name="use_logs">Protokolldateien speichern</string>
+    <string name="use_logs_summary">Wenn aktiviert, werden ausführliche Rclone-Ausgaben erfasst und Diagnosezeilen unter Android/data/de.felixnuesse.extract/ mit lesbarem Dateinamen gespeichert (z. B. log_May_10_2026_3_00_PM.log). Neue Datei, sobald die Protokollierung bei eingeschalteter Option startet. Standardmäßig aus.</string>
     <string name="notifications_pref_title">Benachrichtigungen</string>
     <string name="content_description_circle">Kreis</string>
     <string name="loading">Lade</string>

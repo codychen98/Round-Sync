@@ -152,8 +152,8 @@
     <string name="pref_locale">Language</string>
     <string name="pref_locale_dlg_title">Select Language</string>
     <string name="pref_locale_restart_notice">Changing the language will take effect after restarting the app</string>
-    <string name="use_logs">Log rclone errors</string>
-    <string name="use_logs_summary">Error logs are saved under Android/data/de.felixnuesse.extract/ as log_&lt;timestamp&gt;.log (a new file each time you launch the app)</string>
+    <string name="use_logs">Save log files</string>
+    <string name="use_logs_summary">When on, captures verbose rclone output and saves app diagnostic lines under Android/data/de.felixnuesse.extract/ with a readable name such as log_May_10_2026_3_00_PM.log (month, day, year, 12-hour time; colons become underscores). A new file is created when logging starts while this option is on. Off by default.</string>
     <string name="notifications_pref_title">Notifications</string>
     <string name="open_notification_settings_title">More notification settings</string>
     <string name="open_notification_settings_summary">Open the settings to further change how we notify you!</string>
