@@ -29,6 +29,47 @@ public class SyncLog {
 
     private static int loglength = 4;
 
+    /** One log file per app process (Millis-based filename prefix log_) under Android/data Package dir. Lazily assigned if {@link #startSession} never ran. */
+    private static volatile File sessionLogFile;
+
+    /**
+     * Resolves directory {@code Context#getExternalFilesDir(null)}'s parent (e.g.
+     * {@code .../Android/data/de.felixnuesse.extract}), or falls back to internal storage when external is unavailable.
+     */
+    public static synchronized void startSession(Context context) {
+        if (sessionLogFile != null) {
+            return;
+        }
+        Context app = context.getApplicationContext();
+        sessionLogFile = new File(resolveSessionLogDirectory(app),
+                "log_" + System.currentTimeMillis() + ".log");
+    }
+
+    private static File resolveSessionLogDirectory(Context context) {
+        File externalFiles = context.getExternalFilesDir(null);
+        if (externalFiles != null) {
+            File parent = externalFiles.getParentFile();
+            if (parent != null) {
+                if (!parent.isDirectory() && !parent.mkdirs()) {
+                    Log.w(SyncLog.class.getSimpleName(), "Could not mkdir session log dir: " + parent);
+                }
+                return parent;
+            }
+        }
+        return context.getFilesDir();
+    }
+
+    private static File getLogFile(Context c) {
+        if (sessionLogFile == null) {
+            synchronized (SyncLog.class) {
+                if (sessionLogFile == null) {
+                    startSession(c);
+                }
+            }
+        }
+        return sessionLogFile;
+    }
+
     public static String TIMESTAMP = "timestamp";
     public static String TITLE = "title";
     public static String CONTENT = "content";
@@ -37,7 +78,7 @@ public class SyncLog {
     public static final int TYPE_INFO = 1;
 
     public static ArrayList<JSONObject> getLog(Context c){
-        File log = new File(c.getFilesDir().getPath() + "/sync.log");
+        File log = getLogFile(c);
         StringBuilder file = new StringBuilder();
         try {
             char[] buffer = new char[4096];
@@ -47,7 +88,7 @@ public class SyncLog {
                 file.append(buffer, 0, numRead);
             }
         } catch (IOException e) {
-            e.printStackTrace();
+            Log.e(SyncLog.class.getSimpleName(), "getLog read failed", e);
         }
 
         String lines[] = file.toString().split("\\r?\\n");
@@ -65,7 +106,7 @@ public class SyncLog {
 
     private static void appendLog(Context c, String entry){
 
-        File log = new File(c.getFilesDir().getPath() + "/sync.log");
+        File log = getLogFile(c);
         try {
             FileWriter writer = new FileWriter(log, true);
             writer.append(System.lineSeparator());
@@ -101,14 +142,11 @@ public class SyncLog {
     }
 
     public static void delete(Context c){
-        File log = new File(c.getFilesDir().getPath() + "/sync.log");
-        if (log.exists()) {
-            if (log.delete()) {
-                System.out.println("file Deleted");
-            } else {
-                System.out.println("file not Deleted");
-            }
+        File log = getLogFile(c);
+        if (log.exists() && !log.delete()) {
+            Log.w(SyncLog.class.getSimpleName(), "Could not delete log file: " + log.getAbsolutePath());
         }
+        sessionLogFile = null;
     }
 
 }
