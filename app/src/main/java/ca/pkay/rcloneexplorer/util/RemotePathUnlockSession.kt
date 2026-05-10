@@ -1,24 +1,21 @@
 package ca.pkay.rcloneexplorer.util
 
 import android.app.Activity
-import android.app.KeyguardManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.Build
 import androidx.core.content.ContextCompat
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
-import java.util.function.Consumer
 
 /**
- * Unlocked remotes for path lock: cleared when the device locks (keyguard) or the screen turns off.
+ * Unlocked remotes for path lock: cleared when [Intent.ACTION_SCREEN_OFF] is broadcast.
  *
- * [ACTION_SCREEN_OFF] is registered on the application context and only unregistered when the
- * hosting activity [detach]es in [Activity.onDestroy], so the receiver remains active while
- * [Activity.onStop] runs (e.g. user locks the device or opens another activity). Previously
- * unregistering in [Activity.onStop] dropped the receiver before [ACTION_SCREEN_OFF] fired.
+ * The receiver uses the application context and is removed only when the hosting activity calls
+ * [detach] from [Activity.onDestroy], so it stays registered across [Activity.onStop] while the user
+ * locks the device or opens another activity — avoiding missing SCREEN_OFF due to unregistering in
+ * onStop.
  */
 object RemotePathUnlockSession {
 
@@ -27,12 +24,10 @@ object RemotePathUnlockSession {
 
     private var screenOffReceiver: BroadcastReceiver? = null
 
-    /** Application context used to register [ACTION_SCREEN_OFF]. */
+    /** Application context used to register [Intent.ACTION_SCREEN_OFF]. */
     private var receiverContext: Context? = null
 
     private var registeredActivity: Activity? = null
-
-    private var keyguardLockedListener: Consumer<Boolean>? = null
 
     @JvmStatic
     fun markUnlocked(remoteName: String) {
@@ -73,7 +68,6 @@ object RemotePathUnlockSession {
             IntentFilter(Intent.ACTION_SCREEN_OFF),
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
-        registerKeyguardLockedStateListenerIfSupported(activity)
     }
 
     @JvmStatic
@@ -84,25 +78,7 @@ object RemotePathUnlockSession {
         detachRegistered()
     }
 
-    private fun registerKeyguardLockedStateListenerIfSupported(activity: Activity) {
-        if (Build.VERSION.SDK_INT < 34) {
-            return
-        }
-        val km = activity.getSystemService(KeyguardManager::class.java) ?: return
-        val listener = Consumer<Boolean> { locked ->
-            if (locked) {
-                clearAll()
-            }
-        }
-        keyguardLockedListener = listener
-        km.registerKeyguardLockedStateListener(
-            ContextCompat.getMainExecutor(activity),
-            listener,
-        )
-    }
-
     private fun detachRegistered() {
-        unregisterKeyguardLockedStateListenerIfSupportedBeforeClearingActivity()
         val app = receiverContext
         receiverContext = null
         val receiver = screenOffReceiver
@@ -113,20 +89,6 @@ object RemotePathUnlockSession {
                 app.unregisterReceiver(receiver)
             } catch (_: IllegalArgumentException) {
             }
-        }
-    }
-
-    private fun unregisterKeyguardLockedStateListenerIfSupportedBeforeClearingActivity() {
-        if (Build.VERSION.SDK_INT < 34) {
-            return
-        }
-        val listener = keyguardLockedListener ?: return
-        val act = registeredActivity ?: return
-        val km = act.getSystemService(KeyguardManager::class.java) ?: return
-        keyguardLockedListener = null
-        try {
-            km.unregisterKeyguardLockedStateListener(listener)
-        } catch (_: RuntimeException) {
         }
     }
 }

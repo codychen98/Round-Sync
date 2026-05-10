@@ -38,7 +38,8 @@ public class OkHttpMediaDataSource extends MediaDataSource {
             .readTimeout(30, TimeUnit.SECONDS)
             .build();
 
-    static OkHttpClient getClient() {
+    /** Shared client for Glide MMR reads and Media3 OkHttp datasource (playback). */
+    public static OkHttpClient getClient() {
         return CLIENT;
     }
 
