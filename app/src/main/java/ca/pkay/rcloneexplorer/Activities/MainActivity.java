@@ -253,6 +253,7 @@ public class MainActivity extends AppCompatActivity
     @Override
     protected void onDestroy() {
         RemotePathUnlockSession.detach(this);
+        clearOwnedCacheSubfoldersOnDestroy();
         super.onDestroy();
     }
 
@@ -327,12 +328,6 @@ public class MainActivity extends AppCompatActivity
                     }
             }
         }
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        clearOwnedCacheSubfoldersOnDestroy();
     }
 
     /**
