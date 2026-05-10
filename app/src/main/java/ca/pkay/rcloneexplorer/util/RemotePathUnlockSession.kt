@@ -12,8 +12,9 @@ import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Remotes unlocked for the current keyguard session. Cleared when the device locks or the screen
- * turns off (pre-API 31 fallback).
+ * Remotes unlocked for the current keyguard session. Cleared when the device locks
+ * ([KeyguardManager.KeyguardLockedStateListener], API 33+) or the screen turns off (fallback on
+ * older API levels).
  */
 object RemotePathUnlockSession {
 
@@ -22,7 +23,7 @@ object RemotePathUnlockSession {
 
     private var screenOffReceiver: BroadcastReceiver? = null
 
-    @RequiresApi(Build.VERSION_CODES.S)
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private var keyguardListener: KeyguardManager.KeyguardLockedStateListener? = null
 
     private var registeredActivity: Activity? = null
@@ -49,7 +50,7 @@ object RemotePathUnlockSession {
         }
         detachRegistered()
         registeredActivity = activity
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val km = activity.getSystemService(KeyguardManager::class.java) ?: return
             val listener =
                 KeyguardManager.KeyguardLockedStateListener { isKeyguardLocked ->
@@ -60,22 +61,22 @@ object RemotePathUnlockSession {
             keyguardListener = listener
             km.registerKeyguardLockedStateListener(activity.mainExecutor, listener)
         } else {
-            val receiver =
-                object : BroadcastReceiver() {
-                    override fun onReceive(context: Context?, intent: Intent?) {
-                        if (Intent.ACTION_SCREEN_OFF == intent?.action) {
-                            clearAll()
-                        }
+            registerScreenOffReceiver(activity)
+        }
+    }
+
+    private fun registerScreenOffReceiver(activity: Activity) {
+        val receiver =
+            object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    if (Intent.ACTION_SCREEN_OFF == intent?.action) {
+                        clearAll()
                     }
                 }
-            screenOffReceiver = receiver
-            val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                activity.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-            } else {
-                activity.registerReceiver(receiver, filter)
             }
-        }
+        screenOffReceiver = receiver
+        val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
+        activity.registerReceiver(receiver, filter)
     }
 
     @JvmStatic
@@ -92,7 +93,7 @@ object RemotePathUnlockSession {
         if (act == null) {
             return
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val km = act.getSystemService(KeyguardManager::class.java)
             val listener = keyguardListener
             keyguardListener = null
