@@ -22,18 +22,20 @@ import androidx.media3.common.ParserException
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.Util
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import ca.pkay.rcloneexplorer.Glide.OkHttpMediaDataSource
 import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Services.StreamingService
 import ca.pkay.rcloneexplorer.util.Media3ExtensionRenderers
 import ca.pkay.rcloneexplorer.util.SyncLog
 import ca.pkay.rcloneexplorer.util.SelectedFolderSimpleCacheProvider
+import java.io.EOFException
 import java.io.IOException
 
 class VideoPlayerActivity : AppCompatActivity() {
@@ -147,7 +149,7 @@ class VideoPlayerActivity : AppCompatActivity() {
             null
         }
 
-        val upstreamFactory = DefaultHttpDataSource.Factory()
+        val upstreamFactory = OkHttpDataSource.Factory(OkHttpMediaDataSource.getClient())
             .setUserAgent(Util.getUserAgent(this, packageName ?: "RoundSync"))
 
         val cacheDataSourceFactory = if (simpleCache != null) {
@@ -201,9 +203,8 @@ class VideoPlayerActivity : AppCompatActivity() {
     }
 
     /**
-     * Correlates in-app playback (scrub / seek commands) with thumbnail HTTP path: same
-     * [DefaultHttpDataSource] + progressive source and extension renderer mode as
-     * [VideoThumbnailExoFallback].
+     * Correlates in-app playback with thumbnail Exo fallback: OkHttp datasource for rclone
+     * HTTP serve (matches [VideoThumbnailExoFallback]) plus extension renderers on.
      */
     private fun maybeLogPlaybackReadySeekDiag(exo: ExoPlayer, names: Array<String>) {
         val idx = exo.currentMediaItemIndex
@@ -222,7 +223,7 @@ class VideoPlayerActivity : AppCompatActivity() {
             append(" seekable=").append(seekable)
             append(" durationMs=").append(durStr)
             append(" commandSeekInCurrentWindow=").append(cmdSeekInWindow)
-            append(" httpEngine=DefaultHttpDataSource ProgressiveMediaSource")
+            append(" httpEngine=OkHttpDataSource ProgressiveMediaSource")
             append(" extensionRendererMode=on")
             if (uri.isNotEmpty()) {
                 append(" uri=").append(uri)
@@ -506,6 +507,7 @@ class VideoPlayerActivity : AppCompatActivity() {
             error.message?.contains("seek", ignoreCase = true) == true ||
                 error.message?.contains("range", ignoreCase = true) == true -> ErrorType.SEEKING
             playbackErrorCauseIndicatesFormatOrCodec(error) -> ErrorType.FORMAT
+            playbackErrorCauseIndicatesUnexpectedEof(error) -> ErrorType.FORMAT
             error.cause is IOException -> ErrorType.NETWORK
             else -> ErrorType.UNKNOWN
         }
@@ -553,6 +555,27 @@ class VideoPlayerActivity : AppCompatActivity() {
                 t is ParserException -> return true
                 t is android.media.MediaCodec.CodecException -> return true
                 t.javaClass.name.endsWith("DecoderException") -> return true
+            }
+            t = t.cause
+            depth++
+        }
+        return false
+    }
+
+    /**
+     * Early [EOFException] under [PlaybackException.ERROR_CODE_IO_UNSPECIFIED] often means the
+     * HTTP source closed before the container could be read (rclone / range quirks), not a
+     * transient network failure; avoids false retry as network.
+     */
+    private fun playbackErrorCauseIndicatesUnexpectedEof(error: PlaybackException): Boolean {
+        if (error.errorCode != PlaybackException.ERROR_CODE_IO_UNSPECIFIED) {
+            return false
+        }
+        var t: Throwable? = error
+        var depth = 0
+        while (t != null && depth < 8) {
+            if (t is EOFException) {
+                return true
             }
             t = t.cause
             depth++

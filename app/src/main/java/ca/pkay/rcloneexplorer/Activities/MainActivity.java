@@ -251,9 +251,9 @@ public class MainActivity extends AppCompatActivity
     }
 
     @Override
-    protected void onStop() {
+    protected void onDestroy() {
         RemotePathUnlockSession.detach(this);
-        super.onStop();
+        super.onDestroy();
     }
 
     @Override

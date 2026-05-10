@@ -50,6 +50,9 @@ import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
+import androidx.lifecycle.DefaultLifecycleObserver;
+import androidx.lifecycle.Lifecycle;
+import androidx.lifecycle.LifecycleOwner;
 
 import com.leinardi.android.speeddial.SpeedDialActionItem;
 import com.leinardi.android.speeddial.SpeedDialOverlayLayout;
@@ -352,7 +355,6 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         } else {
             if (directoryObject.isDirectoryContentEmpty()) {
                 scheduleFetchDirectoryContent(false);
-                swipeRefreshLayout.setRefreshing(true);
             } else {
                 recyclerViewAdapter.newData(directoryObject.getDirectoryContent());
             }
@@ -447,7 +449,6 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         if (fetchDirectoryTask != null) {
             fetchDirectoryTask.cancel(true);
         }
-        swipeRefreshLayout.setRefreshing(true);
         scheduleFetchDirectoryContent(true);
     }
 
@@ -948,6 +949,30 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                 .apply();
     }
 
+    /**
+     * BiometricPrompt is not reliably shown until the fragment's host activity is resumed;
+     * calling it from {@code onCreateView} / {@code onStart} only runs the spinner with no sheet.
+     */
+    private void invokePathLockBiometricWhenResumed(@NonNull Runnable showBiometricPrompt) {
+        if (!isAdded()) {
+            return;
+        }
+        if (getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED)) {
+            showBiometricPrompt.run();
+        } else {
+            DefaultLifecycleObserver observer = new DefaultLifecycleObserver() {
+                @Override
+                public void onResume(@NonNull LifecycleOwner owner) {
+                    getLifecycle().removeObserver(this);
+                    if (isAdded()) {
+                        showBiometricPrompt.run();
+                    }
+                }
+            };
+            getLifecycle().addObserver(observer);
+        }
+    }
+
     private void scheduleFetchDirectoryContent(boolean silentFetch) {
         if (context == null || remoteName == null) {
             return;
@@ -962,16 +987,21 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             fetchDirectoryTask = new FetchDirectoryContent(silentFetch).execute();
             return;
         }
-        FragmentActivity fa = getActivity();
-        if (fa == null) {
+        if (getActivity() == null) {
             return;
         }
-        PathLockBiometricHelper.requestUnlock(fa, remoteName, () -> {
-            RemotePathUnlockSession.markUnlocked(remoteName);
-            if (context == null || !isAdded()) {
+        invokePathLockBiometricWhenResumed(() -> {
+            FragmentActivity act = getActivity();
+            if (act == null || !isAdded()) {
                 return;
             }
-            fetchDirectoryTask = new FetchDirectoryContent(silentFetch).execute();
+            PathLockBiometricHelper.requestUnlock(act, remoteName, () -> {
+                RemotePathUnlockSession.markUnlocked(remoteName);
+                if (context == null || !isAdded()) {
+                    return;
+                }
+                fetchDirectoryTask = new FetchDirectoryContent(silentFetch).execute();
+            });
         });
     }
 
@@ -988,16 +1018,21 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             onAllowed.run();
             return;
         }
-        FragmentActivity fa = getActivity();
-        if (fa == null) {
+        if (getActivity() == null) {
             return;
         }
-        PathLockBiometricHelper.requestUnlock(fa, remoteName, () -> {
-            RemotePathUnlockSession.markUnlocked(remoteName);
-            if (context == null || !isAdded()) {
+        invokePathLockBiometricWhenResumed(() -> {
+            FragmentActivity act = getActivity();
+            if (act == null || !isAdded()) {
                 return;
             }
-            onAllowed.run();
+            PathLockBiometricHelper.requestUnlock(act, remoteName, () -> {
+                RemotePathUnlockSession.markUnlocked(remoteName);
+                if (context == null || !isAdded()) {
+                    return;
+                }
+                onAllowed.run();
+            });
         });
     }
 
