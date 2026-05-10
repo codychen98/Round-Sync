@@ -320,8 +320,8 @@
     <string name="path_lock_enable">Require authentication for listed paths</string>
     <string name="path_lock_prefixes_hint">One folder per line, as remote-relative paths (for example /Photos or /Work/Finance). Leave empty to protect the entire remote. Paths apply to this remote only.</string>
     <string name="path_lock_save">Save</string>
-    <string name="path_lock_biometric_title">Unlock</string>
-    <string name="path_lock_biometric_subtitle">Authentication required for this location</string>
+    <string name="path_lock_biometric_title">Unlock (%1$s)</string>
+    <string name="path_lock_biometric_subtitle">Authenticate to browse</string>
     <string name="path_lock_error">Could not show authentication</string>
     <string-array name="serve_options" translatable="false">
         <item>HTTP</item>
