@@ -133,10 +133,6 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
 
     public static final int STREAMING_INTENT_RESULT = 468;
     private static final String TAG = "FileExplorerFragment";
-    private static final String EXPLORER_ROW_DBG = "ExplorerRowDbg";
-    private static final long EXPLORER_ROW_LOG_COOLDOWN_MS = 15_000L;
-    private static final int EXPLORER_ROW_LOG_LIMIT = 8;
-    private static final Map<String, Long> EXPLORER_ROW_LOG_AT = new java.util.concurrent.ConcurrentHashMap<>();
     private static final String ARG_REMOTE = "remote_param";
     private static final String ARG_START_PATH = "start_path_param";
     private static final String SHARED_PREFS_SORT_ORDER = "ca.pkay.rcexplorer.sort_order";
@@ -1009,76 +1005,10 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         });
     }
 
-    private void renderCachedDirectoryWithDiagnostics(@NonNull String path) {
+    private void renderCachedDirectory(@NonNull String path) {
         directoryObject.restoreFromCache(path);
         sortDirectory();
-        logExplorerClassificationRows("cacheRestore", "cache", directoryObject.getDirectoryContent());
         recyclerViewAdapter.newData(directoryObject.getDirectoryContent());
-    }
-
-    private void logExplorerClassificationRows(
-            @NonNull String event,
-            @NonNull String source,
-            @Nullable List<FileItem> items) {
-        if (context == null || items == null || items.isEmpty()) {
-            return;
-        }
-        int logged = 0;
-        for (FileItem item : items) {
-            if (!isExplorerClassificationDiagnosticCandidate(item)) {
-                continue;
-            }
-            if (maybeLogExplorerClassificationRow(event, source, item)) {
-                logged++;
-                if (logged >= EXPLORER_ROW_LOG_LIMIT) {
-                    return;
-                }
-            }
-        }
-    }
-
-    private boolean maybeLogExplorerClassificationRow(
-            @NonNull String event,
-            @NonNull String source,
-            @NonNull FileItem item) {
-        String key = event + "|" + source + "|" + item.getPath() + "|" + item.isDir() + "|" + item.getMimeType();
-        long now = System.currentTimeMillis();
-        Long last = EXPLORER_ROW_LOG_AT.get(key);
-        if (last != null && now - last < EXPLORER_ROW_LOG_COOLDOWN_MS) {
-            return false;
-        }
-        if (EXPLORER_ROW_LOG_AT.size() > 800) {
-            EXPLORER_ROW_LOG_AT.clear();
-        }
-        EXPLORER_ROW_LOG_AT.put(key, now);
-        SyncLog.info(context, EXPLORER_ROW_DBG,
-                "event=" + event
-                        + " source=" + source
-                        + " dirPath=" + directoryObject.getCurrentPath()
-                        + " rowPath=" + item.getPath()
-                        + " name=" + item.getName()
-                        + " isDir=" + item.isDir()
-                        + " mimeType=" + item.getMimeType());
-        return true;
-    }
-
-    private boolean isExplorerClassificationDiagnosticCandidate(@NonNull FileItem item) {
-        String mimeType = item.getMimeType();
-        if (mimeType != null && (mimeType.startsWith("video/") || mimeType.startsWith("image/"))) {
-            return true;
-        }
-        String lowerPath = item.getPath().toLowerCase(java.util.Locale.US);
-        return lowerPath.endsWith(".mp4")
-                || lowerPath.endsWith(".m4v")
-                || lowerPath.endsWith(".mkv")
-                || lowerPath.endsWith(".mov")
-                || lowerPath.endsWith(".webm")
-                || lowerPath.endsWith(".avi")
-                || lowerPath.endsWith(".jpg")
-                || lowerPath.endsWith(".jpeg")
-                || lowerPath.endsWith(".png")
-                || lowerPath.endsWith(".webp")
-                || lowerPath.endsWith(".gif");
     }
 
     private void runAfterPathAuthForExplorerPath(String explorerPath, Runnable onAllowed) {
@@ -1586,14 +1516,14 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             recyclerViewAdapter.clear();
             if (!directoryObject.isContentValid(path)) {
                 swipeRefreshLayout.setRefreshing(true);
-                renderCachedDirectoryWithDiagnostics(path);
+                renderCachedDirectory(path);
                 if (directoryPosition.containsKey(directoryObject.getCurrentPath())) {
                     int position = directoryPosition.get(directoryObject.getCurrentPath());
                     recyclerViewLinearLayoutManager.scrollToPositionWithOffset(position, 10);
                 }
                 scheduleFetchDirectoryContent(true);
             } else if (directoryObject.isPathInCache(path)) {
-                renderCachedDirectoryWithDiagnostics(path);
+                renderCachedDirectory(path);
                 if (directoryPosition.containsKey(directoryObject.getCurrentPath())) {
                     int position = directoryPosition.get(directoryObject.getCurrentPath());
                     recyclerViewLinearLayoutManager.scrollToPositionWithOffset(position, 10);
@@ -1645,10 +1575,10 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
 
             if (!directoryObject.isContentValid(fileItem.getPath())) {
                 swipeRefreshLayout.setRefreshing(true);
-                renderCachedDirectoryWithDiagnostics(fileItem.getPath());
+                renderCachedDirectory(fileItem.getPath());
                 scheduleFetchDirectoryContent(true);
             } else if (directoryObject.isPathInCache(fileItem.getPath())) {
-                renderCachedDirectoryWithDiagnostics(fileItem.getPath());
+                renderCachedDirectory(fileItem.getPath());
                 swipeRefreshLayout.setRefreshing(false);
             } else {
                 directoryObject.setPath(fileItem.getPath());
@@ -1851,14 +1781,14 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
 
         if (!directoryObject.isContentValid(path)) {
             swipeRefreshLayout.setRefreshing(true);
-            renderCachedDirectoryWithDiagnostics(path);
+            renderCachedDirectory(path);
             if (directoryPosition.containsKey(directoryObject.getCurrentPath())) {
                 int position = directoryPosition.get(directoryObject.getCurrentPath());
                 recyclerViewLinearLayoutManager.scrollToPositionWithOffset(position, 10);
             }
             scheduleFetchDirectoryContent(true);
         } else if (directoryObject.isPathInCache(path)) {
-            renderCachedDirectoryWithDiagnostics(path);
+            renderCachedDirectory(path);
             if (directoryPosition.containsKey(directoryObject.getCurrentPath())) {
                 int position = directoryPosition.get(directoryObject.getCurrentPath());
                 recyclerViewLinearLayoutManager.scrollToPositionWithOffset(position, 10);
@@ -2127,10 +2057,6 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
 
             directoryObject.setContent(fileItems);
             sortDirectory();
-            logExplorerClassificationRows("fetchComplete",
-                    silentFetch ? "freshListingSilent" : "freshListing",
-                    directoryObject.getDirectoryContent());
-
             if (isSearchMode && searchString != null) {
                 searchDirContent(searchString);
             } else {

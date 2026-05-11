@@ -88,10 +88,6 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
     private static final ConcurrentHashMap<String, Long> THUMB_PIPELINE_LOG_AT = new ConcurrentHashMap<>();
     private static final long THUMB_PIPELINE_LOG_COOLDOWN_MS = 60_000L;
-    private static final ConcurrentHashMap<String, Long> EXPLORER_ROW_LOG_AT = new ConcurrentHashMap<>();
-    private static final long EXPLORER_ROW_LOG_COOLDOWN_MS = 15_000L;
-    private static final int EXPLORER_ROW_LOG_LIMIT = 8;
-
     public interface OnClickListener {
         void onFileClicked(FileItem fileItem);
         void onDirectoryClicked(FileItem fileItem, int position);
@@ -564,82 +560,6 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         + " adapterGen=" + thumbnailDataGeneration.get());
     }
 
-    private List<RowMetadataChange> collectSilentRefreshMetadataChanges(@NonNull List<FileItem> incomingData) {
-        List<RowMetadataChange> changes = new ArrayList<>();
-        java.util.Map<String, FileItem> existingByIdentity = new java.util.HashMap<>();
-        for (FileItem item : files) {
-            existingByIdentity.put(ExplorerRowSnapshot.fromFileItem(item).identityKey(), item);
-        }
-        for (FileItem incoming : incomingData) {
-            FileItem existing = existingByIdentity.get(ExplorerRowSnapshot.fromFileItem(incoming).identityKey());
-            if (existing == null) {
-                continue;
-            }
-            if (existing.isDir() == incoming.isDir() && sameText(existing.getMimeType(), incoming.getMimeType())) {
-                continue;
-            }
-            changes.add(new RowMetadataChange(existing, incoming));
-            if (changes.size() >= EXPLORER_ROW_LOG_LIMIT) {
-                break;
-            }
-        }
-        return changes;
-    }
-
-    private void logSilentRefreshMetadataChanges(@NonNull List<RowMetadataChange> changes) {
-        if (context == null || changes.isEmpty()) {
-            return;
-        }
-        for (RowMetadataChange change : changes) {
-            int retainedIndex = files.indexOf(change.incoming);
-            FileItem retained = retainedIndex >= 0 ? files.get(retainedIndex) : null;
-            maybeLogSilentRefreshMetadataChange(change, retained);
-        }
-    }
-
-    private void maybeLogSilentRefreshMetadataChange(
-            @NonNull RowMetadataChange change,
-            @Nullable FileItem retained) {
-        String key = change.incoming.getPath()
-                + "|" + change.existing.isDir()
-                + "|" + change.incoming.isDir()
-                + "|" + change.existing.getMimeType()
-                + "|" + change.incoming.getMimeType();
-        long now = System.currentTimeMillis();
-        Long last = EXPLORER_ROW_LOG_AT.get(key);
-        if (last != null && now - last < EXPLORER_ROW_LOG_COOLDOWN_MS) {
-            return;
-        }
-        if (EXPLORER_ROW_LOG_AT.size() > 800) {
-            EXPLORER_ROW_LOG_AT.clear();
-        }
-        EXPLORER_ROW_LOG_AT.put(key, now);
-        SyncLog.info(context, "ExplorerRowDbg",
-                "event=silentRefreshMetadataChange source=adapter"
-                        + " rowPath=" + change.incoming.getPath()
-                        + " name=" + change.incoming.getName()
-                        + " oldIsDir=" + change.existing.isDir()
-                        + " oldMimeType=" + change.existing.getMimeType()
-                        + " newIsDir=" + change.incoming.isDir()
-                        + " newMimeType=" + change.incoming.getMimeType()
-                        + " retainedIsDir=" + (retained != null ? retained.isDir() : "null")
-                        + " retainedMimeType=" + (retained != null ? retained.getMimeType() : "null"));
-    }
-
-    private boolean sameText(@Nullable String left, @Nullable String right) {
-        return left == null ? right == null : left.equals(right);
-    }
-
-    private static final class RowMetadataChange {
-        private final FileItem existing;
-        private final FileItem incoming;
-
-        private RowMetadataChange(@NonNull FileItem existing, @NonNull FileItem incoming) {
-            this.existing = existing;
-            this.incoming = incoming;
-        }
-    }
-
     private static final class ExplorerRowDiffCallback extends DiffUtil.Callback {
         private final List<FileItem> oldFiles;
         private final List<FileItem> newFiles;
@@ -824,7 +744,6 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         }
         showEmptyState(false);
         List<FileItem> newData = new ArrayList<>(data);
-        List<RowMetadataChange> metadataChanges = collectSilentRefreshMetadataChanges(newData);
         List<FileItem> currentData = new ArrayList<>(files);
         DiffUtil.DiffResult diffResult = DiffUtil.calculateDiff(
                 new ExplorerRowDiffCallback(currentData, newData));
@@ -832,7 +751,6 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         files = newData;
         thumbnailTotal = countThumbnailTargets(files);
         thumbnailLoaded.set(0);
-        logSilentRefreshMetadataChanges(metadataChanges);
         diffResult.dispatchUpdatesTo(this);
         notifyThumbnailIdleIfNoTargets();
     }

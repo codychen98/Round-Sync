@@ -16,6 +16,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import ca.pkay.rcloneexplorer.Glide.ThumbnailCacheIdentity
 import ca.pkay.rcloneexplorer.Glide.HttpServeThumbnailGlideUrl
 import ca.pkay.rcloneexplorer.Glide.VideoThumbnailUrl
 import ca.pkay.rcloneexplorer.Items.RemoteItem
@@ -93,6 +94,24 @@ class LastFolderThumbnailPrefetchWorker(
         )
         setForeground(createPrefetchForegroundInfo(app, snapshot.directoryPath))
 
+        var cachedCount = 0
+        val fetchTargets = ArrayList(targets.size)
+        for (item in targets) {
+            if (isStopped) {
+                return@withContext Result.success()
+            }
+            if (ThumbnailCacheIdentity.isPrefetchThumbnailCached(app, item)) {
+                cachedCount++
+            } else {
+                fetchTargets.add(item)
+            }
+        }
+        SyncLog.info(
+            app,
+            "MediaPrepDbg",
+            "event=prefetchCacheProbe cached=$cachedCount misses=${fetchTargets.size} total=${targets.size} path=${snapshot.directoryPath}",
+        )
+
         var prefetchRefIncremented = false
         var serveLeaseId = 0
         val auth = randomAuthToken()
@@ -113,12 +132,12 @@ class LastFolderThumbnailPrefetchWorker(
             SyncLog.info(
                 app,
                 "MediaPrepDbg",
-                "event=prefetchUpdateProgress phase=init loaded=0 total=${targets.size} path=${snapshot.directoryPath}",
+                "event=prefetchUpdateProgress phase=init loaded=$cachedCount total=${targets.size} path=${snapshot.directoryPath}",
             )
             ThumbnailServerService.updateProgress(
                 app,
                 snapshot.directoryPath,
-                0,
+                cachedCount,
                 targets.size,
                 0,
                 0,
@@ -128,8 +147,8 @@ class LastFolderThumbnailPrefetchWorker(
                 .diskCacheStrategy(DiskCacheStrategy.DATA)
                 .placeholder(R.drawable.ic_file)
                 .error(R.drawable.ic_file)
-            var loaded = 0
-            for (item in targets) {
+            var loaded = cachedCount
+            for (item in fetchTargets) {
                 if (isStopped) {
                     break
                 }
@@ -170,12 +189,12 @@ class LastFolderThumbnailPrefetchWorker(
             SyncLog.info(
                 app,
                 "MediaPrepDbg",
-                "event=prefetchUpdateProgress phase=complete loaded=${targets.size} total=${targets.size} path=${snapshot.directoryPath}",
+                "event=prefetchUpdateProgress phase=complete loaded=$loaded total=${targets.size} path=${snapshot.directoryPath}",
             )
             ThumbnailServerService.updateProgress(
                 app,
                 snapshot.directoryPath,
-                targets.size,
+                loaded,
                 targets.size,
                 0,
                 0,
