@@ -19,6 +19,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.widget.ImageViewCompat;
 import androidx.preference.PreferenceManager;
+import androidx.recyclerview.widget.DiffUtil;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.bumptech.glide.Glide;
@@ -87,6 +88,9 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
     private static final ConcurrentHashMap<String, Long> THUMB_PIPELINE_LOG_AT = new ConcurrentHashMap<>();
     private static final long THUMB_PIPELINE_LOG_COOLDOWN_MS = 60_000L;
+    private static final ConcurrentHashMap<String, Long> EXPLORER_ROW_LOG_AT = new ConcurrentHashMap<>();
+    private static final long EXPLORER_ROW_LOG_COOLDOWN_MS = 15_000L;
+    private static final int EXPLORER_ROW_LOG_LIMIT = 8;
 
     public interface OnClickListener {
         void onFileClicked(FileItem fileItem);
@@ -560,6 +564,116 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         + " adapterGen=" + thumbnailDataGeneration.get());
     }
 
+    private List<RowMetadataChange> collectSilentRefreshMetadataChanges(@NonNull List<FileItem> incomingData) {
+        List<RowMetadataChange> changes = new ArrayList<>();
+        java.util.Map<String, FileItem> existingByIdentity = new java.util.HashMap<>();
+        for (FileItem item : files) {
+            existingByIdentity.put(ExplorerRowSnapshot.fromFileItem(item).identityKey(), item);
+        }
+        for (FileItem incoming : incomingData) {
+            FileItem existing = existingByIdentity.get(ExplorerRowSnapshot.fromFileItem(incoming).identityKey());
+            if (existing == null) {
+                continue;
+            }
+            if (existing.isDir() == incoming.isDir() && sameText(existing.getMimeType(), incoming.getMimeType())) {
+                continue;
+            }
+            changes.add(new RowMetadataChange(existing, incoming));
+            if (changes.size() >= EXPLORER_ROW_LOG_LIMIT) {
+                break;
+            }
+        }
+        return changes;
+    }
+
+    private void logSilentRefreshMetadataChanges(@NonNull List<RowMetadataChange> changes) {
+        if (context == null || changes.isEmpty()) {
+            return;
+        }
+        for (RowMetadataChange change : changes) {
+            int retainedIndex = files.indexOf(change.incoming);
+            FileItem retained = retainedIndex >= 0 ? files.get(retainedIndex) : null;
+            maybeLogSilentRefreshMetadataChange(change, retained);
+        }
+    }
+
+    private void maybeLogSilentRefreshMetadataChange(
+            @NonNull RowMetadataChange change,
+            @Nullable FileItem retained) {
+        String key = change.incoming.getPath()
+                + "|" + change.existing.isDir()
+                + "|" + change.incoming.isDir()
+                + "|" + change.existing.getMimeType()
+                + "|" + change.incoming.getMimeType();
+        long now = System.currentTimeMillis();
+        Long last = EXPLORER_ROW_LOG_AT.get(key);
+        if (last != null && now - last < EXPLORER_ROW_LOG_COOLDOWN_MS) {
+            return;
+        }
+        if (EXPLORER_ROW_LOG_AT.size() > 800) {
+            EXPLORER_ROW_LOG_AT.clear();
+        }
+        EXPLORER_ROW_LOG_AT.put(key, now);
+        SyncLog.info(context, "ExplorerRowDbg",
+                "event=silentRefreshMetadataChange source=adapter"
+                        + " rowPath=" + change.incoming.getPath()
+                        + " name=" + change.incoming.getName()
+                        + " oldIsDir=" + change.existing.isDir()
+                        + " oldMimeType=" + change.existing.getMimeType()
+                        + " newIsDir=" + change.incoming.isDir()
+                        + " newMimeType=" + change.incoming.getMimeType()
+                        + " retainedIsDir=" + (retained != null ? retained.isDir() : "null")
+                        + " retainedMimeType=" + (retained != null ? retained.getMimeType() : "null"));
+    }
+
+    private boolean sameText(@Nullable String left, @Nullable String right) {
+        return left == null ? right == null : left.equals(right);
+    }
+
+    private static final class RowMetadataChange {
+        private final FileItem existing;
+        private final FileItem incoming;
+
+        private RowMetadataChange(@NonNull FileItem existing, @NonNull FileItem incoming) {
+            this.existing = existing;
+            this.incoming = incoming;
+        }
+    }
+
+    private static final class ExplorerRowDiffCallback extends DiffUtil.Callback {
+        private final List<FileItem> oldFiles;
+        private final List<FileItem> newFiles;
+
+        private ExplorerRowDiffCallback(@NonNull List<FileItem> oldFiles, @NonNull List<FileItem> newFiles) {
+            this.oldFiles = oldFiles;
+            this.newFiles = newFiles;
+        }
+
+        @Override
+        public int getOldListSize() {
+            return oldFiles.size();
+        }
+
+        @Override
+        public int getNewListSize() {
+            return newFiles.size();
+        }
+
+        @Override
+        public boolean areItemsTheSame(int oldItemPosition, int newItemPosition) {
+            ExplorerRowSnapshot oldSnapshot = ExplorerRowSnapshot.fromFileItem(oldFiles.get(oldItemPosition));
+            ExplorerRowSnapshot newSnapshot = ExplorerRowSnapshot.fromFileItem(newFiles.get(newItemPosition));
+            return oldSnapshot.hasSameIdentity(newSnapshot);
+        }
+
+        @Override
+        public boolean areContentsTheSame(int oldItemPosition, int newItemPosition) {
+            ExplorerRowSnapshot oldSnapshot = ExplorerRowSnapshot.fromFileItem(oldFiles.get(oldItemPosition));
+            ExplorerRowSnapshot newSnapshot = ExplorerRowSnapshot.fromFileItem(newFiles.get(newItemPosition));
+            return oldSnapshot.hasSameDisplayContent(newSnapshot);
+        }
+    }
+
     private String buildThumbnailUrl(FileItem item) {
         String[] serverParams = listener.getThumbnailServerParams();
         String hiddenPath = serverParams[0];
@@ -710,30 +824,47 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         }
         showEmptyState(false);
         List<FileItem> newData = new ArrayList<>(data);
-        List<FileItem> diff = new ArrayList<>(files);
-
-        diff.removeAll(newData);
-        for (FileItem fileItem : diff) {
-            int index = files.indexOf(fileItem);
-            files.remove(index);
-            if (selectedItems.contains(fileItem)) {
-                selectedItems.remove(fileItem);
-                isInSelectMode = !selectedItems.isEmpty();
-                listener.onFileDeselected();
-            }
-            notifyItemRemoved(index);
-        }
-
-        diff = new ArrayList<>(data);
-        diff.removeAll(files);
-        for (FileItem fileItem : diff) {
-            int index = newData.indexOf(fileItem);
-            files.add(index, fileItem);
-            notifyItemInserted(index);
-        }
+        List<RowMetadataChange> metadataChanges = collectSilentRefreshMetadataChanges(newData);
+        List<FileItem> currentData = new ArrayList<>(files);
+        DiffUtil.DiffResult diffResult = DiffUtil.calculateDiff(
+                new ExplorerRowDiffCallback(currentData, newData));
+        syncSelectedItemsWithUpdatedData(newData);
+        files = newData;
         thumbnailTotal = countThumbnailTargets(files);
         thumbnailLoaded.set(0);
+        logSilentRefreshMetadataChanges(metadataChanges);
+        diffResult.dispatchUpdatesTo(this);
         notifyThumbnailIdleIfNoTargets();
+    }
+
+    private void syncSelectedItemsWithUpdatedData(@NonNull List<FileItem> updatedData) {
+        if (selectedItems.isEmpty()) {
+            return;
+        }
+        List<FileItem> updatedSelectedItems = new ArrayList<>();
+        for (FileItem selectedItem : selectedItems) {
+            FileItem updatedItem = findItemByIdentity(updatedData, selectedItem);
+            if (updatedItem != null) {
+                updatedSelectedItems.add(updatedItem);
+            }
+        }
+        boolean selectionChanged = updatedSelectedItems.size() != selectedItems.size();
+        selectedItems = updatedSelectedItems;
+        isInSelectMode = !selectedItems.isEmpty();
+        if (selectionChanged && listener != null) {
+            listener.onFileDeselected();
+        }
+    }
+
+    @Nullable
+    private FileItem findItemByIdentity(@NonNull List<FileItem> items, @NonNull FileItem target) {
+        ExplorerRowSnapshot targetSnapshot = ExplorerRowSnapshot.fromFileItem(target);
+        for (FileItem item : items) {
+            if (ExplorerRowSnapshot.fromFileItem(item).hasSameIdentity(targetSnapshot)) {
+                return item;
+            }
+        }
+        return null;
     }
 
     public void updateSortedData(List<FileItem> data) {
@@ -1051,6 +1182,69 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             this.folderPolicyPickCheckbox = view.findViewById(R.id.folder_policy_pick_checkbox);
             this.defaultIconTint = ImageViewCompat.getImageTintList(this.fileIcon);
         }
+    }
+}
+
+final class ExplorerRowSnapshot {
+    private final String remoteName;
+    private final String path;
+    private final String name;
+    private final boolean isDir;
+    @Nullable
+    private final String mimeType;
+    private final long size;
+    private final long modTime;
+
+    ExplorerRowSnapshot(
+            @Nullable String remoteName,
+            @NonNull String path,
+            @NonNull String name,
+            boolean isDir,
+            @Nullable String mimeType,
+            long size,
+            long modTime) {
+        this.remoteName = remoteName != null ? remoteName : "null";
+        this.path = path;
+        this.name = name;
+        this.isDir = isDir;
+        this.mimeType = mimeType;
+        this.size = size;
+        this.modTime = modTime;
+    }
+
+    @NonNull
+    static ExplorerRowSnapshot fromFileItem(@NonNull FileItem item) {
+        RemoteItem remote = item.getRemote();
+        return new ExplorerRowSnapshot(
+                remote != null ? remote.getName() : null,
+                item.getPath(),
+                item.getName(),
+                item.isDir(),
+                item.getMimeType(),
+                item.getSize(),
+                item.getModTime());
+    }
+
+    @NonNull
+    String identityKey() {
+        return remoteName + "|" + path + "|" + name;
+    }
+
+    boolean hasSameIdentity(@NonNull ExplorerRowSnapshot other) {
+        return remoteName.equals(other.remoteName)
+                && path.equals(other.path)
+                && name.equals(other.name);
+    }
+
+    boolean hasSameDisplayContent(@NonNull ExplorerRowSnapshot other) {
+        return isDir == other.isDir
+                && size == other.size
+                && modTime == other.modTime
+                && sameText(mimeType, other.mimeType);
+    }
+
+    private static boolean sameText(@Nullable String left, @Nullable String right) {
+        return left == null ? right == null : left.equals(right);
     }
 }
 

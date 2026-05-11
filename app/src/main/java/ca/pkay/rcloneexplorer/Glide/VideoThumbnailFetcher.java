@@ -276,7 +276,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
         }
         long durationUs = durationMs > 0 ? durationMs * 1000L : 0L;
         long[] timestamps = buildThumbnailProbeTimesUs(durationMs, durationUs);
-        BrightestSoFar best = new BrightestSoFar();
+        BestFrameSoFar best = new BestFrameSoFar();
 
         for (long ts : timestamps) {
             if (cancelled) {
@@ -285,7 +285,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
             Bitmap frame = retrieveFrameAtTime(mmr, ts, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
             if (frame != null) {
                 best.consider(frame);
-                if (best.isBrightEnough()) {
+                if (best.hasStrongRepresentative()) {
                     return best.getFrame();
                 }
             }
@@ -301,7 +301,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                 Bitmap frame = retrieveFrameAtTime(mmr, ts, option);
                 if (frame != null) {
                     best.consider(frame);
-                    if (best.isBrightEnough()) {
+                    if (best.hasStrongRepresentative()) {
                         return best.getFrame();
                     }
                 }
@@ -312,36 +312,46 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
 
     /**
      * Ordered probe times (microseconds). CLOSEST_SYNC pass uses these first so common cases stay
-     * fast; PREVIOUS/NEXT pass reuses the same set for sparse keyframes / odd muxes.
+     * fast; PREVIOUS/NEXT pass reuses the same set for sparse keyframes / odd muxes. We bias away
+     * from near-zero timestamps so fades, title cards, and transition washes are less likely to win.
      */
     private static long[] buildThumbnailProbeTimesUs(long durationMs, long durationUs) {
         if (durationMs <= 0) {
             LinkedHashSet<Long> u = new LinkedHashSet<>();
             u.add(2_000_000L);
             u.add(5_000_000L);
-            u.add(500_000L);
+            u.add(8_000_000L);
             u.add(1_000_000L);
             u.add(10_000_000L);
+            u.add(500_000L);
             u.add(0L);
             return longSetToArray(u);
         }
         LinkedHashSet<Long> ordered = new LinkedHashSet<>();
-        // Prefer sparse-safe windows: early head probes and near-tail probes, avoiding deep mid-file
-        // seeks that can be unreliable with sparse/range-constrained sources.
+        // Prefer post-intro and early/mid-scene probes before near-zero timestamps.
+        ordered.add(clampTimeUs(2_000_000L, durationUs));
+        ordered.add(clampTimeUs(5_000_000L, durationUs));
+        ordered.add(clampTimeUs(8_000_000L, durationUs));
+        ordered.add(clampTimeUs(durationUs / 8, durationUs));
+        ordered.add(clampTimeUs(durationUs / 5, durationUs));
+        ordered.add(clampTimeUs(durationUs / 3, durationUs));
+        ordered.add(clampTimeUs(durationUs / 2, durationUs));
+        ordered.add(clampTimeUs(1_000_000L, durationUs));
+        ordered.add(clampTimeUs(500_000L, durationUs));
         ordered.add(clampTimeUs(Math.max(1L, durationUs / 100), durationUs));
         ordered.add(clampTimeUs(durationUs / 20, durationUs));
         ordered.add(clampTimeUs(durationUs / 10, durationUs));
-        ordered.add(clampTimeUs(durationUs / 8, durationUs));
-        ordered.add(clampTimeUs(durationUs / 6, durationUs));
-        ordered.add(clampTimeUs(2_000_000L, durationUs));
-        ordered.add(clampTimeUs(500_000L, durationUs));
-        ordered.add(clampTimeUs(1_000_000L, durationUs));
         if (durationUs > 3_000_000L) {
-            ordered.add(clampTimeUs(durationUs - 1_000_000L, durationUs));
-            ordered.add(clampTimeUs(durationUs - 1_500_000L, durationUs));
             ordered.add(clampTimeUs(durationUs - 3_000_000L, durationUs));
         }
+        if (durationUs > 12_000_000L) {
+            ordered.add(clampTimeUs(durationUs - 6_000_000L, durationUs));
+        }
+        if (durationUs > 20_000_000L) {
+            ordered.add(clampTimeUs(durationUs - 10_000_000L, durationUs));
+        }
         if (durationUs > 8_000_000L) {
+            ordered.add(clampTimeUs(durationUs - 1_000_000L, durationUs));
             ordered.add(clampTimeUs(durationUs - 6_000_000L, durationUs));
         }
         ordered.add(0L);
@@ -382,60 +392,76 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
         return frame;
     }
 
-    private static final class BrightestSoFar {
+    private static final class BestFrameSoFar {
+        private static final double STRONG_REPRESENTATIVE_SCORE = 42d;
         @Nullable
         private Bitmap frame;
-        private double score = -1;
+        private double brightnessScore = -1;
+        private double informativeScore = -1;
+        private boolean hasRepresentative;
+        private boolean flatColorLike = true;
 
         void consider(@NonNull Bitmap candidate) {
-            double brightness = averageBrightness(candidate);
-            if (brightness >= 30) {
-                if (frame != null) {
-                    frame.recycle();
+            VideoFrameQualityScorer.FrameQuality quality = VideoFrameQualityScorer.score(candidate);
+            boolean representativeCandidate = !quality.isPoorRepresentativeCandidate();
+            if (representativeCandidate) {
+                boolean betterRepresentative = !hasRepresentative
+                        || quality.informativeScore() > informativeScore
+                        || (quality.informativeScore() == informativeScore
+                        && (quality.brightness() > brightnessScore
+                        || (quality.brightness() == brightnessScore
+                        && flatColorLike
+                        && !quality.isFlatColorLike())));
+                if (betterRepresentative) {
+                    replaceFrame(candidate, quality, true);
+                } else {
+                    candidate.recycle();
                 }
-                frame = candidate;
-                score = brightness;
-            } else if (brightness > score) {
-                if (frame != null) {
-                    frame.recycle();
-                }
-                frame = candidate;
-                score = brightness;
+                return;
+            }
+            if (hasRepresentative) {
+                candidate.recycle();
+                return;
+            }
+            boolean brighterFallback = quality.brightness() > brightnessScore;
+            boolean sameBrightnessButMoreInformative = quality.brightness() == brightnessScore
+                    && (quality.informativeScore() > informativeScore
+                    || (quality.informativeScore() == informativeScore
+                    && flatColorLike
+                    && !quality.isFlatColorLike()));
+            if (brighterFallback || sameBrightnessButMoreInformative) {
+                replaceFrame(candidate, quality, false);
             } else {
                 candidate.recycle();
             }
         }
 
-        boolean isBrightEnough() {
-            return frame != null && score >= 30;
+        private void replaceFrame(
+                @NonNull Bitmap candidate,
+                @NonNull VideoFrameQualityScorer.FrameQuality quality,
+                boolean representative) {
+            if (frame != null) {
+                frame.recycle();
+            }
+            frame = candidate;
+            brightnessScore = quality.brightness();
+            informativeScore = quality.informativeScore();
+            flatColorLike = quality.isFlatColorLike();
+            hasRepresentative = representative;
+        }
+
+        boolean hasRepresentative() {
+            return frame != null && hasRepresentative;
+        }
+
+        boolean hasStrongRepresentative() {
+            return hasRepresentative() && informativeScore >= STRONG_REPRESENTATIVE_SCORE;
         }
 
         @Nullable
         Bitmap getFrame() {
             return frame;
         }
-    }
-
-    private static double averageBrightness(Bitmap bitmap) {
-        int sampleSize = 8;
-        int w = bitmap.getWidth();
-        int h = bitmap.getHeight();
-        long totalBrightness = 0;
-        int samples = 0;
-
-        for (int x = 0; x < sampleSize; x++) {
-            for (int y = 0; y < sampleSize; y++) {
-                int px = w * x / sampleSize;
-                int py = h * y / sampleSize;
-                int pixel = bitmap.getPixel(px, py);
-                int r = (pixel >> 16) & 0xFF;
-                int g = (pixel >> 8) & 0xFF;
-                int b = pixel & 0xFF;
-                totalBrightness += (r + g + b);
-                samples++;
-            }
-        }
-        return (double) totalBrightness / (samples * 3);
     }
 
     @Override

@@ -111,6 +111,21 @@ public class FileItem implements Parcelable {
         return isDir;
     }
 
+    public boolean hasSameIdentity(FileItem other) {
+        return other != null
+                && sameRemote(remote, other.getRemote())
+                && getPath().equals(other.getPath())
+                && name.equals(other.getName());
+    }
+
+    public boolean hasSameDisplayContent(FileItem other) {
+        return other != null
+                && isDir == other.isDir()
+                && size == other.getSize()
+                && modTime == other.getModTime()
+                && sameText(mimeType, other.getMimeType());
+    }
+
     public static String getMimeType(String mimeType, String path) {
         if ("application/octet-stream".equals(mimeType)) {
             String extension = MimeTypeMap.getFileExtensionFromUrl(path);
@@ -156,7 +171,15 @@ public class FileItem implements Parcelable {
 
     @Override
     public boolean equals(Object obj) {
-        return obj instanceof FileItem && ((FileItem) obj).getRemote().equals(this.remote) && ((FileItem) obj).getPath().equals(this.getPath()) && ((FileItem) obj).getName().equals(this.name);
+        return obj instanceof FileItem && hasSameIdentity((FileItem) obj);
+    }
+
+    private boolean sameRemote(RemoteItem left, RemoteItem right) {
+        return left == null ? right == null : left.equals(right);
+    }
+
+    private boolean sameText(String left, String right) {
+        return left == null ? right == null : left.equals(right);
     }
 
     @Override
