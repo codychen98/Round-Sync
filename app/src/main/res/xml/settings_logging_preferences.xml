@@ -9,6 +9,11 @@
             android:key="@string/pref_key_logs"
             android:title="@string/use_logs"
             app:summary="@string/use_logs_summary" />
+
+        <de.felixnuesse.extract.settings.preferences.ButtonPreference
+            android:key="clearLogsKey"
+            android:title="@string/pref_clear_logs_title"
+            app:summary="@string/pref_clear_logs_summary" />
     </PreferenceCategory>
 
     <PreferenceCategory android:title="@string/preference_category_header_rclone">

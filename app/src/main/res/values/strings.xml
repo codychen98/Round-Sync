@@ -154,6 +154,14 @@
     <string name="pref_locale_restart_notice">Changing the language will take effect after restarting the app</string>
     <string name="use_logs">Save log files</string>
     <string name="use_logs_summary">When on, captures verbose rclone output and saves app diagnostic lines under Android/data/de.felixnuesse.extract/ with a readable name such as log_May_10_2026_3_00_PM.log (month, day, year, 12-hour time; colons become underscores). A new file is created when logging starts while this option is on. Off by default.</string>
+    <string name="pref_clear_logs_title">Clear saved logs</string>
+    <string name="pref_clear_logs_summary">Delete readable session logs under Android/data/de.felixnuesse.extract/ and legacy files in Android/data/de.felixnuesse.extract/files/logs. Logging stays enabled and a new log file will be created on the next write.</string>
+    <string name="pref_clear_logs_button">Clear logs</string>
+    <string name="clear_logs_dialog_title">Clear saved logs?</string>
+    <string name="clear_logs_dialog_message">This deletes saved session logs and files inside Android/data/de.felixnuesse.extract/files/logs. Logging stays enabled, and the app will create a new log file the next time it writes one.</string>
+    <string name="clear_logs_done">Logs cleared</string>
+    <string name="clear_logs_failed">Some log files could not be removed</string>
+    <string name="clear_logs_none">No log files found</string>
     <string name="notifications_pref_title">Notifications</string>
     <string name="open_notification_settings_title">More notification settings</string>
     <string name="open_notification_settings_summary">Open the settings to further change how we notify you!</string>

@@ -21,6 +21,7 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 
 import ca.pkay.rcloneexplorer.R;
@@ -39,6 +40,24 @@ public class SyncLog {
 
     /** One session log file per process when {@link #isFileLoggingEnabled} is true; lazily created on first write. */
     private static volatile File sessionLogFile;
+
+    public static final class ClearLogsResult {
+        private final int deletedEntries;
+        private final int failedEntries;
+
+        private ClearLogsResult(int deletedEntries, int failedEntries) {
+            this.deletedEntries = deletedEntries;
+            this.failedEntries = failedEntries;
+        }
+
+        public int getDeletedEntries() {
+            return deletedEntries;
+        }
+
+        public int getFailedEntries() {
+            return failedEntries;
+        }
+    }
 
     /**
      * Whether JSON session logs are written to disk (same preference as Logging settings and verbose rclone).
@@ -205,6 +224,111 @@ public class SyncLog {
             Log.w(SyncLog.class.getSimpleName(), "Could not delete log file: " + log.getAbsolutePath());
         }
         sessionLogFile = null;
+    }
+
+    public static synchronized ClearLogsResult clearAllLogs(Context context) {
+        Context app = context.getApplicationContext();
+        File activeLog = sessionLogFile;
+        sessionLogFile = null;
+
+        int deletedEntries = 0;
+        int failedEntries = 0;
+
+        LinkedHashSet<File> sessionLogDirs = new LinkedHashSet<>();
+        if (activeLog != null) {
+            File parent = activeLog.getParentFile();
+            if (parent != null) {
+                sessionLogDirs.add(parent);
+            }
+        }
+        File externalFiles = app.getExternalFilesDir(null);
+        if (externalFiles != null) {
+            File parent = externalFiles.getParentFile();
+            if (parent != null) {
+                sessionLogDirs.add(parent);
+            }
+        }
+        sessionLogDirs.add(app.getFilesDir());
+
+        for (File directory : sessionLogDirs) {
+            File[] children = listFilesSafely(directory);
+            if (children == null) {
+                continue;
+            }
+            for (File child : children) {
+                if (!looksLikeSessionLog(child)) {
+                    continue;
+                }
+                if (deleteFile(child)) {
+                    deletedEntries++;
+                } else {
+                    failedEntries++;
+                }
+            }
+        }
+
+        LinkedHashSet<File> legacyLogDirs = new LinkedHashSet<>();
+        File externalLegacyDir = app.getExternalFilesDir("logs");
+        if (externalLegacyDir != null) {
+            legacyLogDirs.add(externalLegacyDir);
+        }
+        legacyLogDirs.add(new File(app.getFilesDir(), "logs"));
+
+        for (File directory : legacyLogDirs) {
+            File[] children = listFilesSafely(directory);
+            if (children == null) {
+                continue;
+            }
+            for (File child : children) {
+                int[] stats = deleteRecursively(child);
+                deletedEntries += stats[0];
+                failedEntries += stats[1];
+            }
+        }
+
+        return new ClearLogsResult(deletedEntries, failedEntries);
+    }
+
+    private static boolean looksLikeSessionLog(File file) {
+        return file != null
+                && file.isFile()
+                && file.getName().startsWith("log_")
+                && file.getName().endsWith(".log");
+    }
+
+    private static File[] listFilesSafely(File directory) {
+        if (directory == null || !directory.isDirectory()) {
+            return null;
+        }
+        return directory.listFiles();
+    }
+
+    private static boolean deleteFile(File file) {
+        return file != null && (!file.exists() || file.delete());
+    }
+
+    private static int[] deleteRecursively(File file) {
+        int deletedEntries = 0;
+        int failedEntries = 0;
+        if (file == null || !file.exists()) {
+            return new int[]{0, 0};
+        }
+        if (file.isDirectory()) {
+            File[] children = file.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    int[] childStats = deleteRecursively(child);
+                    deletedEntries += childStats[0];
+                    failedEntries += childStats[1];
+                }
+            }
+        }
+        if (file.delete()) {
+            deletedEntries++;
+        } else {
+            failedEntries++;
+        }
+        return new int[]{deletedEntries, failedEntries};
     }
 
 }

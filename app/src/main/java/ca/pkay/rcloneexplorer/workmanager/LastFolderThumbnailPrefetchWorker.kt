@@ -19,6 +19,7 @@ import androidx.work.WorkerParameters
 import ca.pkay.rcloneexplorer.Glide.ThumbnailCacheIdentity
 import ca.pkay.rcloneexplorer.Glide.HttpServeThumbnailGlideUrl
 import ca.pkay.rcloneexplorer.Glide.VideoThumbnailUrl
+import ca.pkay.rcloneexplorer.Items.FileItem
 import ca.pkay.rcloneexplorer.Items.RemoteItem
 import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Rclone
@@ -95,7 +96,7 @@ class LastFolderThumbnailPrefetchWorker(
         setForeground(createPrefetchForegroundInfo(app, snapshot.directoryPath))
 
         var cachedCount = 0
-        val fetchTargets = ArrayList(targets.size)
+        val fetchTargets = ArrayList<FileItem>(targets.size)
         for (item in targets) {
             if (isStopped) {
                 return@withContext Result.success()
