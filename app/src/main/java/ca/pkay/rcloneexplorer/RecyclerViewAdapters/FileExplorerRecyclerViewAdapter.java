@@ -88,6 +88,10 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
     private static final ConcurrentHashMap<String, Long> THUMB_PIPELINE_LOG_AT = new ConcurrentHashMap<>();
     private static final long THUMB_PIPELINE_LOG_COOLDOWN_MS = 60_000L;
+    private static final String STARTUP_ROW_DBG = "StartupRowDbg";
+    private static final int STARTUP_ROW_LOG_LIMIT = 40;
+    private static final ConcurrentHashMap<String, Long> STARTUP_ROW_LOG_AT = new ConcurrentHashMap<>();
+    private static final long STARTUP_ROW_LOG_COOLDOWN_MS = 3_000L;
     public interface OnClickListener {
         void onFileClicked(FileItem fileItem);
         void onDirectoryClicked(FileItem fileItem, int position);
@@ -155,6 +159,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     @Override
     public void onBindViewHolder(@NonNull final ViewHolder holder, int position) {
         final FileItem item = files.get(position);
+        String startupBranch = item.isDir() ? "folderIcon" : "plainFileIcon";
+        boolean startupPolicyAllowed = false;
 
         holder.fileItem = item;
 
@@ -188,6 +194,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
         if (showThumbnails && item.isDir()) {
             if (isNetworkFolderThumbnailCandidate(item) && serverReady) {
+                startupBranch = "folderThumb";
+                startupPolicyAllowed = true;
                 holder.fileIcon.setVisibility(View.VISIBLE);
                 holder.dirIcon.setVisibility(View.GONE);
                 holder.fileIcon.setImageTintList(null);
@@ -197,6 +205,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         .placeholder(R.drawable.ic_folder)
                         .error(R.drawable.ic_folder);
                 maybeLogThumbPipelineDbg(item, "folderGlideIssued", true);
+                maybeLogStartupThumbIssued(item, holder, "folder");
                 boolean extendedThumbRetry = isExtendedThumbnailRetryPolicy(item);
                 RetryRequestListener.ThumbnailExtendedRetryScheduleGate extendedGate =
                         extendedThumbRetry
@@ -224,6 +233,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         .listener(retryListener)
                         .into(holder.fileIcon);
             } else {
+                startupBranch = serverReady ? "folderPolicySkip" : "folderPlaceholderNotReady";
+                startupPolicyAllowed = isHttpThumbnailPolicyAllowedForNetworkThumbnail(item);
                 maybeLogThumbPipelineDbg(item, serverReady ? "folderPolicySkip" : "folderPlaceholderNotReady",
                         isHttpThumbnailPolicyAllowedForNetworkThumbnail(item));
                 cancelActiveRetryListener(holder);
@@ -245,16 +256,22 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         .placeholder(R.drawable.ic_file)
                         .error(R.drawable.ic_file);
                 if (localLoad) {
+                    startupBranch = "imageLocal";
+                    startupPolicyAllowed = true;
                     bindSafFile(holder, item, glideOption);
                 } else if (serverReady) {
                     if (!isHttpThumbnailPolicyAllowedForNetworkThumbnail(item)) {
+                        startupBranch = "imagePolicySkip";
                         maybeLogThumbPipelineDbg(item, "imagePolicySkip", false);
                         cancelActiveRetryListener(holder);
                         Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
                         holder.fileIcon.setImageTintList(holder.defaultIconTint);
                         holder.fileIcon.setImageResource(R.drawable.ic_file);
                     } else {
+                        startupBranch = "imageThumb";
+                        startupPolicyAllowed = true;
                         maybeLogThumbPipelineDbg(item, "imageGlideIssued", true);
+                        maybeLogStartupThumbIssued(item, holder, "image");
                         boolean extendedThumbRetry = isExtendedThumbnailRetryPolicy(item);
                         RetryRequestListener.ThumbnailExtendedRetryScheduleGate extendedGate =
                                 extendedThumbRetry
@@ -283,6 +300,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 .into(holder.fileIcon);
                     }
                 } else {
+                    startupBranch = "imagePlaceholderNotReady";
+                    startupPolicyAllowed = isHttpThumbnailPolicyAllowedForNetworkThumbnail(item);
                     maybeLogThumbPipelineDbg(item, "imagePlaceholderNotReady",
                             isHttpThumbnailPolicyAllowedForNetworkThumbnail(item));
                     cancelActiveRetryListener(holder);
@@ -291,6 +310,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                     holder.fileIcon.setImageResource(R.drawable.ic_file);
                 }
             } else if (mimeType.startsWith("video/") && !localLoad) {
+                startupBranch = "videoCandidate";
                 holder.fileIcon.setImageTintList(null);
                 RequestOptions glideOption = new RequestOptions()
                         .centerCrop()
@@ -299,13 +319,17 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         .error(R.drawable.ic_file);
                 if (serverReady) {
                     if (!isHttpThumbnailPolicyAllowedForNetworkThumbnail(item)) {
+                        startupBranch = "videoPolicySkip";
                         maybeLogThumbPipelineDbg(item, "videoPolicySkip", false);
                         cancelActiveRetryListener(holder);
                         Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
                         holder.fileIcon.setImageTintList(holder.defaultIconTint);
                         holder.fileIcon.setImageResource(R.drawable.ic_file);
                     } else {
+                        startupBranch = "videoThumb";
+                        startupPolicyAllowed = true;
                         maybeLogThumbPipelineDbg(item, "videoGlideIssued", true);
+                        maybeLogStartupThumbIssued(item, holder, "video");
                         boolean extendedThumbRetry = isExtendedThumbnailRetryPolicy(item);
                         RetryRequestListener.ThumbnailExtendedRetryScheduleGate extendedGate =
                                 extendedThumbRetry
@@ -332,6 +356,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 .into(holder.fileIcon);
                     }
                 } else {
+                    startupBranch = "videoPlaceholderNotReady";
+                    startupPolicyAllowed = isHttpThumbnailPolicyAllowedForNetworkThumbnail(item);
                     maybeLogThumbPipelineDbg(item, "videoPlaceholderNotReady",
                             isHttpThumbnailPolicyAllowedForNetworkThumbnail(item));
                     cancelActiveRetryListener(holder);
@@ -340,11 +366,13 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                     holder.fileIcon.setImageResource(R.drawable.ic_file);
                 }
             } else {
+                startupBranch = "plainFileIcon";
                 Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
                 holder.fileIcon.setImageTintList(holder.defaultIconTint);
                 holder.fileIcon.setImageResource(R.drawable.ic_file);
             }
         }
+        maybeLogStartupBind(item, holder, position, startupBranch, startupPolicyAllowed);
 
         if (holder.fileModTime != null) {
             RemoteItem itemRemote = item.getRemote();
@@ -464,6 +492,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     @Override
     public void onViewRecycled(@NonNull ViewHolder holder) {
         super.onViewRecycled(holder);
+        maybeLogStartupRecycle(holder);
         cancelActiveRetryListener(holder);
     }
 
@@ -558,6 +587,125 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         + " mgrState=" + mgr.getSyncState()
                         + " serveGen=" + mgr.getServeGeneration()
                         + " adapterGen=" + thumbnailDataGeneration.get());
+    }
+
+    private void maybeLogStartupThumbIssued(
+            @NonNull FileItem item,
+            @NonNull ViewHolder holder,
+            @NonNull String kind) {
+        maybeLogStartupRow(item, "thumbIssued",
+                "kind=" + kind + " holderHash=" + System.identityHashCode(holder));
+    }
+
+    private void maybeLogStartupBind(
+            @NonNull FileItem item,
+            @NonNull ViewHolder holder,
+            int position,
+            @NonNull String branch,
+            boolean policyAllowed) {
+        maybeLogStartupRow(item, "bind",
+                "position=" + position
+                        + " holderHash=" + System.identityHashCode(holder)
+                        + " branch=" + branch
+                        + " serverReady=" + serverReady
+                        + " policyAllowed=" + policyAllowed
+                        + " fileIconVisible=" + (holder.fileIcon.getVisibility() == View.VISIBLE)
+                        + " dirIconVisible=" + (holder.dirIcon.getVisibility() == View.VISIBLE));
+    }
+
+    private void maybeLogStartupRecycle(@NonNull ViewHolder holder) {
+        FileItem item = holder.fileItem;
+        if (item == null || context == null || !isStartupDiagnosticCandidate(item)) {
+            return;
+        }
+        SyncLog.info(context, STARTUP_ROW_DBG,
+                "event=recycled"
+                        + " rowPath=" + item.getPath()
+                        + " name=" + item.getName()
+                        + " isDir=" + item.isDir()
+                        + " mimeType=" + item.getMimeType()
+                        + " holderHash=" + System.identityHashCode(holder));
+    }
+
+    private void maybeLogStartupRow(
+            @NonNull FileItem item,
+            @NonNull String event,
+            @NonNull String details) {
+        if (context == null || !isStartupDiagnosticCandidate(item)) {
+            return;
+        }
+        String key = item.getPath() + "|" + event + "|" + details;
+        long now = System.currentTimeMillis();
+        Long last = STARTUP_ROW_LOG_AT.get(key);
+        if (last != null && now - last < STARTUP_ROW_LOG_COOLDOWN_MS) {
+            return;
+        }
+        if (STARTUP_ROW_LOG_AT.size() > 2_000) {
+            STARTUP_ROW_LOG_AT.clear();
+        }
+        STARTUP_ROW_LOG_AT.put(key, now);
+        SyncLog.info(context, STARTUP_ROW_DBG,
+                "event=" + event
+                        + " rowPath=" + item.getPath()
+                        + " name=" + item.getName()
+                        + " isDir=" + item.isDir()
+                        + " mimeType=" + item.getMimeType()
+                        + " " + details);
+    }
+
+    private boolean isStartupDiagnosticCandidate(@NonNull FileItem item) {
+        String mimeType = item.getMimeType();
+        if (mimeType != null && (mimeType.startsWith("video/") || mimeType.startsWith("image/"))) {
+            return true;
+        }
+        String lowerPath = item.getPath().toLowerCase(java.util.Locale.US);
+        return lowerPath.endsWith(".mp4")
+                || lowerPath.endsWith(".m4v")
+                || lowerPath.endsWith(".mkv")
+                || lowerPath.endsWith(".mov")
+                || lowerPath.endsWith(".webm")
+                || lowerPath.endsWith(".avi")
+                || lowerPath.endsWith(".jpg")
+                || lowerPath.endsWith(".jpeg")
+                || lowerPath.endsWith(".png")
+                || lowerPath.endsWith(".webp")
+                || lowerPath.endsWith(".gif");
+    }
+
+    private void logStartupUpdateComparisons(
+            @NonNull List<FileItem> currentData,
+            @NonNull List<FileItem> newData) {
+        if (context == null) {
+            return;
+        }
+        int logged = 0;
+        for (FileItem incoming : newData) {
+            if (!isStartupDiagnosticCandidate(incoming)) {
+                continue;
+            }
+            FileItem existing = findItemByIdentity(currentData, incoming);
+            if (existing == null || existing.hasSameDisplayContent(incoming)) {
+                continue;
+            }
+            SyncLog.info(context, STARTUP_ROW_DBG,
+                    "event=updateDataCompare"
+                            + " rowPath=" + incoming.getPath()
+                            + " name=" + incoming.getName()
+                            + " sameIdentity=" + existing.hasSameIdentity(incoming)
+                            + " sameDisplayContent=" + existing.hasSameDisplayContent(incoming)
+                            + " oldIsDir=" + existing.isDir()
+                            + " newIsDir=" + incoming.isDir()
+                            + " oldMimeType=" + existing.getMimeType()
+                            + " newMimeType=" + incoming.getMimeType()
+                            + " oldSize=" + existing.getSize()
+                            + " newSize=" + incoming.getSize()
+                            + " oldModTime=" + existing.getModTime()
+                            + " newModTime=" + incoming.getModTime());
+            logged++;
+            if (logged >= STARTUP_ROW_LOG_LIMIT) {
+                return;
+            }
+        }
     }
 
     private static final class ExplorerRowDiffCallback extends DiffUtil.Callback {
@@ -745,6 +893,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         showEmptyState(false);
         List<FileItem> newData = new ArrayList<>(data);
         List<FileItem> currentData = new ArrayList<>(files);
+        logStartupUpdateComparisons(currentData, newData);
         DiffUtil.DiffResult diffResult = DiffUtil.calculateDiff(
                 new ExplorerRowDiffCallback(currentData, newData));
         syncSelectedItemsWithUpdatedData(newData);

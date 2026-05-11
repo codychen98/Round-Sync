@@ -133,6 +133,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
 
     public static final int STREAMING_INTENT_RESULT = 468;
     private static final String TAG = "FileExplorerFragment";
+    private static final String STARTUP_ROW_DBG = "StartupRowDbg";
+    private static final int STARTUP_ROW_LOG_LIMIT = 40;
     private static final String ARG_REMOTE = "remote_param";
     private static final String ARG_START_PATH = "start_path_param";
     private static final String SHARED_PREFS_SORT_ORDER = "ca.pkay.rcexplorer.sort_order";
@@ -1008,7 +1010,53 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     private void renderCachedDirectory(@NonNull String path) {
         directoryObject.restoreFromCache(path);
         sortDirectory();
+        logStartupRowCandidates("cacheRestore", directoryObject.getDirectoryContent());
         recyclerViewAdapter.newData(directoryObject.getDirectoryContent());
+    }
+
+    private void logStartupRowCandidates(@NonNull String event, @Nullable List<FileItem> items) {
+        if (context == null || items == null || items.isEmpty()) {
+            return;
+        }
+        int logged = 0;
+        String dirPath = directoryObject.getCurrentPath();
+        for (FileItem item : items) {
+            if (!isStartupDiagnosticCandidate(item)) {
+                continue;
+            }
+            SyncLog.info(context, STARTUP_ROW_DBG,
+                    "event=" + event
+                            + " dirPath=" + dirPath
+                            + " rowPath=" + item.getPath()
+                            + " name=" + item.getName()
+                            + " isDir=" + item.isDir()
+                            + " mimeType=" + item.getMimeType()
+                            + " size=" + item.getSize()
+                            + " modTime=" + item.getModTime());
+            logged++;
+            if (logged >= STARTUP_ROW_LOG_LIMIT) {
+                return;
+            }
+        }
+    }
+
+    private boolean isStartupDiagnosticCandidate(@NonNull FileItem item) {
+        String mimeType = item.getMimeType();
+        if (mimeType != null && (mimeType.startsWith("video/") || mimeType.startsWith("image/"))) {
+            return true;
+        }
+        String lowerPath = item.getPath().toLowerCase(java.util.Locale.US);
+        return lowerPath.endsWith(".mp4")
+                || lowerPath.endsWith(".m4v")
+                || lowerPath.endsWith(".mkv")
+                || lowerPath.endsWith(".mov")
+                || lowerPath.endsWith(".webm")
+                || lowerPath.endsWith(".avi")
+                || lowerPath.endsWith(".jpg")
+                || lowerPath.endsWith(".jpeg")
+                || lowerPath.endsWith(".png")
+                || lowerPath.endsWith(".webp")
+                || lowerPath.endsWith(".gif");
     }
 
     private void runAfterPathAuthForExplorerPath(String explorerPath, Runnable onAllowed) {
@@ -2057,6 +2105,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
 
             directoryObject.setContent(fileItems);
             sortDirectory();
+            logStartupRowCandidates(silentFetch ? "freshListingSilent" : "freshListing",
+                    directoryObject.getDirectoryContent());
             if (isSearchMode && searchString != null) {
                 searchDirContent(searchString);
             } else {
