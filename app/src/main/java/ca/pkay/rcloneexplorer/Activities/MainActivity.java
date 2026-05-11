@@ -78,7 +78,6 @@ import ca.pkay.rcloneexplorer.RuntimeConfiguration;
 import ca.pkay.rcloneexplorer.Services.StreamingService;
 import ca.pkay.rcloneexplorer.Services.TriggerService;
 import ca.pkay.rcloneexplorer.util.ActivityHelper;
-import ca.pkay.rcloneexplorer.util.CanonicalCachePathResolver;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.PermissionManager;
 import ca.pkay.rcloneexplorer.util.RemotePathUnlockSession;
@@ -253,7 +252,6 @@ public class MainActivity extends AppCompatActivity
     @Override
     protected void onDestroy() {
         RemotePathUnlockSession.detach(this);
-        clearOwnedCacheSubfoldersOnDestroy();
         super.onDestroy();
     }
 
@@ -327,46 +325,6 @@ public class MainActivity extends AppCompatActivity
                         refresh.execute();
                     }
             }
-        }
-    }
-
-    /**
-     * Cleanup is restricted to app-owned canonical subfolders only.
-     * Avoids deleting arbitrary children under external cache during transition windows.
-     */
-    private void clearOwnedCacheSubfoldersOnDestroy() {
-        File cacheRoot = getExternalCacheDir();
-        if (cacheRoot == null || !cacheRoot.isDirectory()) {
-            return;
-        }
-        String[] ownedSubdirs = new String[]{
-                CanonicalCachePathResolver.THUMBNAILS_DIR_NAME,
-                CanonicalCachePathResolver.MEDIA_CACHE_DIR_NAME,
-        };
-        for (String name : ownedSubdirs) {
-            File target = new File(cacheRoot, name);
-            deleteTreeBestEffort(target);
-        }
-    }
-
-    private void deleteTreeBestEffort(@NonNull File target) {
-        if (!target.exists()) {
-            return;
-        }
-        try {
-            if (target.isDirectory()) {
-                File[] children = target.listFiles();
-                if (children != null) {
-                    for (File child : children) {
-                        deleteTreeBestEffort(child);
-                    }
-                }
-            }
-            if (!target.delete()) {
-                FLog.w(TAG, "Could not delete cache path: %s", target.getAbsolutePath());
-            }
-        } catch (SecurityException e) {
-            FLog.w(TAG, "SecurityException deleting cache path: %s", e, target.getAbsolutePath());
         }
     }
 
