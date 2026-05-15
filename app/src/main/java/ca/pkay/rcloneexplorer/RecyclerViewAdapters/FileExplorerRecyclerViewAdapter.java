@@ -15,6 +15,7 @@ import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import androidx.annotation.DrawableRes;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.widget.ImageViewCompat;
@@ -198,7 +199,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 startupPolicyAllowed = true;
                 holder.fileIcon.setVisibility(View.VISIBLE);
                 holder.dirIcon.setVisibility(View.GONE);
-                holder.fileIcon.setImageTintList(null);
+                prepareFileIconForGlideThumbnail(holder, R.drawable.ic_folder);
                 RequestOptions folderGlideOption = new RequestOptions()
                         .centerCrop()
                         .diskCacheStrategy(DiskCacheStrategy.DATA)
@@ -224,7 +225,6 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         () -> listener.getThumbnailUrlEpoch(),
                         extendedThumbRetry,
                         extendedGate);
-                cancelActiveRetryListener(holder);
                 holder.activeRetryListener = retryListener;
                 Glide.with(context.getApplicationContext())
                         .load(new FolderThumbnailGlideUrl(buildThumbnailUrl(item)))
@@ -249,7 +249,6 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             String mimeType = item.getMimeType();
 
             if (mimeType.startsWith("image/") && item.getSize() <= sizeLimit) {
-                holder.fileIcon.setImageTintList(null);
                 RequestOptions glideOption = new RequestOptions()
                         .centerCrop()
                         .diskCacheStrategy(DiskCacheStrategy.DATA)
@@ -258,6 +257,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 if (localLoad) {
                     startupBranch = "imageLocal";
                     startupPolicyAllowed = true;
+                    prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
                     bindSafFile(holder, item, glideOption);
                 } else if (serverReady) {
                     if (!isHttpThumbnailPolicyAllowedForNetworkThumbnail(item)) {
@@ -290,7 +290,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 () -> listener.getThumbnailUrlEpoch(),
                                 extendedThumbRetry,
                                 extendedGate);
-                        cancelActiveRetryListener(holder);
+                        prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
                         holder.activeRetryListener = retryListener;
                         Glide.with(context.getApplicationContext())
                                 .load(new HttpServeThumbnailGlideUrl(buildThumbnailUrl(item)))
@@ -311,7 +311,6 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 }
             } else if (mimeType.startsWith("video/") && !localLoad) {
                 startupBranch = "videoCandidate";
-                holder.fileIcon.setImageTintList(null);
                 RequestOptions glideOption = new RequestOptions()
                         .centerCrop()
                         .diskCacheStrategy(DiskCacheStrategy.DATA)
@@ -347,7 +346,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 () -> listener.getThumbnailUrlEpoch(),
                                 extendedThumbRetry,
                                 extendedGate);
-                        cancelActiveRetryListener(holder);
+                        prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
                         holder.activeRetryListener = retryListener;
                         Glide.with(context.getApplicationContext())
                                 .load(new VideoThumbnailUrl(buildThumbnailUrl(item)))
@@ -493,7 +492,31 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     public void onViewRecycled(@NonNull ViewHolder holder) {
         super.onViewRecycled(holder);
         maybeLogStartupRecycle(holder);
+        resetRecycledFileIcon(holder);
+    }
+
+    /**
+     * Clears stale Glide drawables before loading a thumbnail into {@code file_icon}. Prevents
+     * recycled folder-thumb cells from briefly (or stuck) showing as folders on file rows.
+     */
+    private void prepareFileIconForGlideThumbnail(@NonNull ViewHolder holder, @DrawableRes int placeholderRes) {
         cancelActiveRetryListener(holder);
+        if (context == null) {
+            return;
+        }
+        Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+        holder.fileIcon.setImageTintList(null);
+        holder.fileIcon.setImageResource(placeholderRes);
+    }
+
+    private void resetRecycledFileIcon(@NonNull ViewHolder holder) {
+        cancelActiveRetryListener(holder);
+        if (context == null) {
+            return;
+        }
+        Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+        holder.fileIcon.setImageTintList(holder.defaultIconTint);
+        holder.fileIcon.setImageResource(R.drawable.ic_file);
     }
 
     private void cancelActiveRetryListener(ViewHolder holder) {
