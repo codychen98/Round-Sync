@@ -86,6 +86,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     /** Cached per-remote thumbnail allow-list; invalidated when list or settings may have changed. */
     private String thumbPolicyCachedRemoteName;
     private Set<String> thumbPolicyCachedAllowed = Collections.emptySet();
+    @Nullable
+    private RecyclerView attachedRecyclerView;
 
     private static final ConcurrentHashMap<String, Long> THUMB_PIPELINE_LOG_AT = new ConcurrentHashMap<>();
     private static final long THUMB_PIPELINE_LOG_COOLDOWN_MS = 60_000L;
@@ -143,6 +145,31 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     }
 
     @Override
+    public void onAttachedToRecyclerView(@NonNull RecyclerView recyclerView) {
+        super.onAttachedToRecyclerView(recyclerView);
+        attachedRecyclerView = recyclerView;
+    }
+
+    @Override
+    public void onDetachedFromRecyclerView(@NonNull RecyclerView recyclerView) {
+        if (attachedRecyclerView == recyclerView) {
+            attachedRecyclerView = null;
+        }
+        super.onDetachedFromRecyclerView(recyclerView);
+    }
+
+    /**
+     * After a full list replacement (e.g. enter subdirectory), scrap from the old folder grid can
+     * sit in the pool still carrying folder-thumbnail drawables; clear the pool so holders are not
+     * rebound with stale Glide imagery.
+     */
+    private void clearRecycledViewPoolIfAttached() {
+        if (attachedRecyclerView != null) {
+            attachedRecyclerView.getRecycledViewPool().clear();
+        }
+    }
+
+    @Override
     public int getItemViewType(int position) {
         return viewMode;
     }
@@ -164,6 +191,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         boolean startupPolicyAllowed = false;
 
         holder.fileItem = item;
+
+        if (showThumbnails && context != null) {
+            cancelActiveRetryListener(holder);
+            Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+        }
 
         if (holder.gridThumbnailContainer != null) {
             holder.gridThumbnailContainer.post(() -> {
@@ -203,6 +235,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 RequestOptions folderGlideOption = new RequestOptions()
                         .centerCrop()
                         .diskCacheStrategy(DiskCacheStrategy.DATA)
+                        .dontAnimate()
                         .placeholder(R.drawable.ic_folder)
                         .error(R.drawable.ic_folder);
                 maybeLogThumbPipelineDbg(item, "folderGlideIssued", true);
@@ -247,11 +280,15 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         } else if (showThumbnails && !item.isDir()) {
             boolean localLoad = item.getRemote().getType() == RemoteItem.SAFW;
             String mimeType = item.getMimeType();
+            if (mimeType == null) {
+                mimeType = "";
+            }
 
             if (mimeType.startsWith("image/") && item.getSize() <= sizeLimit) {
                 RequestOptions glideOption = new RequestOptions()
                         .centerCrop()
                         .diskCacheStrategy(DiskCacheStrategy.DATA)
+                        .dontAnimate()
                         .placeholder(R.drawable.ic_file)
                         .error(R.drawable.ic_file);
                 if (localLoad) {
@@ -314,6 +351,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 RequestOptions glideOption = new RequestOptions()
                         .centerCrop()
                         .diskCacheStrategy(DiskCacheStrategy.DATA)
+                        .dontAnimate()
                         .placeholder(R.drawable.ic_file)
                         .error(R.drawable.ic_file);
                 if (serverReady) {
@@ -898,6 +936,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         } else {
             notifyItemRangeInserted(0, files.size());
         }
+        clearRecycledViewPoolIfAttached();
         notifyThumbnailIdleIfNoTargets();
     }
 
@@ -982,6 +1021,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             SyncLog.info(context, "MediaPrepDbg", "event=adapterUpdateSortedData gen=" + gen + " loaded=0 total="
                     + thumbnailTotal + " listSize=" + files.size());
         }
+        clearRecycledViewPoolIfAttached();
         notifyThumbnailIdleIfNoTargets();
     }
 
