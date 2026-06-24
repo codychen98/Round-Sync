@@ -508,18 +508,20 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 String stablePath = ThumbnailCacheIdentity.stableServePath(
                         item.getRemote().getName(), item.getPath());
                 boolean userReload = ThumbnailReloadEpoch.consumePendingUserReload(stablePath);
-                RequestOptions glideOption = new RequestOptions()
+                RequestOptions baseVideoGlideOption = new RequestOptions()
                         .centerCrop()
                         .diskCacheStrategy(DiskCacheStrategy.DATA)
                         .dontAnimate()
                         .placeholder(R.drawable.ic_file)
                         .error(R.drawable.ic_file);
                 if (userReload) {
-                    glideOption = glideOption
-                            .priority(Priority.IMMEDIATE)
-                            .skipMemoryCache(true);
                     maybeLogThumbPipelineDbg(item, "videoUserReload", true);
                 }
+                final RequestOptions glideOption = userReload
+                        ? baseVideoGlideOption
+                                .priority(Priority.IMMEDIATE)
+                                .skipMemoryCache(true)
+                        : baseVideoGlideOption;
                 if (serverReady) {
                     if (!isHttpThumbnailPolicyAllowedForNetworkThumbnail(item)) {
                         startupBranch = "videoPolicySkip";
