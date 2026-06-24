@@ -18,6 +18,7 @@ object ThumbnailReloadHelper {
         fun onComplete(success: Boolean)
     }
 
+    @JvmStatic
     fun reload(
         context: Context,
         fileItem: FileItem,
