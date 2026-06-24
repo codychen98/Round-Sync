@@ -229,17 +229,7 @@ public class OkHttpMediaDataSource extends MediaDataSource {
 
     @NonNull
     private static String extractStablePath(@NonNull String fullUrl) {
-        try {
-            URL parsed = new URL(fullUrl);
-            String path = parsed.getPath();
-            int secondSlash = path.indexOf('/', 1);
-            if (secondSlash > 0) {
-                return path.substring(secondSlash);
-            }
-            return path;
-        } catch (MalformedURLException e) {
-            return fullUrl;
-        }
+        return ThumbnailStablePath.fromServeUrl(fullUrl);
     }
 
     @Override

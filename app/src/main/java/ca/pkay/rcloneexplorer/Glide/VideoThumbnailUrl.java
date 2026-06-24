@@ -3,8 +3,6 @@ package ca.pkay.rcloneexplorer.Glide;
 import androidx.annotation.NonNull;
 import com.bumptech.glide.load.Key;
 
-import java.net.MalformedURLException;
-import java.net.URL;
 import java.security.MessageDigest;
 
 /**
@@ -24,21 +22,7 @@ public class VideoThumbnailUrl implements Key {
 
     @NonNull
     public static String stablePathFromUrl(@NonNull String url) {
-        return extractStablePath(url);
-    }
-
-    private static String extractStablePath(String url) {
-        try {
-            URL parsed = new URL(url);
-            String path = parsed.getPath();
-            int secondSlash = path.indexOf('/', 1);
-            if (secondSlash > 0) {
-                return path.substring(secondSlash);
-            }
-            return path;
-        } catch (MalformedURLException e) {
-            return url;
-        }
+        return ThumbnailStablePath.fromServeUrl(url);
     }
 
     @NonNull

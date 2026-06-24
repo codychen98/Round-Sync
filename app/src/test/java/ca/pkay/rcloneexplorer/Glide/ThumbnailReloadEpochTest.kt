@@ -51,6 +51,15 @@ class ThumbnailReloadEpochTest {
     }
 
     @Test
+    fun increment_matchesEncodedServeUrl() {
+        val stable = ThumbnailCacheIdentity.stableServePath("pCloudLock", "Video Archive/Anime/a.mkv")
+        ThumbnailReloadEpoch.increment(stable)
+        val url = "http://127.0.0.1:29179/auth/pCloudLock/Video%20Archive/Anime/a.mkv"
+        assertEquals(1, ThumbnailReloadEpoch.getEpochForVideoUrl(url))
+        assertEquals(true, ThumbnailReloadEpoch.consumePreferExoDecode(stable))
+    }
+
+    @Test
     fun userReloadFlags_areConsumedOnce() {
         val stable = "/drive/Videos/clip.mp4"
         ThumbnailReloadEpoch.markPendingUserReload(stable)

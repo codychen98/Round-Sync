@@ -116,9 +116,10 @@ public final class ThumbnailCacheIdentity {
         while (normalizedPath.startsWith("/")) {
             normalizedPath = normalizedPath.substring(1);
         }
-        return normalizedPath.isEmpty()
+        String stable = normalizedPath.isEmpty()
                 ? "/" + remoteName
                 : "/" + remoteName + "/" + normalizedPath;
+        return ThumbnailStablePath.normalize(stable);
     }
 
     @NonNull

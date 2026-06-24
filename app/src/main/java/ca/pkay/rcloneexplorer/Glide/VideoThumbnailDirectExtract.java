@@ -1,0 +1,249 @@
+package ca.pkay.rcloneexplorer.Glide;
+
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.media.MediaMetadataRetriever;
+import android.os.SystemClock;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+
+import ca.pkay.rcloneexplorer.util.SyncLog;
+import okhttp3.Request;
+import okhttp3.Response;
+
+/**
+ * Blocking thumbnail extraction for user-initiated reload. Runs outside Glide so work is not
+ * cancelled when the list row rebinds.
+ */
+final class VideoThumbnailDirectExtract {
+
+    private static final String LOG_TAG = "ThumbReloadDbg";
+    private static final long PARTIAL_DOWNLOAD_BYTES = 48L * 1024L * 1024L;
+
+    private VideoThumbnailDirectExtract() {
+    }
+
+    @Nullable
+    static byte[] extractJpegForUserReload(
+            @NonNull Context appContext,
+            @NonNull String url,
+            @NonNull String stablePath) {
+        final String base = VideoThumbnailFetcher.basenameForThumbUrl(url);
+        final long t0 = SystemClock.elapsedRealtime();
+        log(appContext, "directExtractStart basename=" + base + " stablePath=" + stablePath);
+
+        Bitmap frame = VideoThumbnailExoFallback.tryGrabFirstFrame(
+                appContext,
+                url,
+                0L,
+                VideoThumbnailCancellation.NEVER_CANCELLED,
+                true,
+                true);
+        String stage = frame != null ? "exo" : "exoMiss";
+        if (frame == null) {
+            frame = extractWithMmr(appContext, url, stablePath);
+            stage = frame != null ? "mmr" : "mmrMiss";
+        }
+        if (frame == null) {
+            frame = extractFromPartialLocalFile(appContext, url, stablePath);
+            stage = frame != null ? "partialFile" : "partialFileMiss";
+        }
+        if (frame == null) {
+            log(appContext, "directExtractFail basename=" + base + " totalMs=" + (SystemClock.elapsedRealtime() - t0));
+            return null;
+        }
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream(64 * 1024);
+            frame.compress(Bitmap.CompressFormat.JPEG, 75, baos);
+            log(appContext, "directExtractOk basename=" + base + " stage=" + stage
+                    + " totalMs=" + (SystemClock.elapsedRealtime() - t0));
+            return baos.toByteArray();
+        } finally {
+            frame.recycle();
+        }
+    }
+
+    @Nullable
+    private static Bitmap extractWithMmr(@NonNull Context appContext, @NonNull String url, @NonNull String stablePath) {
+        MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+        OkHttpMediaDataSource dataSource = new OkHttpMediaDataSource(url, appContext);
+        try {
+            mmr.setDataSource(dataSource);
+            long durationMs = readDurationMs(mmr);
+            int reloadEpoch = ThumbnailReloadEpoch.get(ThumbnailStablePath.normalize(stablePath));
+            return extractFrameWithReloadOffsets(mmr, durationMs, reloadEpoch);
+        } catch (Exception ignored) {
+            return null;
+        } finally {
+            try {
+                mmr.release();
+            } catch (Exception ignored) {
+            }
+            try {
+                dataSource.close();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private static long readDurationMs(@NonNull MediaMetadataRetriever mmr) {
+        String durationStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+        if (durationStr == null) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(durationStr);
+        } catch (NumberFormatException ignored) {
+            return 0L;
+        }
+    }
+
+    @Nullable
+    private static Bitmap extractFrameWithReloadOffsets(
+            @NonNull MediaMetadataRetriever mmr,
+            long durationMs,
+            int reloadEpoch) {
+        long durationUs = durationMs > 0 ? durationMs * 1000L : 0L;
+        long[] timestamps = reloadEpoch > 0
+                ? buildReloadTimesUs(durationMs, durationUs, reloadEpoch)
+                : buildDefaultTimesUs(durationMs, durationUs);
+        for (long ts : timestamps) {
+            Bitmap frame = mmr.getFrameAtTime(ts, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+            if (frame != null) {
+                return frame;
+            }
+        }
+        return null;
+    }
+
+    private static long[] buildReloadTimesUs(long durationMs, long durationUs, int reloadEpoch) {
+        long[] fractionsUs;
+        if (durationMs > 0) {
+            fractionsUs = new long[] {
+                    0L,
+                    durationUs / 10,
+                    durationUs / 4,
+                    durationUs / 2,
+            };
+        } else {
+            fractionsUs = new long[] {
+                    0L,
+                    1_000_000L,
+                    2_500_000L,
+                    5_000_000L,
+            };
+        }
+        int start = reloadEpoch % fractionsUs.length;
+        long[] ordered = new long[fractionsUs.length];
+        for (int i = 0; i < fractionsUs.length; i++) {
+            ordered[i] = clampTimeUs(fractionsUs[(start + i) % fractionsUs.length], durationUs);
+        }
+        return ordered;
+    }
+
+    private static long[] buildDefaultTimesUs(long durationMs, long durationUs) {
+        if (durationMs <= 0) {
+            return new long[] { 2_000_000L, 5_000_000L, 1_000_000L, 0L };
+        }
+        return new long[] {
+                clampTimeUs(2_000_000L, durationUs),
+                clampTimeUs(durationUs / 8, durationUs),
+                clampTimeUs(durationUs / 4, durationUs),
+                clampTimeUs(durationUs / 2, durationUs),
+        };
+    }
+
+    private static long clampTimeUs(long timeUs, long durationUs) {
+        if (timeUs < 0) {
+            return 0L;
+        }
+        if (durationUs > 0 && timeUs > durationUs) {
+            return durationUs;
+        }
+        return timeUs;
+    }
+
+    @Nullable
+    private static Bitmap extractFromPartialLocalFile(
+            @NonNull Context appContext,
+            @NonNull String url,
+            @NonNull String stablePath) {
+        File temp = null;
+        try {
+            temp = File.createTempFile("thumb_reload_", ".bin", appContext.getCacheDir());
+            if (!downloadPrefixToFile(url, temp, PARTIAL_DOWNLOAD_BYTES)) {
+                log(appContext, "partialDownloadFail stablePath=" + stablePath);
+                return null;
+            }
+            log(appContext, "partialDownloadOk stablePath=" + stablePath + " bytes=" + temp.length());
+            MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+            try {
+                mmr.setDataSource(temp.getAbsolutePath());
+                long durationMs = readDurationMs(mmr);
+                int reloadEpoch = ThumbnailReloadEpoch.get(ThumbnailStablePath.normalize(stablePath));
+                Bitmap frame = extractFrameWithReloadOffsets(mmr, durationMs, reloadEpoch);
+                if (frame == null) {
+                    frame = mmr.getFrameAtTime(2_000_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+                }
+                return frame;
+            } finally {
+                try {
+                    mmr.release();
+                } catch (Exception ignored) {
+                }
+            }
+        } catch (Exception e) {
+            log(appContext, "partialFileExtractFail stablePath=" + stablePath
+                    + " what=" + e.getClass().getSimpleName());
+            return null;
+        } finally {
+            if (temp != null) {
+                temp.delete();
+            }
+        }
+    }
+
+    private static boolean downloadPrefixToFile(
+            @NonNull String url,
+            @NonNull File dest,
+            long maxBytes) {
+        Request request = new Request.Builder()
+                .url(url)
+                .header("Range", "bytes=0-" + (maxBytes - 1L))
+                .build();
+        try (Response response = OkHttpMediaDataSource.getClient().newCall(request).execute()) {
+            if (!response.isSuccessful() && response.code() != 206) {
+                return false;
+            }
+            if (response.body() == null) {
+                return false;
+            }
+            try (InputStream input = response.body().byteStream();
+                 FileOutputStream output = new FileOutputStream(dest)) {
+                byte[] buffer = new byte[64 * 1024];
+                long written = 0L;
+                int read;
+                while ((read = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, read);
+                    written += read;
+                    if (written >= maxBytes) {
+                        break;
+                    }
+                }
+                return written > 0L;
+            }
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static void log(@NonNull Context appContext, @NonNull String message) {
+        SyncLog.info(appContext.getApplicationContext(), LOG_TAG, "event=" + message);
+    }
+}

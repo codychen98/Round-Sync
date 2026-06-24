@@ -1009,6 +1009,49 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     }
 
     /**
+     * Applies a freshly extracted JPEG to a visible row after user reload completed outside Glide.
+     */
+    public boolean applyReloadedVideoThumbnail(
+            int position,
+            @NonNull FileItem item,
+            @NonNull byte[] jpegBytes) {
+        if (files == null || position < 0 || position >= files.size() || context == null) {
+            return false;
+        }
+        if (!item.getPath().equals(files.get(position).getPath())) {
+            return false;
+        }
+        RecyclerView rv = attachedRecyclerView;
+        if (rv == null) {
+            return false;
+        }
+        RecyclerView.ViewHolder holder = rv.findViewHolderForAdapterPosition(position);
+        if (!(holder instanceof ViewHolder)) {
+            return false;
+        }
+        ViewHolder viewHolder = (ViewHolder) holder;
+        if (viewHolder.fileItem == null || !item.getPath().equals(viewHolder.fileItem.getPath())) {
+            return false;
+        }
+        cancelActiveRetryListener(viewHolder);
+        Glide.with(context.getApplicationContext()).clear(viewHolder.fileIcon);
+        Glide.with(context.getApplicationContext())
+                .load(jpegBytes)
+                .apply(new RequestOptions()
+                        .centerCrop()
+                        .dontAnimate()
+                        .skipMemoryCache(false))
+                .into(viewHolder.fileIcon);
+        SyncLog.info(
+                context.getApplicationContext(),
+                "ThumbReloadDbg",
+                "event=applyReloadedVideoThumbnail path=" + item.getPath()
+                        + " position=" + position
+                        + " bytes=" + jpegBytes.length);
+        return true;
+    }
+
+    /**
      * Called from hosting {@code Fragment} {@code onResume} / {@code onPause} so policy-extended
      * Glide retries do not run while the fragment is not resumed.
      */

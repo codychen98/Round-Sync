@@ -9,14 +9,17 @@ import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager
 import ca.pkay.rcloneexplorer.util.SyncLog
 import com.bumptech.glide.load.engine.executor.GlideExecutor
 import com.bumptech.glide.signature.ObjectKey
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /**
  * Forces a fresh thumbnail load for one file row: clears disk cache, bumps video reload epoch,
- * then schedules a partial adapter rebind on the main thread.
+ * then runs a direct extract (video) or adapter rebind (image).
  */
 object ThumbnailReloadHelper {
 
     private const val LOG_TAG = "ThumbReloadDbg"
+    private val userReloadExecutor: ExecutorService = Executors.newSingleThreadExecutor()
 
     fun interface OnCompleteListener {
         fun onComplete(success: Boolean)
@@ -51,6 +54,7 @@ object ThumbnailReloadHelper {
         GlideExecutor.newDiskCacheExecutor().execute {
             var success = true
             var detail = "ok"
+            var videoEpoch = 0
             try {
                 when {
                     mimeType.startsWith("image/") -> {
@@ -70,14 +74,12 @@ object ThumbnailReloadHelper {
                             detail = "thumbnailServerNotReady"
                         } else {
                             val previousEpoch = ThumbnailReloadEpoch.get(stablePath)
-                            val newEpoch = ThumbnailReloadEpoch.increment(stablePath)
-                            ThumbnailReloadEpoch.markPreferExoDecode(stablePath)
-                            ThumbnailReloadEpoch.markPendingUserReload(stablePath)
+                            videoEpoch = ThumbnailReloadEpoch.increment(stablePath)
                             clearVideoFailureLog(appContext, stablePath)
-                            evictVideoDiskKeys(appContext, remoteName, path, previousEpoch, newEpoch)
+                            evictVideoDiskKeys(appContext, remoteName, path, previousEpoch, videoEpoch)
                             log(
                                 appContext,
-                                "reloadVideoEvictDone path=$path previousEpoch=$previousEpoch newEpoch=$newEpoch preferExo=true",
+                                "reloadVideoEvictDone path=$path previousEpoch=$previousEpoch newEpoch=$videoEpoch",
                             )
                         }
                     }
@@ -91,20 +93,107 @@ object ThumbnailReloadHelper {
                 detail = "exception:${t.javaClass.simpleName}:${t.message ?: ""}"
                 log(appContext, "reloadDiskWorkFail path=$path detail=$detail")
             }
-            val completed = success
-            val completionDetail = detail
-            mainHandler.post {
-                log(
-                    appContext,
-                    "reloadMainThread path=$path success=$completed detail=$completionDetail position=$position",
-                )
-                if (completed) {
-                    adapter.reloadThumbnailAt(position)
-                    log(appContext, "reloadAdapterNotified path=$path position=$position")
+            val diskSuccess = success
+            val diskDetail = detail
+            val epochForVideo = videoEpoch
+            if (!diskSuccess || !mimeType.startsWith("video/")) {
+                mainHandler.post {
+                    finishReload(
+                        appContext,
+                        adapter,
+                        fileItem,
+                        position,
+                        path,
+                        diskSuccess,
+                        diskDetail,
+                        onComplete,
+                        null,
+                    )
                 }
-                onComplete.onComplete(completed)
+                return@execute
+            }
+            val thumbUrl = buildThumbUrl(stablePath)
+            if (thumbUrl == null) {
+                mainHandler.post {
+                    finishReload(
+                        appContext,
+                        adapter,
+                        fileItem,
+                        position,
+                        path,
+                        false,
+                        "thumbUrlUnavailable",
+                        onComplete,
+                        null,
+                    )
+                }
+                return@execute
+            }
+            userReloadExecutor.execute {
+                val jpeg = VideoThumbnailDirectExtract.extractJpegForUserReload(
+                    appContext,
+                    thumbUrl,
+                    stablePath,
+                )
+                if (jpeg != null) {
+                    val cacheKey = ObjectKey(
+                        ThumbnailCacheIdentity.videoReloadDataCacheKey(remoteName, path, epochForVideo),
+                    )
+                    val cached = ThumbnailDiskCacheWriter.put(appContext, cacheKey, jpeg)
+                    log(
+                        appContext,
+                        "reloadDirectCacheWrite path=$path epoch=$epochForVideo cached=$cached bytes=${jpeg.size}",
+                    )
+                }
+                mainHandler.post {
+                    finishReload(
+                        appContext,
+                        adapter,
+                        fileItem,
+                        position,
+                        path,
+                        jpeg != null,
+                        if (jpeg != null) "directExtractOk" else "directExtractFail",
+                        onComplete,
+                        jpeg,
+                    )
+                }
             }
         }
+    }
+
+    private fun finishReload(
+        context: Context,
+        adapter: FileExplorerRecyclerViewAdapter,
+        fileItem: FileItem,
+        position: Int,
+        path: String,
+        success: Boolean,
+        detail: String,
+        onComplete: OnCompleteListener,
+        jpegBytes: ByteArray?,
+    ) {
+        log(
+            context,
+            "reloadMainThread path=$path success=$success detail=$detail position=$position",
+        )
+        if (success && jpegBytes != null) {
+            val applied = adapter.applyReloadedVideoThumbnail(position, fileItem, jpegBytes)
+            log(context, "reloadDirectApply path=$path applied=$applied position=$position")
+            if (!applied) {
+                adapter.reloadThumbnailAt(position)
+            }
+        } else if (success) {
+            adapter.reloadThumbnailAt(position)
+            log(context, "reloadAdapterNotified path=$path position=$position")
+        } else {
+            val stablePath = ThumbnailCacheIdentity.stableServePath(fileItem.remote.name, fileItem.path)
+            ThumbnailReloadEpoch.markPreferExoDecode(stablePath)
+            ThumbnailReloadEpoch.markPendingUserReload(stablePath)
+            adapter.reloadThumbnailAt(position)
+            log(context, "reloadGlideFallback path=$path position=$position detail=$detail")
+        }
+        onComplete.onComplete(success)
     }
 
     private fun evictVideoDiskKeys(
@@ -127,9 +216,13 @@ object ThumbnailReloadHelper {
         }
     }
 
+    private fun buildThumbUrl(stablePath: String): String? {
+        val base = ThumbnailServerManager.getInstance().getCurrentBaseUrlOrNull() ?: return null
+        return if (stablePath.startsWith("/")) base + stablePath else "$base/$stablePath"
+    }
+
     private fun clearVideoFailureLog(context: Context, stablePath: String) {
-        val base = ThumbnailServerManager.getInstance().getCurrentBaseUrlOrNull() ?: return
-        val url = if (stablePath.startsWith("/")) base + stablePath else "$base/$stablePath"
+        val url = buildThumbUrl(stablePath) ?: return
         VideoThumbnailFetcher.clearFailureLogForUrl(url)
     }
 

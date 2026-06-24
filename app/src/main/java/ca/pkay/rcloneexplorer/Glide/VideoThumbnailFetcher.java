@@ -30,7 +30,7 @@ import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.SyncLog;
 
-public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
+public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThumbnailCancellation {
 
     private static final String TAG = "VideoThumbnailFetcher";
     private static final ExecutorService VIDEO_POOL = Executors.newFixedThreadPool(2);
@@ -105,7 +105,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
             }
             final long t0 = SystemClock.elapsedRealtime();
             final String base = basenameForThumbUrl(url);
-            final String stablePath = VideoThumbnailUrl.stablePathFromUrl(url);
+            final String stablePath = ThumbnailStablePath.normalize(VideoThumbnailUrl.stablePathFromUrl(url));
             final boolean preferExo = ThumbnailReloadEpoch.consumePreferExoDecode(stablePath);
             logThumbPipe(appContext, "fetcherStart",
                     "basename=" + base + " preferExo=" + preferExo + " " + mgrDebugSuffix());
@@ -307,7 +307,8 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
         }
     }
 
-    boolean isCancelled() {
+    @Override
+    public boolean isCancelled() {
         return cancelled;
     }
 

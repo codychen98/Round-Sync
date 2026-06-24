@@ -14,34 +14,37 @@ object ThumbnailReloadEpoch {
     /** User reload — next fetch should try Exo/FFmpeg before MediaMetadataRetriever. */
     private val preferExoDecode = ConcurrentHashMap.newKeySet<String>()
 
+    private fun key(stablePath: String): String = ThumbnailStablePath.normalize(stablePath)
+
     @JvmStatic
-    fun get(stablePath: String): Int = epochs[stablePath] ?: 0
+    fun get(stablePath: String): Int = epochs[key(stablePath)] ?: 0
 
     @JvmStatic
     fun increment(stablePath: String): Int {
-        val next = get(stablePath) + 1
-        epochs[stablePath] = next
+        val normalized = key(stablePath)
+        val next = get(normalized) + 1
+        epochs[normalized] = next
         return next
     }
 
     @JvmStatic
-    fun getEpochForVideoUrl(url: String): Int = get(VideoThumbnailUrl.stablePathFromUrl(url))
+    fun getEpochForVideoUrl(url: String): Int = get(ThumbnailStablePath.fromServeUrl(url))
 
     @JvmStatic
     fun markPendingUserReload(stablePath: String) {
-        pendingUserReload.add(stablePath)
+        pendingUserReload.add(key(stablePath))
     }
 
     /** Returns true once per user reload; consumed by the adapter bind path. */
     @JvmStatic
-    fun consumePendingUserReload(stablePath: String): Boolean = pendingUserReload.remove(stablePath)
+    fun consumePendingUserReload(stablePath: String): Boolean = pendingUserReload.remove(key(stablePath))
 
     @JvmStatic
     fun markPreferExoDecode(stablePath: String) {
-        preferExoDecode.add(stablePath)
+        preferExoDecode.add(key(stablePath))
     }
 
     /** Returns true once per user reload; consumed by the video fetcher. */
     @JvmStatic
-    fun consumePreferExoDecode(stablePath: String): Boolean = preferExoDecode.remove(stablePath)
+    fun consumePreferExoDecode(stablePath: String): Boolean = preferExoDecode.remove(key(stablePath))
 }

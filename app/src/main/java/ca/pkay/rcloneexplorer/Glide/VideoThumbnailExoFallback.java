@@ -18,7 +18,7 @@ import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.Util;
-import androidx.media3.datasource.DefaultHttpDataSource;
+import androidx.media3.datasource.okhttp.OkHttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.ProgressiveMediaSource;
 
@@ -41,11 +41,10 @@ final class VideoThumbnailExoFallback {
     private static final int OUT_W = 320;
     private static final int OUT_H = 180;
     private static final long PREPARE_TIMEOUT_MS = 20_000L;
+    private static final long USER_RELOAD_PREPARE_TIMEOUT_MS = 60_000L;
     private static final long RENDER_WAIT_MS = 12_000L;
     private static final long PIXEL_COPY_MS = 5_000L;
     private static final long MAX_DURATION_MS = 6L * 60L * 60L * 1000L;
-    private static final long OUTER_WAIT_MS =
-            PREPARE_TIMEOUT_MS + RENDER_WAIT_MS + PIXEL_COPY_MS + 5_000L;
 
     private static final Object EXO_THREAD_LOCK = new Object();
     @Nullable
@@ -81,16 +80,7 @@ final class VideoThumbnailExoFallback {
 
     @NonNull
     private static String stablePathForUrl(@NonNull String url) {
-        Uri u = Uri.parse(url);
-        java.util.List<String> segs = u.getPathSegments();
-        if (segs == null || segs.size() < 2) {
-            return u.getPath() != null ? u.getPath() : "/";
-        }
-        StringBuilder sb = new StringBuilder();
-        for (int i = 1; i < segs.size(); i++) {
-            sb.append('/').append(segs.get(i));
-        }
-        return sb.length() > 0 ? sb.toString() : "/";
+        return ThumbnailStablePath.fromServeUrl(url);
     }
 
     @Nullable
@@ -142,7 +132,7 @@ final class VideoThumbnailExoFallback {
             @NonNull String url,
             long durationMs,
             @NonNull VideoThumbnailFetcher owner) {
-        return tryGrabFirstFrame(appContext, url, durationMs, owner, false);
+        return tryGrabFirstFrame(appContext, url, durationMs, owner, false, false);
     }
 
     @Nullable
@@ -150,15 +140,28 @@ final class VideoThumbnailExoFallback {
             @NonNull Context appContext,
             @NonNull String url,
             long durationMs,
-            @NonNull VideoThumbnailFetcher owner,
+            @NonNull VideoThumbnailCancellation cancellation,
             boolean relaxDurationCheck) {
+        return tryGrabFirstFrame(appContext, url, durationMs, cancellation, relaxDurationCheck, false);
+    }
+
+    @Nullable
+    static Bitmap tryGrabFirstFrame(
+            @NonNull Context appContext,
+            @NonNull String url,
+            long durationMs,
+            @NonNull VideoThumbnailCancellation cancellation,
+            boolean relaxDurationCheck,
+            boolean extendedPrepareTimeout) {
         final String base = VideoThumbnailFetcher.basenameForThumbUrl(url);
+        final long outerWaitMs = (extendedPrepareTimeout ? USER_RELOAD_PREPARE_TIMEOUT_MS : PREPARE_TIMEOUT_MS)
+                + RENDER_WAIT_MS + PIXEL_COPY_MS + 5_000L;
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
             VideoThumbnailFetcher.logThumbPipe(appContext, "exoSkip",
                     "basename=" + base + " reason=apiLtN");
             return null;
         }
-        if (owner.isCancelled()) {
+        if (cancellation.isCancelled()) {
             VideoThumbnailFetcher.logThumbPipe(appContext, "exoSkip",
                     "basename=" + base + " reason=cancelledAtExoEntry");
             return null;
@@ -179,7 +182,8 @@ final class VideoThumbnailExoFallback {
         AtomicReference<String> errorMsg = new AtomicReference<>();
         exoH.post(() -> {
             try {
-                result.set(grabOnExoLooper(appContext, url, durationMs, owner, relaxDurationCheck));
+                result.set(grabOnExoLooper(
+                        appContext, url, durationMs, cancellation, relaxDurationCheck, extendedPrepareTimeout));
             } catch (Exception e) {
                 errorMsg.set(e.getMessage());
                 FLog.w(TAG, "Exo thumbnail fallback failed: %s", e.getMessage());
@@ -188,10 +192,10 @@ final class VideoThumbnailExoFallback {
             }
         });
         try {
-            if (!done.await(OUTER_WAIT_MS, TimeUnit.MILLISECONDS)) {
+            if (!done.await(outerWaitMs, TimeUnit.MILLISECONDS)) {
                 FLog.w(TAG, "Exo thumbnail fallback timed out waiting for exo thread");
                 VideoThumbnailFetcher.logThumbPipe(appContext, "exoOuterTimeout",
-                        "basename=" + base + " waitMs=" + OUTER_WAIT_MS);
+                        "basename=" + base + " waitMs=" + outerWaitMs);
                 return null;
             }
         } catch (InterruptedException e) {
@@ -213,8 +217,9 @@ final class VideoThumbnailExoFallback {
             @NonNull Context appContext,
             @NonNull String url,
             long durationMs,
-            @NonNull VideoThumbnailFetcher owner,
-            boolean relaxDurationCheck) throws Exception {
+            @NonNull VideoThumbnailCancellation cancellation,
+            boolean relaxDurationCheck,
+            boolean extendedPrepareTimeout) throws Exception {
         final String base = VideoThumbnailFetcher.basenameForThumbUrl(url);
         final String stablePath = stablePathForUrl(url);
         ExoPlayer player = null;
@@ -247,7 +252,7 @@ final class VideoThumbnailExoFallback {
                             + " extensionRendererMode=on");
             player.prepare();
 
-            if (!waitForReady(appContext, base, player, owner)) {
+            if (!waitForReady(appContext, base, player, cancellation, extendedPrepareTimeout)) {
                 return null;
             }
             long effectiveDurationMs = durationMs;
@@ -271,10 +276,10 @@ final class VideoThumbnailExoFallback {
             player.seekTo(seekMs);
             boolean gotFrame = rendered.await(RENDER_WAIT_MS, TimeUnit.MILLISECONDS);
             player.removeListener(listener);
-            if (!gotFrame || owner.isCancelled()) {
+            if (!gotFrame || cancellation.isCancelled()) {
                 VideoThumbnailFetcher.logThumbPipe(appContext, "exoNoRenderedFrame",
                         "basename=" + base + " seekMs=" + seekMs + " gotFrame=" + gotFrame
-                                + " cancelled=" + owner.isCancelled()
+                                + " cancelled=" + cancellation.isCancelled()
                                 + " playbackState=" + player.getPlaybackState());
                 return null;
             }
@@ -287,10 +292,10 @@ final class VideoThumbnailExoFallback {
                 copyResult.set(r);
                 copied.countDown();
             }, main);
-            if (!copied.await(PIXEL_COPY_MS, TimeUnit.MILLISECONDS) || owner.isCancelled()) {
+            if (!copied.await(PIXEL_COPY_MS, TimeUnit.MILLISECONDS) || cancellation.isCancelled()) {
                 bitmap.recycle();
                 VideoThumbnailFetcher.logThumbPipe(appContext, "exoPixelCopyTimeout",
-                        "basename=" + base + " cancelled=" + owner.isCancelled());
+                        "basename=" + base + " cancelled=" + cancellation.isCancelled());
                 return null;
             }
             if (copyResult.get() != PixelCopy.SUCCESS) {
@@ -315,11 +320,13 @@ final class VideoThumbnailExoFallback {
             @NonNull Context appContext,
             @NonNull String basename,
             @NonNull ExoPlayer player,
-            @NonNull VideoThumbnailFetcher owner)
+            @NonNull VideoThumbnailCancellation cancellation,
+            boolean extendedPrepareTimeout)
             throws InterruptedException {
-        long deadline = System.currentTimeMillis() + PREPARE_TIMEOUT_MS;
+        long timeoutMs = extendedPrepareTimeout ? USER_RELOAD_PREPARE_TIMEOUT_MS : PREPARE_TIMEOUT_MS;
+        long deadline = System.currentTimeMillis() + timeoutMs;
         while (System.currentTimeMillis() < deadline) {
-            if (owner.isCancelled()) {
+            if (cancellation.isCancelled()) {
                 VideoThumbnailFetcher.logThumbPipe(appContext, "exoPrepareAbort",
                         "basename=" + basename + " reason=cancelled");
                 return false;
