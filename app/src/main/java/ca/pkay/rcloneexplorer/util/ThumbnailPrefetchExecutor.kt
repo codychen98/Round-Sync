@@ -67,7 +67,7 @@ object ThumbnailPrefetchExecutor {
         directoryPath: String,
         targets: List<FileItem>,
         isStopped: () -> Boolean,
-        onProgress: (FolderPrefetchProgress) -> Unit,
+        onProgress: suspend (FolderPrefetchProgress) -> Unit,
     ): FolderPrefetchOutcome {
         if (targets.isEmpty()) {
             return FolderPrefetchOutcome(loaded = 0, total = 0, stoppedEarly = false)
