@@ -14,16 +14,20 @@ import com.bumptech.glide.signature.ObjectKey
  */
 object ThumbnailReloadHelper {
 
+    fun interface OnCompleteListener {
+        fun onComplete(success: Boolean)
+    }
+
     fun reload(
         context: Context,
         fileItem: FileItem,
         adapter: FileExplorerRecyclerViewAdapter,
         position: Int,
-        onComplete: (Boolean) -> Unit,
+        onComplete: OnCompleteListener,
     ) {
         val mimeType = fileItem.mimeType
         if (mimeType.isNullOrEmpty()) {
-            onComplete(false)
+            onComplete.onComplete(false)
             return
         }
         val appContext = context.applicationContext
@@ -57,7 +61,7 @@ object ThumbnailReloadHelper {
                 if (completed) {
                     adapter.reloadThumbnailAt(position)
                 }
-                onComplete(completed)
+                onComplete.onComplete(completed)
             }
         }
     }
