@@ -48,6 +48,7 @@ import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.MediaFolderPolicy;
 import ca.pkay.rcloneexplorer.util.PolicyType;
 import ca.pkay.rcloneexplorer.util.SyncLog;
+import ca.pkay.rcloneexplorer.util.ThumbnailDiagLog;
 import io.github.x0b.safdav.SafAccessProvider;
 import io.github.x0b.safdav.file.FileAccessError;
 
@@ -84,6 +85,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     private boolean folderPolicyPickMode;
     private int thumbnailTotal = 0;
     private final AtomicInteger thumbnailLoaded = new AtomicInteger(0);
+    /** Paths already counted toward {@link #thumbnailLoaded} for the current data generation. */
+    private final Set<String> thumbnailCountedPaths = ConcurrentHashMap.newKeySet();
     /** Incremented when thumbnail progress accounting resets (new folder / resort). */
     private final AtomicLong thumbnailDataGeneration = new AtomicLong(0L);
     /** Cached per-remote thumbnail allow-list; invalidated when list or settings may have changed. */
@@ -395,6 +398,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 ? () -> thumbnailHostResumed && serverReady
                                 : null;
                 RetryRequestListener retryListener = new ProgressTrackingRetryListener(
+                        holder,
                         ThumbnailServerManager.getInstance(),
                         rl -> Glide.with(context.getApplicationContext())
                                 .load(new FolderThumbnailGlideUrl(buildThumbnailUrl(item)))
@@ -464,6 +468,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                         ? () -> thumbnailHostResumed && serverReady
                                         : null;
                         RetryRequestListener retryListener = new ProgressTrackingRetryListener(
+                                holder,
                                 ThumbnailServerManager.getInstance(),
                                 rl -> Glide.with(context.getApplicationContext())
                                         .load(new HttpServeThumbnailGlideUrl(buildThumbnailUrl(item)))
@@ -522,6 +527,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                         ? () -> thumbnailHostResumed && serverReady
                                         : null;
                         RetryRequestListener retryListener = new ProgressTrackingRetryListener(
+                                holder,
                                 ThumbnailServerManager.getInstance(),
                                 rl -> Glide.with(context.getApplicationContext())
                                         .load(new VideoThumbnailUrl(buildThumbnailUrl(item)))
@@ -1034,10 +1040,15 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         notifyItemRangeRemoved(0, count);
     }
 
+    private void resetThumbnailProgressAccounting() {
+        thumbnailLoaded.set(0);
+        thumbnailCountedPaths.clear();
+    }
+
     public void newData(List<FileItem> data) {
         invalidateThumbPolicyCache();
         thumbnailTotal = countThumbnailTargets(data);
-        thumbnailLoaded.set(0);
+        resetThumbnailProgressAccounting();
         long gen = thumbnailDataGeneration.incrementAndGet();
         if (context != null) {
             SyncLog.info(context, "MediaPrepDbg", "event=adapterNewData gen=" + gen + " loaded=0 total="
@@ -1068,7 +1079,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             notifyItemRangeRemoved(0, count);
             showEmptyState(true);
             thumbnailTotal = 0;
-            thumbnailLoaded.set(0);
+            resetThumbnailProgressAccounting();
             notifyThumbnailIdleIfNoTargets();
             return;
         }
@@ -1081,7 +1092,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         syncSelectedItemsWithUpdatedData(newData);
         files = newData;
         thumbnailTotal = countThumbnailTargets(files);
-        thumbnailLoaded.set(0);
+        resetThumbnailProgressAccounting();
         diffResult.dispatchUpdatesTo(this);
         notifyThumbnailIdleIfNoTargets();
     }
@@ -1135,7 +1146,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             notifyItemRangeInserted(0, files.size());
         }
         thumbnailTotal = countThumbnailTargets(files);
-        thumbnailLoaded.set(0);
+        resetThumbnailProgressAccounting();
         long gen = thumbnailDataGeneration.incrementAndGet();
         if (context != null) {
             SyncLog.info(context, "MediaPrepDbg", "event=adapterUpdateSortedData gen=" + gen + " loaded=0 total="
@@ -1342,7 +1353,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
     private class ProgressTrackingRetryListener extends RetryRequestListener {
 
+        @NonNull
+        private final ViewHolder boundHolder;
+
         ProgressTrackingRetryListener(
+                @NonNull ViewHolder boundHolder,
                 @NonNull ThumbnailServerManager serverManager,
                 @NonNull RetryRequestListener.RetryLoadCallback loadCallback,
                 @NonNull Context logContext,
@@ -1358,6 +1373,19 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                     epochSource,
                     policyExtendedRetries,
                     extendedScheduleGate);
+            this.boundHolder = boundHolder;
+        }
+
+        private boolean isStaleForBoundRow() {
+            if (boundHolder.getBindingAdapterPosition() == RecyclerView.NO_POSITION) {
+                return true;
+            }
+            FileItem item = boundHolder.fileItem;
+            if (item == null) {
+                return true;
+            }
+            String pathPrefix = item.getPath() + "|";
+            return !debugLoadKey.startsWith(pathPrefix);
         }
 
         @Override
@@ -1367,6 +1395,15 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
                 @NonNull com.bumptech.glide.load.DataSource dataSource,
                 boolean isFirstResource) {
+            if (isStaleForBoundRow()) {
+                ThumbnailDiagLog.info(
+                        context,
+                        "staleGlideCallback",
+                        "phase=resourceReady key=" + debugLoadKey
+                                + " holderPath="
+                                + (boundHolder.fileItem != null ? boundHolder.fileItem.getPath() : "null"));
+                return true;
+            }
             boolean result = super.onResourceReady(resource, model, target, dataSource, isFirstResource);
             notifyProgress();
             return result;
@@ -1378,6 +1415,15 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 Object model,
                 @NonNull com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
                 boolean isFirstResource) {
+            if (isStaleForBoundRow()) {
+                ThumbnailDiagLog.info(
+                        context,
+                        "staleGlideCallback",
+                        "phase=loadFailed key=" + debugLoadKey
+                                + " holderPath="
+                                + (boundHolder.fileItem != null ? boundHolder.fileItem.getPath() : "null"));
+                return true;
+            }
             boolean retrying = super.onLoadFailed(e, model, target, isFirstResource);
             if (!retrying) {
                 notifyProgress();
@@ -1387,6 +1433,14 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
         private void notifyProgress() {
             if (progressListener == null || thumbnailTotal == 0) return;
+            FileItem item = boundHolder.fileItem;
+            if (item == null) {
+                return;
+            }
+            String path = item.getPath();
+            if (!thumbnailCountedPaths.add(path)) {
+                return;
+            }
             int loaded = thumbnailLoaded.incrementAndGet();
             if (context != null) {
                 SyncLog.info(context, "MediaPrepDbg", "event=adapterNotifyProgress gen="

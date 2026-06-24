@@ -16,6 +16,7 @@ import com.bumptech.glide.request.target.Target;
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.SyncLog;
+import ca.pkay.rcloneexplorer.util.ThumbnailDiagLog;
 
 import java.util.List;
 
@@ -86,6 +87,30 @@ public class RetryRequestListener implements RequestListener<Drawable> {
             Object model,
             @NonNull Target<Drawable> target,
             boolean isFirstResource) {
+        if (isCancelledGlideFailure(e)) {
+            ThumbnailDiagLog.info(
+                    appContext,
+                    "glideLoadCancelled",
+                    "key=" + debugLoadKey
+                            + " mgrState=" + serverManager.getSyncState()
+                            + " serveGen=" + serverManager.getServeGeneration());
+            return true;
+        }
+        if (appContext != null) {
+            boolean willRetry = policyExtendedRetries
+                    ? extendedScheduleGate != null && extendedScheduleGate.allowSchedule()
+                    : retryCount < MAX_RETRIES;
+            ThumbnailDiagLog.info(
+                    appContext,
+                    "glideLoadFailed",
+                    "key=" + debugLoadKey
+                            + " attempt=" + (retryCount + 1)
+                            + " willRetry=" + willRetry
+                            + " policyExtended=" + policyExtendedRetries
+                            + " mgrState=" + serverManager.getSyncState()
+                            + " serveGen=" + serverManager.getServeGeneration()
+                            + " causes=" + formatGlideRootCauses(e));
+        }
         if (appContext != null && debugLoadKey.endsWith("|vid")) {
             boolean willRetry = policyExtendedRetries
                     ? extendedScheduleGate != null && extendedScheduleGate.allowSchedule()
@@ -108,7 +133,13 @@ public class RetryRequestListener implements RequestListener<Drawable> {
         } else {
             if (extendedScheduleGate == null || !extendedScheduleGate.allowSchedule()) {
                 FLog.d(TAG, "Policy extended retry not scheduled (host inactive or server not READY)");
-                return false;
+                ThumbnailDiagLog.info(
+                        appContext,
+                        "extendedRetryGateClosed",
+                        "key=" + debugLoadKey
+                                + " mgrState=" + serverManager.getSyncState()
+                                + " serveGen=" + serverManager.getServeGeneration());
+                return true;
             }
         }
 
@@ -167,6 +198,15 @@ public class RetryRequestListener implements RequestListener<Drawable> {
             Target<Drawable> target,
             @NonNull DataSource dataSource,
             boolean isFirstResource) {
+        if (appContext != null) {
+            ThumbnailDiagLog.info(
+                    appContext,
+                    "glideResourceReady",
+                    "key=" + debugLoadKey
+                            + " dataSource=" + dataSource
+                            + " mgrState=" + serverManager.getSyncState()
+                            + " serveGen=" + serverManager.getServeGeneration());
+        }
         if (appContext != null && debugLoadKey.endsWith("|vid")) {
             VideoThumbnailFetcher.logThumbPipe(
                     appContext,
@@ -187,6 +227,30 @@ public class RetryRequestListener implements RequestListener<Drawable> {
             HANDLER.removeCallbacks(pendingRunnable);
             pendingRunnable = null;
         }
+    }
+
+    static boolean isCancelledGlideFailure(@Nullable GlideException e) {
+        if (e == null) {
+            return false;
+        }
+        for (Throwable root : e.getRootCauses()) {
+            if (root instanceof java.util.concurrent.CancellationException) {
+                return true;
+            }
+            String message = root.getMessage();
+            if (message != null) {
+                String lower = message.toLowerCase(java.util.Locale.US);
+                if (lower.contains("cancel") || lower.contains("interrupted")) {
+                    return true;
+                }
+            }
+        }
+        String top = e.getMessage();
+        if (top != null) {
+            String lower = top.toLowerCase(java.util.Locale.US);
+            return lower.contains("cancel") || lower.contains("interrupted");
+        }
+        return false;
     }
 
     @NonNull

@@ -92,11 +92,21 @@ object ThumbnailPrefetchExecutor {
             prefetchRefIncremented = true
             serveLeaseId = ThumbnailServerManager.getInstance().acquireServeLease(app, remote, port, auth)
             if (serveLeaseId == 0) {
+                SyncLog.error(
+                    app,
+                    "MediaPrepDbg",
+                    "event=prefetchLeaseFailed path=$directoryPath port=$port",
+                )
                 return FolderPrefetchOutcome(loaded = loaded, total = targets.size, stoppedEarly = false)
             }
             ThumbnailServerService.startServing(app, remote, port, auth, directoryPath, true)
             if (!waitForThumbnailServerReady()) {
                 FLog.w(TAG, "Prefetch: server did not become READY in time")
+                SyncLog.error(
+                    app,
+                    "MediaPrepDbg",
+                    "event=prefetchServerTimeout path=$directoryPath port=$port",
+                )
                 return FolderPrefetchOutcome(loaded = loaded, total = targets.size, stoppedEarly = false)
             }
             onProgress(FolderPrefetchProgress(directoryPath, loaded, targets.size))
@@ -150,7 +160,14 @@ object ThumbnailPrefetchExecutor {
                     0,
                 )
             }
-            return FolderPrefetchOutcome(loaded = loaded, total = targets.size, stoppedEarly = stoppedEarly)
+            val outcome = FolderPrefetchOutcome(loaded = loaded, total = targets.size, stoppedEarly = stoppedEarly)
+            SyncLog.info(
+                app,
+                "MediaPrepDbg",
+                "event=prefetchFolderDone path=$directoryPath loaded=${outcome.loaded}/${outcome.total} " +
+                    "stoppedEarly=${outcome.stoppedEarly}",
+            )
+            return outcome
         } finally {
             if (prefetchRefIncremented) {
                 BackgroundMediaPrepWorkTracker.decrementThumbnailPrefetchWork()

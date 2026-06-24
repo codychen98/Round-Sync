@@ -15,14 +15,11 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import ca.pkay.rcloneexplorer.Items.FileItem
-import ca.pkay.rcloneexplorer.Items.RemoteItem
 import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Rclone
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerService
 import ca.pkay.rcloneexplorer.util.MediaFolderPolicyPrefetchFolders
 import ca.pkay.rcloneexplorer.util.NotificationUtils
-import ca.pkay.rcloneexplorer.util.PolicyPrefetchFolder
 import ca.pkay.rcloneexplorer.util.SyncLog
 import ca.pkay.rcloneexplorer.util.ThumbnailPrefetchExecutor
 import ca.pkay.rcloneexplorer.util.ThumbnailPrefetchTargets
@@ -58,90 +55,18 @@ class MediaFolderPolicyThumbnailPrefetchWorker(
 
         val startAtRoot = ThumbnailPrefetchTargets.readStartAtRoot(prefs, app)
         val sizeLimit = ThumbnailPrefetchTargets.readThumbnailSizeLimitBytes(prefs, app)
-        val folderJobs = buildFolderJobs(
-            rclone = rclone,
-            policyFolders = policyFolders,
-            startAtRoot = startAtRoot,
-            prefs = prefs,
-            sizeLimit = sizeLimit,
-            isStopped = { isStopped },
-        )
-        if (folderJobs.isEmpty()) {
-            return@withContext Result.success()
-        }
 
         SyncLog.info(
             app,
             TAG,
-            "event=policyPrefetchStart folders=${folderJobs.size} policyRows=${policyFolders.size}",
-        )
-        setForeground(
-            createPolicyForegroundInfo(
-                app,
-                folderIndex = 1,
-                folderCount = folderJobs.size,
-                folderDisplayPath = folderJobs.first().directoryPath,
-                thumbnailLoaded = 0,
-                thumbnailTotal = folderJobs.first().targets.size,
-            ),
+            "event=policyPrefetchStart folders=${policyFolders.size} policyRows=${policyFolders.size}",
         )
 
-        folderJobs.forEachIndexed { index, job ->
+        var folderIndex = 0
+        var folderJobsStarted = 0
+        for (folder in policyFolders) {
             if (isStopped) {
                 return@withContext Result.success()
-            }
-            val folderNumber = index + 1
-            setForeground(
-                createPolicyForegroundInfo(
-                    app,
-                    folderIndex = folderNumber,
-                    folderCount = folderJobs.size,
-                    folderDisplayPath = job.directoryPath,
-                    thumbnailLoaded = 0,
-                    thumbnailTotal = job.targets.size,
-                ),
-            )
-            ThumbnailPrefetchExecutor.prefetchFolder(
-                app = app,
-                remote = job.remote,
-                directoryPath = job.directoryPath,
-                targets = job.targets,
-                isStopped = { isStopped },
-                onProgress = { progress ->
-                    setForeground(
-                        createPolicyForegroundInfo(
-                            app,
-                            folderIndex = folderNumber,
-                            folderCount = folderJobs.size,
-                            folderDisplayPath = progress.directoryPath,
-                            thumbnailLoaded = progress.loaded,
-                            thumbnailTotal = progress.total,
-                        ),
-                    )
-                },
-            )
-        }
-        Result.success()
-    }
-
-    private data class FolderJob(
-        val remote: RemoteItem,
-        val directoryPath: String,
-        val targets: List<FileItem>,
-    )
-
-    private fun buildFolderJobs(
-        rclone: Rclone,
-        policyFolders: List<PolicyPrefetchFolder>,
-        startAtRoot: Boolean,
-        prefs: android.content.SharedPreferences,
-        sizeLimit: Long,
-        isStopped: () -> Boolean,
-    ): List<FolderJob> {
-        val jobs = ArrayList<FolderJob>(policyFolders.size)
-        for (folder in policyFolders) {
-            if (isStopped()) {
-                break
             }
             val remote = rclone.getRemoteItemFromName(folder.remoteName) ?: continue
             val listing = rclone.getDirectoryContent(remote, folder.explorerDirectoryPath, startAtRoot)
@@ -153,17 +78,65 @@ class MediaFolderPolicyThumbnailPrefetchWorker(
                 sizeLimit,
                 showThumbnails = true,
             )
-            if (targets.isNotEmpty()) {
-                jobs.add(
-                    FolderJob(
-                        remote = remote,
-                        directoryPath = folder.explorerDirectoryPath,
-                        targets = targets,
-                    ),
-                )
+            if (targets.isEmpty()) {
+                continue
             }
+            folderIndex++
+            folderJobsStarted++
+            SyncLog.info(
+                app,
+                TAG,
+                "event=policyPrefetchFolderStart index=$folderIndex/${policyFolders.size} " +
+                    "path=${folder.explorerDirectoryPath} targets=${targets.size}",
+            )
+            setForeground(
+                createPolicyForegroundInfo(
+                    app,
+                    folderIndex = folderIndex,
+                    folderCount = policyFolders.size,
+                    folderDisplayPath = folder.explorerDirectoryPath,
+                    thumbnailLoaded = 0,
+                    thumbnailTotal = targets.size,
+                ),
+            )
+            val outcome = ThumbnailPrefetchExecutor.prefetchFolder(
+                app = app,
+                remote = remote,
+                directoryPath = folder.explorerDirectoryPath,
+                targets = targets,
+                isStopped = { isStopped },
+                onProgress = { progress ->
+                    setForeground(
+                        createPolicyForegroundInfo(
+                            app,
+                            folderIndex = folderIndex,
+                            folderCount = policyFolders.size,
+                            folderDisplayPath = progress.directoryPath,
+                            thumbnailLoaded = progress.loaded,
+                            thumbnailTotal = progress.total,
+                        ),
+                    )
+                },
+            )
+            SyncLog.info(
+                app,
+                TAG,
+                "event=policyPrefetchFolderDone index=$folderIndex/${policyFolders.size} " +
+                    "path=${folder.explorerDirectoryPath} loaded=${outcome.loaded}/${outcome.total} " +
+                    "stoppedEarly=${outcome.stoppedEarly}",
+            )
         }
-        return jobs
+        if (folderJobsStarted == 0) {
+            SyncLog.info(app, TAG, "event=policyPrefetchNoTargets policyRows=${policyFolders.size}")
+        } else {
+            SyncLog.info(
+                app,
+                TAG,
+                "event=policyPrefetchComplete foldersPrefetched=$folderJobsStarted " +
+                    "policyRows=${policyFolders.size}",
+            )
+        }
+        Result.success()
     }
 
     private fun createPolicyForegroundInfo(
@@ -218,6 +191,11 @@ class MediaFolderPolicyThumbnailPrefetchWorker(
 
         @JvmStatic
         fun enqueue(context: Context) {
+            enqueue(context, ExistingWorkPolicy.KEEP)
+        }
+
+        @JvmStatic
+        fun enqueue(context: Context, policy: ExistingWorkPolicy) {
             val app = context.applicationContext
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -228,10 +206,10 @@ class MediaFolderPolicyThumbnailPrefetchWorker(
                 .build()
             WorkManager.getInstance(app).enqueueUniqueWork(
                 UNIQUE_WORK_NAME,
-                ExistingWorkPolicy.KEEP,
+                policy,
                 request,
             )
-            SyncLog.info(app, TAG, "Enqueued media policy thumbnail prefetch work")
+            SyncLog.info(app, TAG, "Enqueued media policy thumbnail prefetch work policy=$policy")
         }
 
         /**
@@ -244,7 +222,7 @@ class MediaFolderPolicyThumbnailPrefetchWorker(
             if (!ThumbnailPrefetchTargets.readShowThumbnails(prefs, app)) {
                 return
             }
-            enqueue(app)
+            enqueue(app, ExistingWorkPolicy.REPLACE)
         }
 
         /**
@@ -260,7 +238,7 @@ class MediaFolderPolicyThumbnailPrefetchWorker(
             if (MediaFolderPolicyPrefetchFolders.enumerate(rclone.remotes, prefs).isEmpty()) {
                 return
             }
-            enqueue(app)
+            enqueue(app, ExistingWorkPolicy.KEEP)
         }
     }
 }
