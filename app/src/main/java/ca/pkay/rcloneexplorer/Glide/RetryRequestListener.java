@@ -81,6 +81,11 @@ public class RetryRequestListener implements RequestListener<Drawable> {
         this.extendedScheduleGate = extendedScheduleGate;
     }
 
+    @NonNull
+    protected String getDebugLoadKey() {
+        return debugLoadKey;
+    }
+
     @Override
     public boolean onLoadFailed(
             @Nullable GlideException e,

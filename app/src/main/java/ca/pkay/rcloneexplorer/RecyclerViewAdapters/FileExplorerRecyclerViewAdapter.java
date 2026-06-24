@@ -1385,7 +1385,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 return true;
             }
             String pathPrefix = item.getPath() + "|";
-            return !debugLoadKey.startsWith(pathPrefix);
+            return !getDebugLoadKey().startsWith(pathPrefix);
         }
 
         @Override
@@ -1399,7 +1399,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 ThumbnailDiagLog.info(
                         context,
                         "staleGlideCallback",
-                        "phase=resourceReady key=" + debugLoadKey
+                        "phase=resourceReady key=" + getDebugLoadKey()
                                 + " holderPath="
                                 + (boundHolder.fileItem != null ? boundHolder.fileItem.getPath() : "null"));
                 return true;
@@ -1419,7 +1419,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 ThumbnailDiagLog.info(
                         context,
                         "staleGlideCallback",
-                        "phase=loadFailed key=" + debugLoadKey
+                        "phase=loadFailed key=" + getDebugLoadKey()
                                 + " holderPath="
                                 + (boundHolder.fileItem != null ? boundHolder.fileItem.getPath() : "null"));
                 return true;
