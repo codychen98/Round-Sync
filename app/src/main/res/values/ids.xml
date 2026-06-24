@@ -3,4 +3,5 @@
     <item name="fab_add_folder" type="id" />
     <item name="fab_upload" type="id" />
     <item name="nav_edit_pins" type="id" />
+    <item name="nav_pinned_more" type="id" />
 </resources>

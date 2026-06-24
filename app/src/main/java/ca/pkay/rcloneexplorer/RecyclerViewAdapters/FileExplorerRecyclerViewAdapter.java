@@ -21,6 +21,7 @@ import androidx.annotation.Nullable;
 import androidx.core.widget.ImageViewCompat;
 import androidx.preference.PreferenceManager;
 import androidx.recyclerview.widget.DiffUtil;
+import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.bumptech.glide.Glide;
@@ -55,6 +56,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     private static final String TAG = "FileExplorerRVA";
     public static final int VIEW_MODE_LIST = 0;
     public static final int VIEW_MODE_GRID = 1;
+    /** Partial-bind payload: re-run thumbnail Glide bind only (preserves scroll position). */
+    public static final String THUMBNAIL_PAYLOAD = "thumbnail_payload";
 
     private List<FileItem> files;
     private View emptyView;
@@ -185,10 +188,25 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     }
 
     @Override
+    public void onBindViewHolder(@NonNull final ViewHolder holder, int position, @NonNull List<Object> payloads) {
+        if (payloads.isEmpty()) {
+            onBindViewHolder(holder, position);
+            return;
+        }
+        for (Object payload : payloads) {
+            if (THUMBNAIL_PAYLOAD.equals(payload)) {
+                if (position >= 0 && position < files.size()) {
+                    bindThumbnails(holder, files.get(position), position);
+                }
+                return;
+            }
+        }
+        onBindViewHolder(holder, position);
+    }
+
+    @Override
     public void onBindViewHolder(@NonNull final ViewHolder holder, int position) {
         final FileItem item = files.get(position);
-        String startupBranch = item.isDir() ? "folderIcon" : "plainFileIcon";
-        boolean startupPolicyAllowed = false;
 
         holder.fileItem = item;
 
@@ -222,10 +240,141 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 holder.fileSize.setText(item.getHumanReadableSize());
                 holder.fileSize.setVisibility(View.VISIBLE);
             }
-            if (holder.interpunct != null) holder.interpunct.setVisibility(View.VISIBLE);
+            if (holder.interpunct != null)             holder.interpunct.setVisibility(View.VISIBLE);
         }
 
-        if (showThumbnails && item.isDir()) {
+        bindThumbnails(holder, item, position);
+
+        if (holder.fileModTime != null) {
+            RemoteItem itemRemote = item.getRemote();
+            if (!itemRemote.isDirectoryModifiedTimeSupported() && item.isDir()) {
+                holder.fileModTime.setVisibility(View.GONE);
+            } else {
+                holder.fileModTime.setVisibility(View.VISIBLE);
+                holder.fileModTime.setText(item.getHumanReadableModTime());
+            }
+        }
+        
+        holder.fileName.setText(item.getName());
+
+        if (isInSelectMode) {
+            if (selectedItems.contains(item)) {
+                holder.view.setBackgroundColor(getSelectionBackgroundColor());
+            } else {
+                holder.view.setBackgroundColor(Color.TRANSPARENT);
+            }
+        } else {
+            holder.view.setBackgroundColor(Color.TRANSPARENT);
+        }
+
+        if (isInMoveMode) {
+            if (item.isDir()) {
+                holder.view.setAlpha(1f);
+            } else {
+                holder.view.setAlpha(.5f);
+            }
+        } else if (holder.view.getAlpha() == .5f) {
+            holder.view.setAlpha(1f);
+        }
+
+        if ((isInSelectMode || isInMoveMode) && !optionsDisabled) {
+            holder.fileOptions.setVisibility(View.INVISIBLE);
+        } else if (optionsDisabled) {
+            holder.fileOptions.setVisibility(View.GONE);
+        } else {
+            holder.fileOptions.setVisibility(View.VISIBLE);
+            holder.fileOptions.setOnClickListener(v -> listener.onFileOptionsClicked(v, item));
+        }
+
+        if (wrapFileNames) {
+            holder.fileName.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+            holder.fileName.setSingleLine(true);
+        } else {
+            holder.fileName.setEllipsize(null);
+            holder.fileName.setSingleLine(false);
+        }
+
+        if (holder.folderPolicyPickCheckbox != null) {
+            if (multiFolderPickerDelegate != null && folderPolicyPickMode && item.isDir()) {
+                holder.folderPolicyPickCheckbox.setVisibility(View.VISIBLE);
+                holder.folderPolicyPickCheckbox.setChecked(
+                        multiFolderPickerDelegate.isPathSelected(item.getPath()));
+                holder.folderPolicyPickCheckbox.setOnClickListener(v -> {
+                    int pos = holder.getBindingAdapterPosition();
+                    if (pos == RecyclerView.NO_POSITION || multiFolderPickerDelegate == null) {
+                        return;
+                    }
+                    multiFolderPickerDelegate.onDirectorySelectionClicked(item, pos);
+                    boolean selectedNow = multiFolderPickerDelegate.isPathSelected(item.getPath());
+                    ((CheckBox) v).setChecked(selectedNow);
+                });
+            } else {
+                holder.folderPolicyPickCheckbox.setVisibility(View.GONE);
+                holder.folderPolicyPickCheckbox.setOnClickListener(null);
+            }
+        }
+
+        holder.view.setOnClickListener(view -> {
+            if (isInSelectMode) {
+                onLongClickAction(item, holder);
+            } else {
+                int pos = holder.getBindingAdapterPosition();
+                if (pos == RecyclerView.NO_POSITION) {
+                    return;
+                }
+                onClickAction(item, pos);
+            }
+        });
+
+        holder.view.setOnLongClickListener(view -> {
+            if (item.isDir() && multiFolderPickerDelegate != null) {
+                int pos = holder.getBindingAdapterPosition();
+                if (pos == RecyclerView.NO_POSITION) {
+                    return true;
+                }
+                if (!folderPolicyPickMode) {
+                    if (multiFolderPickerDelegate.onDirectoryLongPressToEnterPickMode(item, pos)) {
+                        return true;
+                    }
+                } else {
+                    multiFolderPickerDelegate.onDirectorySelectionClicked(item, pos);
+                    notifyItemChanged(pos);
+                    return true;
+                }
+            }
+            if (!isInMoveMode && canSelect) {
+                onLongClickAction(item, holder);
+            }
+            return true;
+        });
+
+        if (holder.icons != null) {
+            holder.icons.setOnClickListener(v -> {
+                if (multiFolderPickerDelegate != null && item.isDir()) {
+                    return;
+                }
+                if (!isInMoveMode && canSelect) {
+                    onLongClickAction(item, holder);
+                }
+            });
+        }
+    }
+
+    /**
+     * Binds or refreshes thumbnail imagery for one row. Used from full bind and from
+     * {@link #THUMBNAIL_PAYLOAD} partial updates when the thumbnail server becomes ready.
+     */
+    private void bindThumbnails(@NonNull ViewHolder holder, @NonNull FileItem item, int position) {
+        if (!showThumbnails || context == null) {
+            return;
+        }
+        cancelActiveRetryListener(holder);
+        Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+
+        String startupBranch = item.isDir() ? "folderIcon" : "plainFileIcon";
+        boolean startupPolicyAllowed = false;
+
+        if (item.isDir()) {
             if (isNetworkFolderThumbnailCandidate(item) && serverReady) {
                 startupBranch = "folderThumb";
                 startupPolicyAllowed = true;
@@ -277,7 +426,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 holder.fileIcon.setVisibility(View.GONE);
                 holder.dirIcon.setVisibility(View.VISIBLE);
             }
-        } else if (showThumbnails && !item.isDir()) {
+        } else {
             boolean localLoad = item.getRemote().getType() == RemoteItem.SAFW;
             String mimeType = item.getMimeType();
             if (mimeType == null) {
@@ -410,120 +559,6 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             }
         }
         maybeLogStartupBind(item, holder, position, startupBranch, startupPolicyAllowed);
-
-        if (holder.fileModTime != null) {
-            RemoteItem itemRemote = item.getRemote();
-            if (!itemRemote.isDirectoryModifiedTimeSupported() && item.isDir()) {
-                holder.fileModTime.setVisibility(View.GONE);
-            } else {
-                holder.fileModTime.setVisibility(View.VISIBLE);
-                holder.fileModTime.setText(item.getHumanReadableModTime());
-            }
-        }
-        
-        holder.fileName.setText(item.getName());
-
-        if (isInSelectMode) {
-            if (selectedItems.contains(item)) {
-                holder.view.setBackgroundColor(getSelectionBackgroundColor());
-            } else {
-                holder.view.setBackgroundColor(Color.TRANSPARENT);
-            }
-        } else {
-            holder.view.setBackgroundColor(Color.TRANSPARENT);
-        }
-
-        if (isInMoveMode) {
-            if (item.isDir()) {
-                holder.view.setAlpha(1f);
-            } else {
-                holder.view.setAlpha(.5f);
-            }
-        } else if (holder.view.getAlpha() == .5f) {
-            holder.view.setAlpha(1f);
-        }
-
-        if ((isInSelectMode || isInMoveMode) && !optionsDisabled) {
-            holder.fileOptions.setVisibility(View.INVISIBLE);
-        } else if (optionsDisabled) {
-            holder.fileOptions.setVisibility(View.GONE);
-        } else {
-            holder.fileOptions.setVisibility(View.VISIBLE);
-            holder.fileOptions.setOnClickListener(v -> listener.onFileOptionsClicked(v, item));
-        }
-
-        if (wrapFileNames) {
-            holder.fileName.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-            holder.fileName.setSingleLine(true);
-        } else {
-            holder.fileName.setEllipsize(null);
-            holder.fileName.setSingleLine(false);
-        }
-
-        if (holder.folderPolicyPickCheckbox != null) {
-            if (multiFolderPickerDelegate != null && folderPolicyPickMode && item.isDir()) {
-                holder.folderPolicyPickCheckbox.setVisibility(View.VISIBLE);
-                holder.folderPolicyPickCheckbox.setChecked(
-                        multiFolderPickerDelegate.isPathSelected(item.getPath()));
-                holder.folderPolicyPickCheckbox.setOnClickListener(v -> {
-                    int pos = holder.getBindingAdapterPosition();
-                    if (pos == RecyclerView.NO_POSITION || multiFolderPickerDelegate == null) {
-                        return;
-                    }
-                    multiFolderPickerDelegate.onDirectorySelectionClicked(item, pos);
-                    boolean selectedNow = multiFolderPickerDelegate.isPathSelected(item.getPath());
-                    ((CheckBox) v).setChecked(selectedNow);
-                });
-            } else {
-                holder.folderPolicyPickCheckbox.setVisibility(View.GONE);
-                holder.folderPolicyPickCheckbox.setOnClickListener(null);
-            }
-        }
-
-        holder.view.setOnClickListener(view -> {
-            if (isInSelectMode) {
-                onLongClickAction(item, holder);
-            } else {
-                int pos = holder.getBindingAdapterPosition();
-                if (pos == RecyclerView.NO_POSITION) {
-                    return;
-                }
-                onClickAction(item, pos);
-            }
-        });
-
-        holder.view.setOnLongClickListener(view -> {
-            if (item.isDir() && multiFolderPickerDelegate != null) {
-                int pos = holder.getBindingAdapterPosition();
-                if (pos == RecyclerView.NO_POSITION) {
-                    return true;
-                }
-                if (!folderPolicyPickMode) {
-                    if (multiFolderPickerDelegate.onDirectoryLongPressToEnterPickMode(item, pos)) {
-                        return true;
-                    }
-                } else {
-                    multiFolderPickerDelegate.onDirectorySelectionClicked(item, pos);
-                    notifyItemChanged(pos);
-                    return true;
-                }
-            }
-            if (!isInMoveMode && canSelect) {
-                onLongClickAction(item, holder);
-            }
-            return true;
-        });
-
-        if (holder.icons != null) {
-            holder.icons.setOnClickListener(v -> {
-                if (multiFolderPickerDelegate != null && item.isDir()) {
-                    return;
-                }
-                if (!isInMoveMode && canSelect) {
-                    onLongClickAction(item, holder);
-                }
-            });
-        }
     }
 
     @Override
@@ -853,6 +888,91 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
     public void setThumbnailServerReady(boolean ready) {
         this.serverReady = ready;
+    }
+
+    /**
+     * Refreshes thumbnails for currently visible rows without a full {@code notifyDataSetChanged()},
+     * so list scroll position is preserved when the thumbnail server restarts.
+     */
+    public void notifyThumbnailRefreshForVisibleRange() {
+        RecyclerView rv = attachedRecyclerView;
+        if (rv == null || !showThumbnails || files == null || files.isEmpty()) {
+            return;
+        }
+        RecyclerView.LayoutManager layoutManager = rv.getLayoutManager();
+        if (!(layoutManager instanceof LinearLayoutManager)) {
+            return;
+        }
+        LinearLayoutManager linearLayoutManager = (LinearLayoutManager) layoutManager;
+        int first = linearLayoutManager.findFirstVisibleItemPosition();
+        int last = linearLayoutManager.findLastVisibleItemPosition();
+        if (first == RecyclerView.NO_POSITION || last == RecyclerView.NO_POSITION) {
+            return;
+        }
+        int count = last - first + 1;
+        if (count > 0) {
+            notifyItemRangeChanged(first, count, THUMBNAIL_PAYLOAD);
+        }
+    }
+
+    /**
+     * Whether the file 3-dot menu should offer {@code Reload thumbnail} for this row.
+     */
+    public boolean isReloadThumbnailMenuVisible(@NonNull FileItem item) {
+        if (!showThumbnails || item.isDir()) {
+            return false;
+        }
+        String mimeType = item.getMimeType();
+        if (mimeType == null) {
+            return false;
+        }
+        boolean localLoad = item.getRemote().getType() == RemoteItem.SAFW;
+        if (mimeType.startsWith("video/")) {
+            if (localLoad) {
+                return false;
+            }
+            return isHttpThumbnailPolicyAllowedForNetworkThumbnail(item);
+        }
+        if (mimeType.startsWith("image/")) {
+            if (item.getSize() > sizeLimit) {
+                return false;
+            }
+            if (localLoad) {
+                return true;
+            }
+            return isHttpThumbnailPolicyAllowedForNetworkThumbnail(item);
+        }
+        return false;
+    }
+
+    public int getFilePosition(@NonNull FileItem item) {
+        if (files == null) {
+            return RecyclerView.NO_POSITION;
+        }
+        String path = item.getPath();
+        for (int i = 0; i < files.size(); i++) {
+            if (path.equals(files.get(i).getPath())) {
+                return i;
+            }
+        }
+        return RecyclerView.NO_POSITION;
+    }
+
+    /**
+     * Cancels in-flight thumbnail work for one row and requests a partial thumbnail rebind.
+     */
+    public void reloadThumbnailAt(int position) {
+        if (files == null || position < 0 || position >= files.size()) {
+            return;
+        }
+        RecyclerView rv = attachedRecyclerView;
+        if (rv != null) {
+            RecyclerView.ViewHolder holder = rv.findViewHolderForAdapterPosition(position);
+            if (holder instanceof ViewHolder) {
+                cancelActiveRetryListener((ViewHolder) holder);
+            }
+        }
+        notifyItemChanged(position, THUMBNAIL_PAYLOAD);
     }
 
     /**

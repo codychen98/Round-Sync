@@ -174,6 +174,9 @@
     <string name="pin_to_drawer">Im Menü anheften</string>
     <string name="unpin_from_drawer">Vom Menü lösen</string>
     <string name="show_thumbnails">Bildervorschau anzeigen</string>
+    <string name="reload_thumbnail">Vorschaubild neu laden</string>
+    <string name="reload_thumbnail_success">Vorschaubild wird neu geladen</string>
+    <string name="reload_thumbnail_failed">Vorschaubild konnte nicht neu geladen werden</string>
     <string name="pref_thumbnails_size_title">Max. Dateigröße für Bildvorschau</string>
     <string name="pref_thumbnails_dlg_title">Größenlimit (MB)</string>
     <string name="pref_thumbnails_size_summary">%1$.1f MB</string>
@@ -205,6 +208,7 @@
     <string name="sync">Synchronisierung…</string>
     <string name="select_sync_direction">Sync-Richtung auswählen</string>
     <string name="nav_drawer_pinned_header">Angeheftet</string>
+    <string name="nav_pinned_more">Mehr…</string>
     <string name="nav_header_options_header">Optionen</string>
     <string name="worker_download_cancelled">Download abgebrochen</string>
     <string name="wifi_connections_isnt_available">WLAN-Verbindung nicht verfügbar</string>
@@ -292,6 +296,7 @@
     <string name="tasks">Aufgaben</string>
     <string name="edit">Bearbeiten</string>
     <string name="start_task">Aufgabe starten</string>
+    <string name="cancel_task">Aufgabe abbrechen</string>
     <string name="copy_taskid">Aufgabenkennung kopieren</string>
     <string name="task_copied_id_to_clipboard">Aufgabenkennung "%s" in Zwischenspeicher kopiert!</string>
     <string name="importer_unknown_error">Unbekannter Fehler beim Importieren!</string>
@@ -469,4 +474,8 @@
     <string name="breadcrumb_home_description">Remote-Startpunkt</string>
     <string name="breadcrumb_next_description">Nächster Breadcrumb-Pfeil-Indikator</string>
     <string name="remote_creation_next_step">Nächster Schritt</string>
+    <string name="importSettingsDescription">Ersetze deine aktuelle Konfiguration durch ein Backup (Remotes, Aufgaben, Auslöser, Einstellungen und zwischengespeicherte Vorschaubilder, falls vorhanden)</string>
+    <string name="exportSettingsDescription">Sichere Remotes, Aufgaben, Auslöser, Einstellungen und zwischengespeicherte Vorschaubilder</string>
+    <string name="export_config_success">Konfiguration exportiert</string>
+    <string name="export_config_success_including_cache">Konfiguration exportiert (inkl. Vorschaubilder und Cache)</string>
 </resources>

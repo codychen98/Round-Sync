@@ -275,7 +275,10 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
             }
         }
         long durationUs = durationMs > 0 ? durationMs * 1000L : 0L;
-        long[] timestamps = buildThumbnailProbeTimesUs(durationMs, durationUs);
+        int reloadEpoch = ThumbnailReloadEpoch.getEpochForVideoUrl(url);
+        long[] timestamps = reloadEpoch > 0
+                ? buildReloadThumbnailProbeTimesUs(durationMs, durationUs, reloadEpoch)
+                : buildThumbnailProbeTimesUs(durationMs, durationUs);
         BestFrameSoFar best = new BestFrameSoFar();
 
         for (long ts : timestamps) {
@@ -355,6 +358,37 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
             ordered.add(clampTimeUs(durationUs - 6_000_000L, durationUs));
         }
         ordered.add(0L);
+        return longSetToArray(ordered);
+    }
+
+    /**
+     * Reload-specific probes: rotate through 0%, 10%, 25%, and 50% of duration based on reload epoch.
+     */
+    private static long[] buildReloadThumbnailProbeTimesUs(
+            long durationMs,
+            long durationUs,
+            int reloadEpoch) {
+        long[] fractionsUs;
+        if (durationMs > 0) {
+            fractionsUs = new long[] {
+                    0L,
+                    durationUs / 10,
+                    durationUs / 4,
+                    durationUs / 2,
+            };
+        } else {
+            fractionsUs = new long[] {
+                    0L,
+                    1_000_000L,
+                    2_500_000L,
+                    5_000_000L,
+            };
+        }
+        int start = reloadEpoch % fractionsUs.length;
+        LinkedHashSet<Long> ordered = new LinkedHashSet<>();
+        for (int i = 0; i < fractionsUs.length; i++) {
+            ordered.add(clampTimeUs(fractionsUs[(start + i) % fractionsUs.length], durationUs));
+        }
         return longSetToArray(ordered);
     }
 

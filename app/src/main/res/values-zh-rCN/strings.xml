@@ -188,6 +188,9 @@
     <string name="pin_to_drawer">收藏</string>
     <string name="unpin_from_drawer">取消收藏</string>
     <string name="show_thumbnails">显示缩略图</string>
+    <string name="reload_thumbnail">重新加载缩略图</string>
+    <string name="reload_thumbnail_success">正在重新加载缩略图</string>
+    <string name="reload_thumbnail_failed">无法重新加载缩略图</string>
     <string name="pref_thumbnails_size_title">限制加载文件大小</string>
     <string name="pref_thumbnails_dlg_title">大小限制 (MB)</string>
     <string name="pref_thumbnails_size_summary">%1$.1f MB</string>
@@ -219,6 +222,7 @@
     <string name="sync">同步</string>
     <string name="select_sync_direction">选择同步方向</string>
     <string name="nav_drawer_pinned_header">收藏</string>
+    <string name="nav_pinned_more">更多…</string>
     <string name="nav_header_options_header">选项</string>
     <string name="worker_download_cancelled">下载已取消</string>
     <string name="wifi_connections_isnt_available">Wi-Fi 连接不可用</string>
@@ -298,6 +302,7 @@
     <string name="tasks">任务</string>
     <string name="edit">编辑</string>
     <string name="start_task">启动任务</string>
+    <string name="cancel_task">取消任务</string>
     <string name="copy_taskid">复制任务ID</string>
     <string name="task_copied_id_to_clipboard">已将ID%s复制到剪贴板！</string>
     <string name="importer_unknown_error">导入任务时出现未知错误！</string>
@@ -483,8 +488,10 @@
     <string name="theminSettingsDescription">更改外观</string>
     <string name="notificationSettingsDescription">更精确地控制您何时收到通知</string>
     <string name="loggingSettingsDescription">当此应用行为异常时收集更多信息</string>
-    <string name="importSettingsDescription">用备份替换您当前的配置</string>
-    <string name="exportSettingsDescription">备份您的远端、任务和触发器</string>
+    <string name="importSettingsDescription">用备份替换您当前的配置（包括远端、任务、触发器、偏好设置，以及备份中的缓存缩略图）</string>
+    <string name="exportSettingsDescription">备份远端、任务、触发器、偏好设置和缓存的缩略图</string>
+    <string name="export_config_success">配置已导出</string>
+    <string name="export_config_success_including_cache">配置已导出（包含缩略图和缓存）</string>
     <string name="import_settings_icon_content_description">导入图标</string>
     <string name="export_settings_icon_content_description">导出图标</string>
     <string name="intro_battery_optimizations_title">电池优化</string>

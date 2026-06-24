@@ -93,6 +93,7 @@ import ca.pkay.rcloneexplorer.Items.SyncDirectionObject;
 import ca.pkay.rcloneexplorer.Items.Task;
 import ca.pkay.rcloneexplorer.R;
 import ca.pkay.rcloneexplorer.Rclone;
+import ca.pkay.rcloneexplorer.Glide.ThumbnailReloadHelper;
 import ca.pkay.rcloneexplorer.RecyclerViewAdapters.FileExplorerRecyclerViewAdapter;
 import ca.pkay.rcloneexplorer.Services.StreamingService;
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
@@ -109,6 +110,7 @@ import ca.pkay.rcloneexplorer.util.PathLockBiometricHelper;
 import ca.pkay.rcloneexplorer.util.RemotePathLock;
 import ca.pkay.rcloneexplorer.util.RemotePathUnlockSession;
 import ca.pkay.rcloneexplorer.util.LargeParcel;
+import ca.pkay.rcloneexplorer.util.ScrollAnchor;
 import ca.pkay.rcloneexplorer.workmanager.EphemeralTaskManager;
 import ca.pkay.rcloneexplorer.workmanager.SyncManager;
 import de.felixnuesse.ui.BreadcrumbView;
@@ -155,7 +157,10 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     private final String SAVED_SYNC_REMOTE_PATH = "ca.pkay.rcexplorer.FILE_EXPLORER_FRAG_SYNC_REMOTE_PATH";
     private String originalToolbarTitle;
     private Stack<String> pathStack;
-    private Map<String, Integer> directoryPosition;
+    private Map<String, ScrollAnchor> directoryPosition;
+    /** Path to restore scroll for once after returning from media playback. */
+    @Nullable
+    private String pendingScrollRestorePath;
     private DirectoryObject directoryObject;
     private List<FileItem> moveList;
     private String moveStartPath;
@@ -460,6 +465,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         if (recyclerViewAdapter != null) {
             recyclerViewAdapter.setThumbnailHostResumed(true);
         }
+        applyPendingScrollRestore();
     }
 
     @Override
@@ -862,7 +868,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                 FLog.d(TAG, "Thumbnail server ready — refreshing visible items");
                 if (recyclerViewAdapter != null) {
                     recyclerViewAdapter.setThumbnailServerReady(true);
-                    recyclerViewAdapter.notifyDataSetChanged();
+                    recyclerViewAdapter.notifyThumbnailRefreshForVisibleRange();
                 } else if (context != null) {
                     SyncLog.error(context, "ThumbnailServer",
                         "READY received but recyclerViewAdapter is null — thumbnails cannot load");
@@ -1565,17 +1571,11 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             if (!directoryObject.isContentValid(path)) {
                 swipeRefreshLayout.setRefreshing(true);
                 renderCachedDirectory(path);
-                if (directoryPosition.containsKey(directoryObject.getCurrentPath())) {
-                    int position = directoryPosition.get(directoryObject.getCurrentPath());
-                    recyclerViewLinearLayoutManager.scrollToPositionWithOffset(position, 10);
-                }
+                restoreScrollForCurrentPath();
                 scheduleFetchDirectoryContent(true);
             } else if (directoryObject.isPathInCache(path)) {
                 renderCachedDirectory(path);
-                if (directoryPosition.containsKey(directoryObject.getCurrentPath())) {
-                    int position = directoryPosition.get(directoryObject.getCurrentPath());
-                    recyclerViewLinearLayoutManager.scrollToPositionWithOffset(position, 10);
-                }
+                restoreScrollForCurrentPath();
             } else {
                 directoryObject.setPath(path);
                 scheduleFetchDirectoryContent(false);
@@ -1590,6 +1590,10 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     public void onFileClicked(FileItem fileItem) {
         runAfterPathAuthForExplorerPath(fileItem.getPath(), () -> {
             String type = fileItem.getMimeType();
+            if (type != null
+                    && (type.startsWith("video/") || type.startsWith("audio/") || type.startsWith("image/"))) {
+                saveScrollAnchorForMediaReturn();
+            }
             if (type != null && type.startsWith("video/")) {
                 new VideoStreamTask().execute(fileItem);
             } else if (type != null && type.startsWith("audio/")) {
@@ -1605,7 +1609,9 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     @Override
     public void onDirectoryClicked(FileItem fileItem, int position) {
         runAfterPathAuthForExplorerPath(fileItem.getPath(), () -> {
-            directoryPosition.put(directoryObject.getCurrentPath(), position);
+            directoryPosition.put(
+                    directoryObject.getCurrentPath(),
+                    new ScrollAnchor(position, ScrollAnchor.DIRECTORY_NAV_OFFSET_PX));
             breadcrumbView.addCrumb(fileItem.getName(), fileItem.getPath());
             swipeRefreshLayout.setRefreshing(true);
             pathStack.push(directoryObject.getCurrentPath());
@@ -1714,6 +1720,27 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                 case R.id.action_open_as:
                     showOpenAsDialog(fileItem);
                     break;
+                case R.id.action_reload_thumbnail: {
+                    int position = recyclerViewAdapter.getFilePosition(fileItem);
+                    if (position == RecyclerView.NO_POSITION) {
+                        Toasty.error(context, getString(R.string.reload_thumbnail_failed),
+                                Toast.LENGTH_SHORT, true).show();
+                        break;
+                    }
+                    ThumbnailReloadHelper.reload(context, fileItem, recyclerViewAdapter, position, success -> {
+                        if (!isAdded()) {
+                            return;
+                        }
+                        if (success) {
+                            Toasty.info(context, getString(R.string.reload_thumbnail_success),
+                                    Toast.LENGTH_SHORT, true).show();
+                        } else {
+                            Toasty.error(context, getString(R.string.reload_thumbnail_failed),
+                                    Toast.LENGTH_SHORT, true).show();
+                        }
+                    });
+                    break;
+                }
                 case R.id.action_serve:
                     String[] serveOptions = getResources().getStringArray(R.array.serve_options);
                     AlertDialog.Builder builder = new AlertDialog.Builder(context);
@@ -1781,12 +1808,16 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         popupMenu.show();
         if (fileItem.isDir()) {
             popupMenu.getMenu().findItem(R.id.action_open_as).setVisible(false);
+            popupMenu.getMenu().findItem(R.id.action_reload_thumbnail).setVisible(false);
             boolean alreadyPinned = PinnedItemStore.isPinned(context, remote.getName(), fileItem.getPath());
             popupMenu.getMenu().findItem(R.id.action_pin_to_drawer)
                     .setTitle(alreadyPinned ? R.string.unpin_from_drawer : R.string.pin_to_drawer);
         } else {
             popupMenu.getMenu().findItem(R.id.action_sync).setVisible(false);
             popupMenu.getMenu().findItem(R.id.action_pin_to_drawer).setVisible(false);
+            boolean showReload = recyclerViewAdapter != null
+                    && recyclerViewAdapter.isReloadThumbnailMenuVisible(fileItem);
+            popupMenu.getMenu().findItem(R.id.action_reload_thumbnail).setVisible(showReload);
         }
         if (!remote.hasSyncSupport()) {
             // TODO: remove once destination sync is added.
@@ -1830,22 +1861,61 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         if (!directoryObject.isContentValid(path)) {
             swipeRefreshLayout.setRefreshing(true);
             renderCachedDirectory(path);
-            if (directoryPosition.containsKey(directoryObject.getCurrentPath())) {
-                int position = directoryPosition.get(directoryObject.getCurrentPath());
-                recyclerViewLinearLayoutManager.scrollToPositionWithOffset(position, 10);
-            }
+            restoreScrollForCurrentPath();
             scheduleFetchDirectoryContent(true);
         } else if (directoryObject.isPathInCache(path)) {
             renderCachedDirectory(path);
-            if (directoryPosition.containsKey(directoryObject.getCurrentPath())) {
-                int position = directoryPosition.get(directoryObject.getCurrentPath());
-                recyclerViewLinearLayoutManager.scrollToPositionWithOffset(position, 10);
-            }
+            restoreScrollForCurrentPath();
         } else {
             scheduleFetchDirectoryContent(false);
         }
         isGridMode = loadViewModeForCurrentFolder();
         applyViewMode(false);
+    }
+
+    private void saveScrollAnchorForMediaReturn() {
+        if (recyclerViewLinearLayoutManager == null) {
+            return;
+        }
+        String path = directoryObject.getCurrentPath();
+        directoryPosition.put(path, ScrollAnchor.captureFrom(recyclerViewLinearLayoutManager));
+        pendingScrollRestorePath = path;
+    }
+
+    private void applyPendingScrollRestore() {
+        if (pendingScrollRestorePath == null || recyclerView == null) {
+            return;
+        }
+        if (!pendingScrollRestorePath.equals(directoryObject.getCurrentPath())) {
+            pendingScrollRestorePath = null;
+            return;
+        }
+        ScrollAnchor anchor = directoryPosition.get(pendingScrollRestorePath);
+        if (anchor == null) {
+            pendingScrollRestorePath = null;
+            return;
+        }
+        final String pathToRestore = pendingScrollRestorePath;
+        pendingScrollRestorePath = null;
+        recyclerView.post(() -> {
+            if (recyclerViewLinearLayoutManager == null) {
+                return;
+            }
+            if (!pathToRestore.equals(directoryObject.getCurrentPath())) {
+                return;
+            }
+            recyclerViewLinearLayoutManager.scrollToPositionWithOffset(anchor.position, anchor.offset);
+        });
+    }
+
+    private void restoreScrollForCurrentPath() {
+        if (recyclerViewLinearLayoutManager == null) {
+            return;
+        }
+        ScrollAnchor anchor = directoryPosition.get(directoryObject.getCurrentPath());
+        if (anchor != null) {
+            recyclerViewLinearLayoutManager.scrollToPositionWithOffset(anchor.position, anchor.offset);
+        }
     }
 
     private void showSyncDialog(String path) {

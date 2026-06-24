@@ -51,6 +51,7 @@ import ca.pkay.rcloneexplorer.Items.FilterEntry;
 import ca.pkay.rcloneexplorer.Items.RemoteItem;
 import ca.pkay.rcloneexplorer.Items.SyncDirectionObject;
 import ca.pkay.rcloneexplorer.rclone.Provider;
+import ca.pkay.rcloneexplorer.util.CacheArchiveExporter;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.SyncLog;
 import es.dmoral.toasty.Toasty;
@@ -1456,6 +1457,7 @@ public class Rclone {
             zos.putNextEntry(zipEntry);
             zos.write(out.toString().getBytes());
             zos.closeEntry();
+            CacheArchiveExporter.appendCacheEntries(context, zos);
         }
         catch (Exception e) {
             // unable to write zip

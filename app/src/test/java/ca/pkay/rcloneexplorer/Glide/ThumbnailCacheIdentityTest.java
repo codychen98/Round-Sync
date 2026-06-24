@@ -64,4 +64,15 @@ public class ThumbnailCacheIdentityTest {
     public void buildCacheProbeModel_skipsUnsupportedMimeTypes() {
         assertNull(ThumbnailCacheIdentity.buildCacheProbeModel("drive", "/Docs/readme.txt", "text/plain"));
     }
+
+    @Test
+    public void videoReloadDataCacheKey_usesReloadNamespace() {
+        String key = ThumbnailCacheIdentity.videoReloadDataCacheKey("drive", "/Videos/clip.mp4", 2);
+        assertEquals(
+                ReadableCacheKey.fromStablePath("/drive/Videos/clip.mp4|reload2", "thumbVideoReload"),
+                key);
+        assertNotEquals(
+                ThumbnailCacheIdentity.videoDataCacheKey("drive", "/Videos/clip.mp4"),
+                key);
+    }
 }

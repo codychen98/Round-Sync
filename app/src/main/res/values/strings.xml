@@ -60,6 +60,8 @@
     <string name="background_media_prep_notification_title">Background media prep</string>
     <string name="background_media_prep_notification_channel_name">Background media preparation</string>
     <string name="notification_media_prep_folder_line">Folder: %1$s</string>
+    <string name="notification_media_prep_policy_folder_progress">Folder %1$d of %2$d: %3$s</string>
+    <string name="notification_media_prep_policy_thumbnail_progress">Thumbnail %1$d / %2$d</string>
     <string name="notification_media_prep_thumbnail_line">Thumbnail: %1$d / %2$d</string>
     <string name="notification_media_prep_cache_line">Cache: %1$d / %2$d</string>
     <string name="thumbnail_server_notification_channel_description">Background thumbnail and media preparation (can be hidden)</string>
@@ -232,6 +234,9 @@
     <string name="shared_preferences_drawer_pinned_remotes" translatable="false">shared_preferences_drawer_pinned_remotes</string>
     <string name="shared_preferences_allow_sync_trigger_while_idle" translatable="false">shared_preferences_allow_sync_trigger_while_idle</string>
     <string name="show_thumbnails">Show thumbnails</string>
+    <string name="reload_thumbnail">Reload thumbnail</string>
+    <string name="reload_thumbnail_success">Reloading thumbnail</string>
+    <string name="reload_thumbnail_failed">Could not reload thumbnail</string>
     <string name="pref_thumbnails_size_title">Maximum file size for thumbnails</string>
     <string name="pref_thumbnails_dlg_title">Size limit (MB)</string>
     <string name="pref_thumbnails_size_summary">%1$.1f MB</string>
@@ -266,6 +271,7 @@
     <string name="select_sync_direction">Select sync direction</string>
     <string name="nav_drawer_pinned_header">Pinned</string>
     <string name="edit_pins">Edit pins</string>
+    <string name="nav_pinned_more">More…</string>
     <string name="nav_header_options_header">Options</string>
     <string name="worker_download_cancelled">Download cancelled</string>
     <string name="wifi_connections_isnt_available">Wi-Fi connection isn\'t available</string>
@@ -355,6 +361,7 @@
     <string name="tasks">Tasks</string>
     <string name="edit">Edit</string>
     <string name="start_task">Start Task</string>
+    <string name="cancel_task">Cancel Task</string>
     <string name="copy_taskid">Copy TaskID</string>
     <string name="task_copied_id_to_clipboard">Copied ID "%s" to clipboard!</string>
     <string name="importer_unknown_error">Unknown error importing task!</string>
@@ -604,8 +611,10 @@
     <string name="theminSettingsDescription">Change the appearance</string>
     <string name="notificationSettingsDescription">Control more precisely on when you get notified</string>
     <string name="loggingSettingsDescription">Gather more insight when this app misbehaves</string>
-    <string name="importSettingsDescription">Replace your current config with an backup</string>
-    <string name="exportSettingsDescription">Backup your remotes, tasks and triggers</string>
+    <string name="importSettingsDescription">Replace your current config with a backup (remotes, tasks, triggers, preferences, and cached thumbnails when present)</string>
+    <string name="exportSettingsDescription">Back up remotes, tasks, triggers, preferences, and cached thumbnails</string>
+    <string name="export_config_success">Configuration exported</string>
+    <string name="export_config_success_including_cache">Configuration exported (including thumbnails and cache)</string>
     <string name="import_settings_icon_content_description">Import Icon</string>
     <string name="export_settings_icon_content_description">Export Icon</string>
     <string name="intro_battery_optimizations_title">Battery Optimizations</string>

@@ -21,6 +21,7 @@ public final class ThumbnailCacheIdentity {
 
     private static final String FILE_NAMESPACE = "thumbFile";
     private static final String VIDEO_NAMESPACE = "thumbVideo";
+    private static final String VIDEO_RELOAD_NAMESPACE = "thumbVideoReload";
     private static final String VIDEO_VERSION_TOKEN = "|thumbV2";
     private static final String CACHE_PROBE_URL_PREFIX = "http://127.0.0.1/cacheProbe";
     private static final long CACHE_PROBE_TIMEOUT_MS = 1500L;
@@ -48,6 +49,21 @@ public final class ThumbnailCacheIdentity {
         return ReadableCacheKey.fromStablePath(
                 stableServePath(remoteName, remoteFilePath) + VIDEO_VERSION_TOKEN,
                 VIDEO_NAMESPACE);
+    }
+
+    @NonNull
+    public static String videoReloadDataCacheKey(
+            @NonNull String remoteName,
+            @NonNull String remoteFilePath,
+            int reloadEpoch) {
+        return ReadableCacheKey.fromStablePath(
+                stableServePath(remoteName, remoteFilePath) + "|reload" + reloadEpoch,
+                VIDEO_RELOAD_NAMESPACE);
+    }
+
+    @NonNull
+    public static String videoReloadDataCacheKey(@NonNull FileItem item, int reloadEpoch) {
+        return videoReloadDataCacheKey(item.getRemote().getName(), item.getPath(), reloadEpoch);
     }
 
     public static boolean isPrefetchThumbnailCached(@NonNull Context context, @NonNull FileItem item) {

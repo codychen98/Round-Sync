@@ -28,10 +28,19 @@ public class VideoThumbnailLoader implements ModelLoader<VideoThumbnailUrl, Inpu
     public LoadData<InputStream> buildLoadData(@NonNull VideoThumbnailUrl model,
                                                 int width, int height,
                                                 @NonNull Options options) {
+        int reloadEpoch = ThumbnailReloadEpoch.get(model.getStablePath());
+        String cacheKey;
+        if (reloadEpoch > 0) {
+            cacheKey = ReadableCacheKey.fromStablePath(
+                    model.getStablePath() + "|reload" + reloadEpoch,
+                    "thumbVideoReload");
+        } else {
+            cacheKey = ReadableCacheKey.fromStablePath(
+                    model.getStablePath() + THUMB_CACHE_VERSION_TOKEN,
+                    "thumbVideo");
+        }
         return new LoadData<>(
-                new ObjectKey(ReadableCacheKey.fromStablePath(
-                        model.getStablePath() + THUMB_CACHE_VERSION_TOKEN,
-                        "thumbVideo")),
+                new ObjectKey(cacheKey),
                 new VideoThumbnailFetcher(model.getUrl(), appContext)
         );
     }

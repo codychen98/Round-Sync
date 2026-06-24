@@ -3,7 +3,9 @@ package ca.pkay.rcloneexplorer.workmanager
 import android.content.Context
 import android.util.Log
 import androidx.work.Data
+import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkRequest
 import ca.pkay.rcloneexplorer.Items.Task
@@ -12,7 +14,12 @@ import java.util.Random
 
 class SyncManager(private var mContext: Context) {
 
+    companion object {
+        fun uniqueWorkNameForTask(taskId: Long): String = "sync_task_$taskId"
 
+        fun isActiveWorkState(state: WorkInfo.State): Boolean =
+            state == WorkInfo.State.RUNNING || state == WorkInfo.State.ENQUEUED
+    }
     fun queue(trigger: Trigger) {
         queue(trigger.triggerTarget)
     }
@@ -29,7 +36,12 @@ class SyncManager(private var mContext: Context) {
 
         uploadWorkRequest.setInputData(data.build())
         uploadWorkRequest.addTag(taskID.toString())
-        work(uploadWorkRequest.build())
+        val request = uploadWorkRequest.build()
+        WorkManager.getInstance(mContext).enqueueUniqueWork(
+            uniqueWorkNameForTask(taskID),
+            ExistingWorkPolicy.REPLACE,
+            request,
+        )
     }
 
     fun queueEphemeral(task: Task) {
@@ -54,15 +66,28 @@ class SyncManager(private var mContext: Context) {
         WorkManager.getInstance(mContext)
             .cancelAllWork()
     }
-    fun cancel(tag: String) {
 
-        //Intent syncIntent = new Intent(context, SyncService.class);
-        //syncIntent.setAction(TASK_CANCEL_ACTION);
-        //syncIntent.putExtra(EXTRA_TASK_ID, intent.getLongExtra(EXTRA_TASK_ID, -1));
-        //context.startService(syncIntent);
-        Log.e("TAG", "CANCEL"+tag)
-        WorkManager
-            .getInstance(mContext)
-            .cancelAllWorkByTag(tag)
+    fun isTaskActive(taskId: Long): Boolean {
+        return try {
+            val infos = WorkManager.getInstance(mContext)
+                .getWorkInfosByTag(taskId.toString())
+                .get()
+            infos.any { isActiveWorkState(it.state) }
+        } catch (e: Exception) {
+            Log.w("SyncManager", "Failed to query work state for task $taskId", e)
+            false
+        }
+    }
+
+    fun cancel(taskId: Long) {
+        val wm = WorkManager.getInstance(mContext)
+        wm.cancelAllWorkByTag(taskId.toString())
+        wm.cancelUniqueWork(uniqueWorkNameForTask(taskId))
+    }
+
+    fun cancel(tag: String) {
+        tag.toLongOrNull()?.let { cancel(it) } ?: run {
+            WorkManager.getInstance(mContext).cancelAllWorkByTag(tag)
+        }
     }
 }

@@ -62,6 +62,7 @@ import ca.pkay.rcloneexplorer.Dialogs.Dialogs;
 import ca.pkay.rcloneexplorer.Dialogs.EditPinnedItemsDialogFragment;
 import ca.pkay.rcloneexplorer.Dialogs.InputDialog;
 import ca.pkay.rcloneexplorer.Dialogs.LoadingDialog;
+import ca.pkay.rcloneexplorer.Dialogs.PinnedItemsPickerDialogFragment;
 import ca.pkay.rcloneexplorer.Fragments.FileExplorerFragment;
 import ca.pkay.rcloneexplorer.Fragments.LogFragment;
 import ca.pkay.rcloneexplorer.Fragments.PermissionFragment;
@@ -78,11 +79,15 @@ import ca.pkay.rcloneexplorer.RuntimeConfiguration;
 import ca.pkay.rcloneexplorer.Services.StreamingService;
 import ca.pkay.rcloneexplorer.Services.TriggerService;
 import ca.pkay.rcloneexplorer.util.ActivityHelper;
+import ca.pkay.rcloneexplorer.util.CacheArchiveExporter;
+import ca.pkay.rcloneexplorer.util.CacheArchiveImporter;
+import ca.pkay.rcloneexplorer.util.DrawerPinnedUi;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.PermissionManager;
 import ca.pkay.rcloneexplorer.util.RemotePathUnlockSession;
 import ca.pkay.rcloneexplorer.util.SharedPreferencesUtil;
 import ca.pkay.rcloneexplorer.util.SyncLog;
+import ca.pkay.rcloneexplorer.workmanager.MediaFolderPolicyThumbnailPrefetchWorker;
 import de.felixnuesse.extract.updates.UpdateChecker;
 import es.dmoral.toasty.Toasty;
 import java9.util.stream.Stream;
@@ -231,6 +236,10 @@ public class MainActivity extends AppCompatActivity
         triggerService.queueTrigger();
 
         (new UpdateChecker(this)).schedule();
+
+        if (allPermissionsGranted && completedIntroOnce) {
+            MediaFolderPolicyThumbnailPrefetchWorker.enqueueOnAppStartIfNeeded(context, rclone);
+        }
     }
 
     @Override
@@ -301,7 +310,12 @@ public class MainActivity extends AppCompatActivity
             if (data != null) {
                 uri = data.getData();
                 try {
+                    boolean includingCache = CacheArchiveExporter.hasCacheEntriesToExport(context);
                     rclone.exportConfigFile(uri);
+                    int messageId = includingCache
+                            ? R.string.export_config_success_including_cache
+                            : R.string.export_config_success;
+                    Toasty.success(this, getString(messageId), Toast.LENGTH_SHORT, true).show();
                 } catch (IOException e) {
                     FLog.e(TAG, "Could not export config file to %s", e, uri);
                     Toasty.error(this, getString(R.string.error_exporting_config_file), Toast.LENGTH_SHORT, true).show();
@@ -371,6 +385,11 @@ public class MainActivity extends AppCompatActivity
         navigationView.setCheckedItem(id);
         if (id == R.id.nav_edit_pins) {
             showEditPinsDialog();
+            drawer.closeDrawer(GravityCompat.START);
+            return true;
+        }
+        if (id == R.id.nav_pinned_more) {
+            showPinnedItemsPickerDialog();
             drawer.closeDrawer(GravityCompat.START);
             return true;
         }
@@ -491,25 +510,23 @@ public class MainActivity extends AppCompatActivity
         }
 
         List<PinnedItem> pinnedItems = PinnedItemStore.load(context);
-        for (PinnedItem pinnedItem : pinnedItems) {
+        List<PinnedItem> visiblePins = DrawerPinnedUi.drawerVisiblePins(pinnedItems);
+        for (PinnedItem pinnedItem : visiblePins) {
             RemoteItem remoteItem = remoteByName.get(pinnedItem.getRemoteName());
             if (remoteItem == null) {
                 continue;
             }
-            String label;
-            if (pinnedItem.getPath().isEmpty()
-                    && pinnedItem.getDisplayLabel() == null
-                    && remoteItem.getDisplayName() != null
-                    && !remoteItem.getDisplayName().equals(pinnedItem.getRemoteName())) {
-                label = remoteItem.getDisplayName();
-            } else {
-                label = pinnedItem.getEffectiveLabel();
-            }
+            String label = DrawerPinnedUi.resolveDrawerLabel(pinnedItem, remoteItem);
             MenuItem menuItem = subMenu.add(R.id.nav_pinned, availableDrawerPinnedRemoteId, Menu.NONE,
                     label);
             drawerPinnedRemoteIds.put(availableDrawerPinnedRemoteId, pinnedItem);
             availableDrawerPinnedRemoteId++;
             menuItem.setIcon(remoteItem.getRemoteIcon());
+        }
+
+        if (DrawerPinnedUi.hasDrawerOverflow(pinnedItems)) {
+            subMenu.add(R.id.nav_pinned, R.id.nav_pinned_more, Menu.NONE, R.string.nav_pinned_more)
+                    .setIcon(R.drawable.ic_more_vert);
         }
 
         subMenu.add(R.id.nav_pinned, R.id.nav_edit_pins, Menu.NONE, R.string.edit_pins)
@@ -726,6 +743,12 @@ public class MainActivity extends AppCompatActivity
         dialog.show(getSupportFragmentManager(), "edit_pins");
     }
 
+    private void showPinnedItemsPickerDialog() {
+        PinnedItemsPickerDialogFragment dialog = PinnedItemsPickerDialogFragment.newInstance();
+        dialog.setOnPinnedItemSelectedListener(this::startPinnedItem);
+        dialog.show(getSupportFragmentManager(), "pinned_items_picker");
+    }
+
     private void startRemoteAtPath(RemoteItem remote, String startPath, boolean addToBackStack) {
         fragment = FileExplorerFragment.newInstance(remote, startPath);
         if (fragment instanceof FileExplorerFragment) {
@@ -826,6 +849,8 @@ public class MainActivity extends AppCompatActivity
                 } catch (Exception e) {
                     // rcx.prefs missing or invalid - not fatal, old backups may not have it
                 }
+
+                CacheArchiveImporter.extractFromZip(context, uris[0]);
                 return true;
             }
 
@@ -888,6 +913,8 @@ public class MainActivity extends AppCompatActivity
                 pinRemotesToDrawer();
                 startRemotesFragment();
             }
+
+            MediaFolderPolicyThumbnailPrefetchWorker.enqueueAfterImport(context);
         }
     }
 

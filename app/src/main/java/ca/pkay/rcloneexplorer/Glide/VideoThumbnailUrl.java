@@ -19,7 +19,12 @@ public class VideoThumbnailUrl implements Key {
 
     public VideoThumbnailUrl(@NonNull String url) {
         this.url = url;
-        this.stablePath = extractStablePath(url);
+        this.stablePath = stablePathFromUrl(url);
+    }
+
+    @NonNull
+    public static String stablePathFromUrl(@NonNull String url) {
+        return extractStablePath(url);
     }
 
     private static String extractStablePath(String url) {

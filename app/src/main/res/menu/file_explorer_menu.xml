@@ -13,6 +13,11 @@
         app:showAsAction="never" />
 
     <item
+        android:id="@+id/action_reload_thumbnail"
+        android:title="@string/reload_thumbnail"
+        app:showAsAction="never" />
+
+    <item
         android:id="@+id/action_download"
         android:title="@string/download"
         app:showAsAction="never" />

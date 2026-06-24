@@ -4,7 +4,6 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
-import android.util.Base64
 import androidx.core.app.NotificationCompat
 import androidx.preference.PreferenceManager
 import androidx.work.Constraints
@@ -16,33 +15,17 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import ca.pkay.rcloneexplorer.Glide.ThumbnailCacheIdentity
-import ca.pkay.rcloneexplorer.Glide.HttpServeThumbnailGlideUrl
-import ca.pkay.rcloneexplorer.Glide.VideoThumbnailUrl
-import ca.pkay.rcloneexplorer.Items.FileItem
 import ca.pkay.rcloneexplorer.Items.RemoteItem
 import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Rclone
-import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerService
-import ca.pkay.rcloneexplorer.util.BackgroundMediaPrepWorkTracker
-import ca.pkay.rcloneexplorer.util.FLog
 import ca.pkay.rcloneexplorer.util.LastFolderSnapshotStore
 import ca.pkay.rcloneexplorer.util.NotificationUtils
 import ca.pkay.rcloneexplorer.util.SyncLog
+import ca.pkay.rcloneexplorer.util.ThumbnailPrefetchExecutor
 import ca.pkay.rcloneexplorer.util.ThumbnailPrefetchTargets
 import ca.pkay.rcloneexplorer.util.WifiConnectivitiyUtil
-import com.bumptech.glide.Glide
-import com.bumptech.glide.load.engine.DiskCacheStrategy
-import com.bumptech.glide.request.RequestOptions
-import java.io.IOException
-import java.security.SecureRandom
-import java.net.ServerSocket
-import java.util.concurrent.ExecutionException
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
@@ -95,120 +78,22 @@ class LastFolderThumbnailPrefetchWorker(
         )
         setForeground(createPrefetchForegroundInfo(app, snapshot.directoryPath))
 
-        var cachedCount = 0
-        val fetchTargets = ArrayList<FileItem>(targets.size)
-        for (item in targets) {
-            if (isStopped) {
-                return@withContext Result.success()
-            }
-            if (ThumbnailCacheIdentity.isPrefetchThumbnailCached(app, item)) {
-                cachedCount++
-            } else {
-                fetchTargets.add(item)
-            }
-        }
-        SyncLog.info(
-            app,
-            "MediaPrepDbg",
-            "event=prefetchCacheProbe cached=$cachedCount misses=${fetchTargets.size} total=${targets.size} path=${snapshot.directoryPath}",
-        )
-
-        var prefetchRefIncremented = false
-        var serveLeaseId = 0
-        val auth = randomAuthToken()
-        val port = allocatePort(THUMB_PORT_PREFERRED)
-        val hidden = ThumbnailPrefetchTargets.hiddenServePath(auth, remote.name)
-        try {
-            BackgroundMediaPrepWorkTracker.incrementThumbnailPrefetchWork()
-            prefetchRefIncremented = true
-            serveLeaseId = ThumbnailServerManager.getInstance().acquireServeLease(app, remote, port, auth)
-            if (serveLeaseId == 0) {
-                return@withContext Result.success()
-            }
-            ThumbnailServerService.startServing(app, remote, port, auth, snapshot.directoryPath, true)
-            if (!waitForThumbnailServerReady()) {
-                FLog.w(TAG, "Prefetch: server did not become READY in time")
-                return@withContext Result.success()
-            }
-            SyncLog.info(
-                app,
-                "MediaPrepDbg",
-                "event=prefetchUpdateProgress phase=init loaded=$cachedCount total=${targets.size} path=${snapshot.directoryPath}",
-            )
-            ThumbnailServerService.updateProgress(
-                app,
-                snapshot.directoryPath,
-                cachedCount,
-                targets.size,
-                0,
-                0,
-            )
-            val imageOpts = RequestOptions()
-                .centerCrop()
-                .diskCacheStrategy(DiskCacheStrategy.DATA)
-                .placeholder(R.drawable.ic_file)
-                .error(R.drawable.ic_file)
-            var loaded = cachedCount
-            for (item in fetchTargets) {
-                if (isStopped) {
-                    break
-                }
-                val url = ThumbnailPrefetchTargets.buildThumbnailHttpUrl(hidden, port, item)
-                val mime = item.mimeType ?: ""
-                val isVideo = mime.startsWith("video/")
-                try {
-                    val req = if (isVideo) {
-                        Glide.with(app).asDrawable().load(VideoThumbnailUrl(url)).apply(imageOpts)
-                    } else {
-                        Glide.with(app).asDrawable().load(HttpServeThumbnailGlideUrl(url)).apply(imageOpts)
-                    }
-                    req.submit().get(PREFETCH_ITEM_TIMEOUT_S, TimeUnit.SECONDS)
-                } catch (_: TimeoutException) {
-                    FLog.w(TAG, "Prefetch timeout: ${item.name}")
-                } catch (_: ExecutionException) {
-                    FLog.w(TAG, "Prefetch failed: ${item.name}")
-                } catch (e: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    FLog.w(TAG, "Prefetch interrupted", e)
-                    break
-                }
-                loaded++
+        ThumbnailPrefetchExecutor.prefetchFolder(
+            app = app,
+            remote = remote,
+            directoryPath = snapshot.directoryPath,
+            targets = targets,
+            isStopped = { isStopped },
+            onProgress = { progress ->
                 SyncLog.info(
                     app,
                     "MediaPrepDbg",
-                    "event=prefetchUpdateProgress phase=item loaded=$loaded total=${targets.size} path=${snapshot.directoryPath}",
+                    "event=prefetchUpdateProgress phase=item loaded=${progress.loaded} " +
+                        "total=${progress.total} path=${progress.directoryPath}",
                 )
-                ThumbnailServerService.updateProgress(
-                    app,
-                    snapshot.directoryPath,
-                    loaded,
-                    targets.size,
-                    0,
-                    0,
-                )
-            }
-            SyncLog.info(
-                app,
-                "MediaPrepDbg",
-                "event=prefetchUpdateProgress phase=complete loaded=$loaded total=${targets.size} path=${snapshot.directoryPath}",
-            )
-            ThumbnailServerService.updateProgress(
-                app,
-                snapshot.directoryPath,
-                loaded,
-                targets.size,
-                0,
-                0,
-            )
-            Result.success()
-        } finally {
-            if (prefetchRefIncremented) {
-                BackgroundMediaPrepWorkTracker.decrementThumbnailPrefetchWork()
-            }
-            if (serveLeaseId != 0) {
-                ThumbnailServerManager.getInstance().releaseServeLease(serveLeaseId)
-            }
-        }
+            },
+        )
+        Result.success()
     }
 
     private fun createPrefetchForegroundInfo(context: Context, folderDisplayPath: String): ForegroundInfo {
@@ -239,38 +124,9 @@ class LastFolderThumbnailPrefetchWorker(
         }
     }
 
-    private suspend fun waitForThumbnailServerReady(): Boolean {
-        val deadline = System.currentTimeMillis() + SERVER_READY_TIMEOUT_MS
-        var sawStarting = false
-        while (System.currentTimeMillis() < deadline) {
-            when (
-                ThumbnailServerManager.getInstance().getSyncState()
-                    ?: ThumbnailServerManager.ServerState.STOPPED
-            ) {
-                ThumbnailServerManager.ServerState.READY -> return true
-                ThumbnailServerManager.ServerState.FAILED -> return false
-                ThumbnailServerManager.ServerState.STARTING -> {
-                    sawStarting = true
-                    delay(POLL_MS)
-                }
-                ThumbnailServerManager.ServerState.STOPPED -> {
-                    if (sawStarting) {
-                        return false
-                    }
-                    delay(POLL_MS)
-                }
-            }
-        }
-        return false
-    }
-
     companion object {
         private const val TAG = "LastFolderThumbPrefetch"
         const val UNIQUE_WORK_NAME = "last_folder_thumbnail_prefetch_v1"
-        private const val THUMB_PORT_PREFERRED = 29_180
-        private const val SERVER_READY_TIMEOUT_MS = 45_000L
-        private const val POLL_MS = 100L
-        private const val PREFETCH_ITEM_TIMEOUT_S = 45L
         private const val WM_FOREGROUND_NOTIFICATION_ID = 183
 
         @JvmStatic
@@ -289,28 +145,6 @@ class LastFolderThumbnailPrefetchWorker(
                 request,
             )
             SyncLog.info(app, TAG, "Enqueued last-folder thumbnail prefetch work")
-        }
-
-        private fun randomAuthToken(): String {
-            val random = SecureRandom()
-            val values = ByteArray(16)
-            random.nextBytes(values)
-            return Base64.encodeToString(values, Base64.NO_PADDING or Base64.NO_WRAP or Base64.URL_SAFE)
-        }
-
-        private fun allocatePort(preferred: Int): Int {
-            try {
-                ServerSocket(preferred).use { socket ->
-                    socket.reuseAddress = true
-                    return socket.localPort
-                }
-            } catch (e: IOException) {
-                try {
-                    ServerSocket(0).use { socket -> return socket.localPort }
-                } catch (e2: IOException) {
-                    throw IllegalStateException("No port available for thumbnail prefetch", e2)
-                }
-            }
         }
     }
 }

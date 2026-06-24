@@ -167,10 +167,17 @@ public class TasksRecyclerViewAdapter extends RecyclerView.Adapter<TasksRecycler
     private void showFileMenu(View view, final Task task) {
         PopupMenu popupMenu = new PopupMenu(context, view);
         popupMenu.getMenuInflater().inflate(R.menu.task_item_menu, popupMenu.getMenu());
+        SyncManager syncManager = new SyncManager(context);
+        boolean taskActive = syncManager.isTaskActive(task.getId());
+        popupMenu.getMenu().findItem(R.id.action_start_task).setVisible(!taskActive);
+        popupMenu.getMenu().findItem(R.id.action_cancel_task).setVisible(taskActive);
         popupMenu.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
                 case R.id.action_start_task:
                     startTask(task);
+                    break;
+                case R.id.action_cancel_task:
+                    syncManager.cancel(task.getId());
                     break;
                 case R.id.action_edit_task:
                     editTask(task);
