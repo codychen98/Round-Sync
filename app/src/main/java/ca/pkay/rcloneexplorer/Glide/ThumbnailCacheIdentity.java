@@ -111,7 +111,7 @@ public final class ThumbnailCacheIdentity {
     }
 
     @NonNull
-    static String stableServePath(@NonNull String remoteName, @NonNull String remoteFilePath) {
+    public static String stableServePath(@NonNull String remoteName, @NonNull String remoteFilePath) {
         String normalizedPath = remoteFilePath;
         while (normalizedPath.startsWith("/")) {
             normalizedPath = normalizedPath.substring(1);

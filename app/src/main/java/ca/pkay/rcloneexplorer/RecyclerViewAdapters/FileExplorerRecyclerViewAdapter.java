@@ -25,6 +25,7 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.bumptech.glide.Glide;
+import com.bumptech.glide.Priority;
 import com.bumptech.glide.load.engine.DiskCacheStrategy;
 import com.bumptech.glide.request.RequestOptions;
 
@@ -39,6 +40,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import ca.pkay.rcloneexplorer.Glide.RetryRequestListener;
 import ca.pkay.rcloneexplorer.Glide.FolderThumbnailGlideUrl;
 import ca.pkay.rcloneexplorer.Glide.HttpServeThumbnailGlideUrl;
+import ca.pkay.rcloneexplorer.Glide.ThumbnailCacheIdentity;
+import ca.pkay.rcloneexplorer.Glide.ThumbnailReloadEpoch;
 import ca.pkay.rcloneexplorer.Glide.VideoThumbnailUrl;
 import ca.pkay.rcloneexplorer.Items.FileItem;
 import ca.pkay.rcloneexplorer.Items.RemoteItem;
@@ -502,12 +505,21 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 }
             } else if (mimeType.startsWith("video/") && !localLoad) {
                 startupBranch = "videoCandidate";
+                String stablePath = ThumbnailCacheIdentity.stableServePath(
+                        item.getRemote().getName(), item.getPath());
+                boolean userReload = ThumbnailReloadEpoch.consumePendingUserReload(stablePath);
                 RequestOptions glideOption = new RequestOptions()
                         .centerCrop()
                         .diskCacheStrategy(DiskCacheStrategy.DATA)
                         .dontAnimate()
                         .placeholder(R.drawable.ic_file)
                         .error(R.drawable.ic_file);
+                if (userReload) {
+                    glideOption = glideOption
+                            .priority(Priority.IMMEDIATE)
+                            .skipMemoryCache(true);
+                    maybeLogThumbPipelineDbg(item, "videoUserReload", true);
+                }
                 if (serverReady) {
                     if (!isHttpThumbnailPolicyAllowedForNetworkThumbnail(item)) {
                         startupBranch = "videoPolicySkip";
@@ -971,12 +983,25 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         if (files == null || position < 0 || position >= files.size()) {
             return;
         }
+        FileItem item = files.get(position);
         RecyclerView rv = attachedRecyclerView;
         if (rv != null) {
             RecyclerView.ViewHolder holder = rv.findViewHolderForAdapterPosition(position);
             if (holder instanceof ViewHolder) {
                 cancelActiveRetryListener((ViewHolder) holder);
+                if (context != null) {
+                    Glide.with(context.getApplicationContext()).clear(((ViewHolder) holder).fileIcon);
+                }
             }
+        }
+        if (context != null) {
+            SyncLog.info(
+                    context.getApplicationContext(),
+                    "ThumbReloadDbg",
+                    "event=reloadThumbnailAt path=" + item.getPath()
+                            + " position=" + position
+                            + " mgrState=" + ThumbnailServerManager.getInstance().getSyncState()
+                            + " serveGen=" + ThumbnailServerManager.getInstance().getServeGeneration());
         }
         notifyItemChanged(position, THUMBNAIL_PAYLOAD);
     }

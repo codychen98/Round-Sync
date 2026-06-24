@@ -9,10 +9,18 @@ class ThumbnailReloadEpochTest {
 
     @Before
     fun reset() {
-        val field = ThumbnailReloadEpoch::class.java.getDeclaredField("epochs")
-        field.isAccessible = true
+        val epochField = ThumbnailReloadEpoch::class.java.getDeclaredField("epochs")
+        epochField.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        (field.get(null) as MutableMap<String, Int>).clear()
+        (epochField.get(null) as MutableMap<String, Int>).clear()
+        val pendingField = ThumbnailReloadEpoch::class.java.getDeclaredField("pendingUserReload")
+        pendingField.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        (pendingField.get(null) as MutableSet<String>).clear()
+        val preferField = ThumbnailReloadEpoch::class.java.getDeclaredField("preferExoDecode")
+        preferField.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        (preferField.get(null) as MutableSet<String>).clear()
     }
 
     @Test
@@ -40,5 +48,16 @@ class ThumbnailReloadEpochTest {
         ThumbnailReloadEpoch.increment(stable)
         val url = "http://127.0.0.1:5572/auth/drive/Videos/clip.mp4"
         assertEquals(1, ThumbnailReloadEpoch.getEpochForVideoUrl(url))
+    }
+
+    @Test
+    fun userReloadFlags_areConsumedOnce() {
+        val stable = "/drive/Videos/clip.mp4"
+        ThumbnailReloadEpoch.markPendingUserReload(stable)
+        ThumbnailReloadEpoch.markPreferExoDecode(stable)
+        assertEquals(true, ThumbnailReloadEpoch.consumePendingUserReload(stable))
+        assertEquals(false, ThumbnailReloadEpoch.consumePendingUserReload(stable))
+        assertEquals(true, ThumbnailReloadEpoch.consumePreferExoDecode(stable))
+        assertEquals(false, ThumbnailReloadEpoch.consumePreferExoDecode(stable))
     }
 }

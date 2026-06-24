@@ -142,6 +142,16 @@ final class VideoThumbnailExoFallback {
             @NonNull String url,
             long durationMs,
             @NonNull VideoThumbnailFetcher owner) {
+        return tryGrabFirstFrame(appContext, url, durationMs, owner, false);
+    }
+
+    @Nullable
+    static Bitmap tryGrabFirstFrame(
+            @NonNull Context appContext,
+            @NonNull String url,
+            long durationMs,
+            @NonNull VideoThumbnailFetcher owner,
+            boolean relaxDurationCheck) {
         final String base = VideoThumbnailFetcher.basenameForThumbUrl(url);
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
             VideoThumbnailFetcher.logThumbPipe(appContext, "exoSkip",
@@ -153,9 +163,14 @@ final class VideoThumbnailExoFallback {
                     "basename=" + base + " reason=cancelledAtExoEntry");
             return null;
         }
-        if (durationMs <= 0 || durationMs > MAX_DURATION_MS) {
+        if (!relaxDurationCheck && (durationMs <= 0 || durationMs > MAX_DURATION_MS)) {
             VideoThumbnailFetcher.logThumbPipe(appContext, "exoSkip",
                     "basename=" + base + " reason=durationOutOfRange durationMs=" + durationMs);
+            return null;
+        }
+        if (relaxDurationCheck && durationMs > MAX_DURATION_MS) {
+            VideoThumbnailFetcher.logThumbPipe(appContext, "exoSkip",
+                    "basename=" + base + " reason=durationTooLong durationMs=" + durationMs);
             return null;
         }
         Handler exoH = exoThumbHandler();
@@ -164,7 +179,7 @@ final class VideoThumbnailExoFallback {
         AtomicReference<String> errorMsg = new AtomicReference<>();
         exoH.post(() -> {
             try {
-                result.set(grabOnExoLooper(appContext, url, durationMs, owner));
+                result.set(grabOnExoLooper(appContext, url, durationMs, owner, relaxDurationCheck));
             } catch (Exception e) {
                 errorMsg.set(e.getMessage());
                 FLog.w(TAG, "Exo thumbnail fallback failed: %s", e.getMessage());
@@ -198,7 +213,8 @@ final class VideoThumbnailExoFallback {
             @NonNull Context appContext,
             @NonNull String url,
             long durationMs,
-            @NonNull VideoThumbnailFetcher owner) throws Exception {
+            @NonNull VideoThumbnailFetcher owner,
+            boolean relaxDurationCheck) throws Exception {
         final String base = VideoThumbnailFetcher.basenameForThumbUrl(url);
         final String stablePath = stablePathForUrl(url);
         ExoPlayer player = null;
@@ -225,8 +241,8 @@ final class VideoThumbnailExoFallback {
             MediaItem item = MediaItem.fromUri(liveUrl);
             player.setMediaSource(progressiveFactory.createMediaSource(item));
             VideoThumbnailFetcher.logThumbPipe(appContext, "exoPrepareStart",
-                    "basename=" + base + " durationMs=" + durationMs + " "
-                            + thumbUrlForSyncLog(liveUrl)
+                    "basename=" + base + " durationMs=" + durationMs + " relaxDuration=" + relaxDurationCheck
+                            + " " + thumbUrlForSyncLog(liveUrl)
                             + " httpEngine=OkHttpDataSource ProgressiveMediaSource"
                             + " extensionRendererMode=on");
             player.prepare();
@@ -234,7 +250,16 @@ final class VideoThumbnailExoFallback {
             if (!waitForReady(appContext, base, player, owner)) {
                 return null;
             }
-            long seekMs = Math.max(1L, durationMs / 4);
+            long effectiveDurationMs = durationMs;
+            if (effectiveDurationMs <= 0) {
+                long playerDur = player.getDuration();
+                if (playerDur != C.TIME_UNSET && playerDur > 0) {
+                    effectiveDurationMs = playerDur;
+                } else if (relaxDurationCheck) {
+                    effectiveDurationMs = 60_000L;
+                }
+            }
+            long seekMs = resolveExoSeekMs(url, effectiveDurationMs);
             CountDownLatch rendered = new CountDownLatch(1);
             Player.Listener listener = new Player.Listener() {
                 @Override
@@ -315,5 +340,23 @@ final class VideoThumbnailExoFallback {
         VideoThumbnailFetcher.logThumbPipe(appContext, "exoPrepareTimeout",
                 "basename=" + basename + " " + exoPlayerSnapshotForSyncLog(player));
         return false;
+    }
+
+    private static long resolveExoSeekMs(@NonNull String url, long effectiveDurationMs) {
+        if (effectiveDurationMs <= 0) {
+            return 1L;
+        }
+        int reloadEpoch = ThumbnailReloadEpoch.getEpochForVideoUrl(url);
+        if (reloadEpoch > 0) {
+            long[] seekFractionsMs = new long[] {
+                    0L,
+                    effectiveDurationMs / 10,
+                    effectiveDurationMs / 4,
+                    effectiveDurationMs / 2,
+            };
+            int index = reloadEpoch % seekFractionsMs.length;
+            return Math.max(1L, seekFractionsMs[index]);
+        }
+        return Math.max(1L, effectiveDurationMs / 4);
     }
 }

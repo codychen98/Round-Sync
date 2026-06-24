@@ -1723,10 +1723,16 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                 case R.id.action_reload_thumbnail: {
                     int position = recyclerViewAdapter.getFilePosition(fileItem);
                     if (position == RecyclerView.NO_POSITION) {
+                        SyncLog.error(context, "ThumbReloadDbg",
+                                "event=reloadMenuFail reason=positionNotFound path=" + fileItem.getPath());
                         Toasty.error(context, getString(R.string.reload_thumbnail_failed),
                                 Toast.LENGTH_SHORT, true).show();
                         break;
                     }
+                    SyncLog.info(context, "ThumbReloadDbg",
+                            "event=reloadMenuTapped path=" + fileItem.getPath()
+                                    + " position=" + position
+                                    + " mimeType=" + fileItem.getMimeType());
                     ThumbnailReloadHelper.reload(context, fileItem, recyclerViewAdapter, position, success -> {
                         if (isAdded()) {
                             if (success) {

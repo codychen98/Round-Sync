@@ -105,7 +105,29 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
             }
             final long t0 = SystemClock.elapsedRealtime();
             final String base = basenameForThumbUrl(url);
-            logThumbPipe(appContext, "fetcherStart", "basename=" + base + " " + mgrDebugSuffix());
+            final String stablePath = VideoThumbnailUrl.stablePathFromUrl(url);
+            final boolean preferExo = ThumbnailReloadEpoch.consumePreferExoDecode(stablePath);
+            logThumbPipe(appContext, "fetcherStart",
+                    "basename=" + base + " preferExo=" + preferExo + " " + mgrDebugSuffix());
+
+            if (preferExo && !cancelled) {
+                logThumbPipe(appContext, "reloadExoFirst",
+                        "basename=" + base + " epoch=" + ThumbnailReloadEpoch.getEpochForVideoUrl(url)
+                                + " " + mgrDebugSuffix());
+                Bitmap exoFrame = VideoThumbnailExoFallback.tryGrabFirstFrame(
+                        appContext, url, 0L, VideoThumbnailFetcher.this, true);
+                if (exoFrame != null) {
+                    deliverJpegFrame(exoFrame, base, t0, callback);
+                    return;
+                }
+                if (cancelled) {
+                    callback.onLoadFailed(new RuntimeException("Cancelled"));
+                    return;
+                }
+                logThumbPipe(appContext, "reloadExoFirstMiss",
+                        "basename=" + base + " fallback=mmr " + mgrDebugSuffix());
+            }
+
             MediaMetadataRetriever mmr = new MediaMetadataRetriever();
             OkHttpMediaDataSource dataSource = new OkHttpMediaDataSource(url, appContext);
             boolean mmrReleased = false;
@@ -164,8 +186,9 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                     dataSourceClosed = true;
                     if (!cancelled && !exoAttempted) {
                         long tExo = SystemClock.elapsedRealtime();
+                        int reloadEpoch = ThumbnailReloadEpoch.getEpochForVideoUrl(url);
                         frame = VideoThumbnailExoFallback.tryGrabFirstFrame(
-                                appContext, url, durationMs, VideoThumbnailFetcher.this);
+                                appContext, url, durationMs, VideoThumbnailFetcher.this, reloadEpoch > 0);
                         long exoMs = SystemClock.elapsedRealtime() - tExo;
                         logThumbPipe(appContext, "exoEnd",
                                 "basename=" + base + " result=" + (frame != null ? "frame" : "null")
@@ -188,18 +211,22 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
                         return;
                     }
                 }
-                ByteArrayOutputStream baos = new ByteArrayOutputStream(64 * 1024);
-                frame.compress(Bitmap.CompressFormat.JPEG, 75, baos);
-                frame.recycle();
-                logThumbPipe(appContext, "decodeOk",
-                        "basename=" + base + " totalMs=" + (SystemClock.elapsedRealtime() - t0)
-                                + " " + mgrDebugSuffix());
-                callback.onDataReady(new ByteArrayInputStream(baos.toByteArray()));
+                deliverJpegFrame(frame, base, t0, callback);
             } catch (Exception e) {
                 FLog.e(TAG, "loadData: failed to extract frame from %s", url);
                 logThumbPipe(appContext, "fetcherFail",
                         "basename=" + base + " what=" + e.getClass().getSimpleName()
                                 + " msg=" + scrubMsg(e.getMessage()) + " " + mgrDebugSuffix());
+                if (!cancelled) {
+                    logThumbPipe(appContext, "fetcherFailTryExo",
+                            "basename=" + base + " " + mgrDebugSuffix());
+                    Bitmap exoFrame = VideoThumbnailExoFallback.tryGrabFirstFrame(
+                            appContext, url, 0L, VideoThumbnailFetcher.this, true);
+                    if (exoFrame != null) {
+                        deliverJpegFrame(exoFrame, base, t0, callback);
+                        return;
+                    }
+                }
                 logThumbnailSyncFailureOnce(
                         "event=videoFetchFail reason=exception what="
                                 + e.getClass().getSimpleName()
@@ -232,6 +259,26 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream> {
             return;
         }
         SyncLog.error(appContext, "VidThumbDbg", messagePrefix + url);
+    }
+
+    /** Clears the once-per-URL failure throttle so user reload can log and retry cleanly. */
+    static void clearFailureLogForUrl(@NonNull String url) {
+        loggedSyncFailureUrls.remove(url);
+    }
+
+    private boolean deliverJpegFrame(
+            @NonNull Bitmap frame,
+            @NonNull String base,
+            long t0,
+            @NonNull DataCallback<? super InputStream> callback) {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream(64 * 1024);
+        frame.compress(Bitmap.CompressFormat.JPEG, 75, baos);
+        frame.recycle();
+        logThumbPipe(appContext, "decodeOk",
+                "basename=" + base + " totalMs=" + (SystemClock.elapsedRealtime() - t0)
+                        + " " + mgrDebugSuffix());
+        callback.onDataReady(new ByteArrayInputStream(baos.toByteArray()));
+        return true;
     }
 
     @NonNull
