@@ -1728,15 +1728,14 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                         break;
                     }
                     ThumbnailReloadHelper.reload(context, fileItem, recyclerViewAdapter, position, success -> {
-                        if (!isAdded()) {
-                            return;
-                        }
-                        if (success) {
-                            Toasty.info(context, getString(R.string.reload_thumbnail_success),
-                                    Toast.LENGTH_SHORT, true).show();
-                        } else {
-                            Toasty.error(context, getString(R.string.reload_thumbnail_failed),
-                                    Toast.LENGTH_SHORT, true).show();
+                        if (isAdded()) {
+                            if (success) {
+                                Toasty.info(context, getString(R.string.reload_thumbnail_success),
+                                        Toast.LENGTH_SHORT, true).show();
+                            } else {
+                                Toasty.error(context, getString(R.string.reload_thumbnail_failed),
+                                        Toast.LENGTH_SHORT, true).show();
+                            }
                         }
                     });
                     break;
