@@ -31,13 +31,11 @@ internal object ThumbnailDiskCacheWriter {
             )
             val editor = cache.edit(safeKey) ?: return false
             try {
-                editor.newOutputStream(0).use { output ->
-                    output.write(jpegBytes)
-                }
+                editor.set(0, jpegBytes)
                 editor.commit()
             } catch (t: Throwable) {
                 editor.abort()
-                throw t
+                false
             }
         } catch (t: Throwable) {
             FLog.w(TAG, "Failed to write disk cache entry for key=%s", safeKey, t)
