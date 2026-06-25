@@ -105,7 +105,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
             }
             final long t0 = SystemClock.elapsedRealtime();
             final String base = basenameForThumbUrl(url);
-            final String stablePath = ThumbnailStablePath.normalize(VideoThumbnailUrl.stablePathFromUrl(url));
+            final String stablePath = ThumbnailStablePath.canonicalFromServeUrl(url);
             byte[] reloadJpeg = ThumbnailReloadResultCache.get(stablePath);
             if (reloadJpeg != null) {
                 logThumbPipe(appContext, "reloadCacheHit",

@@ -28,7 +28,8 @@ object ThumbnailReloadEpoch {
     }
 
     @JvmStatic
-    fun getEpochForVideoUrl(url: String): Int = get(ThumbnailStablePath.fromServeUrl(url))
+    fun getEpochForVideoUrl(url: String): Int =
+        get(ThumbnailStablePath.canonicalFromServeUrl(url))
 
     @JvmStatic
     fun markPendingUserReload(stablePath: String) {

@@ -52,6 +52,7 @@ class ThumbnailReloadEpochTest {
 
     @Test
     fun increment_matchesEncodedServeUrl() {
+        // Fixture only: any remote name + folder path works the same way in production code.
         val stable = ThumbnailCacheIdentity.stableServePath("pCloudLock", "Video Archive/Anime/a.mkv")
         ThumbnailReloadEpoch.increment(stable)
         val url = "http://127.0.0.1:29179/auth/pCloudLock/Video%20Archive/Anime/a.mkv"

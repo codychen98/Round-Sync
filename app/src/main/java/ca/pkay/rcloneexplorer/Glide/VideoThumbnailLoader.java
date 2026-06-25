@@ -28,7 +28,8 @@ public class VideoThumbnailLoader implements ModelLoader<VideoThumbnailUrl, Inpu
     public LoadData<InputStream> buildLoadData(@NonNull VideoThumbnailUrl model,
                                                 int width, int height,
                                                 @NonNull Options options) {
-        int reloadEpoch = ThumbnailReloadEpoch.get(model.getStablePath());
+        int reloadEpoch = ThumbnailReloadEpoch.get(
+                ThumbnailStablePath.normalize(model.getStablePath()));
         String cacheKey;
         if (reloadEpoch > 0) {
             cacheKey = ReadableCacheKey.fromStablePath(

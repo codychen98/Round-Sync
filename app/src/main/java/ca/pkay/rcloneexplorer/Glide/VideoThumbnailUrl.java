@@ -22,7 +22,7 @@ public class VideoThumbnailUrl implements Key {
 
     @NonNull
     public static String stablePathFromUrl(@NonNull String url) {
-        return ThumbnailStablePath.fromServeUrl(url);
+        return ThumbnailStablePath.legacyPathFromServeUrl(url);
     }
 
     @NonNull
