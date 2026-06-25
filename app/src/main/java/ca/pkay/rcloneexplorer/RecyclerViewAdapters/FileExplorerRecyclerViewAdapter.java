@@ -42,6 +42,7 @@ import ca.pkay.rcloneexplorer.Glide.FolderThumbnailGlideUrl;
 import ca.pkay.rcloneexplorer.Glide.HttpServeThumbnailGlideUrl;
 import ca.pkay.rcloneexplorer.Glide.ThumbnailCacheIdentity;
 import ca.pkay.rcloneexplorer.Glide.ThumbnailReloadEpoch;
+import ca.pkay.rcloneexplorer.Glide.ThumbnailReloadPriority;
 import ca.pkay.rcloneexplorer.Glide.VideoThumbnailUrl;
 import ca.pkay.rcloneexplorer.Items.FileItem;
 import ca.pkay.rcloneexplorer.Items.RemoteItem;
@@ -382,6 +383,10 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
         if (item.isDir()) {
             if (isNetworkFolderThumbnailCandidate(item) && serverReady) {
+                if (deferExclusiveUserReloadThumbnail(holder, item)) {
+                    startupBranch = "deferredForUserReload";
+                    startupPolicyAllowed = true;
+                } else {
                 startupBranch = "folderThumb";
                 startupPolicyAllowed = true;
                 holder.fileIcon.setVisibility(View.VISIBLE);
@@ -421,6 +426,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         .thumbnail(0.1f)
                         .listener(retryListener)
                         .into(holder.fileIcon);
+                }
             } else {
                 startupBranch = serverReady ? "folderPolicySkip" : "folderPlaceholderNotReady";
                 startupPolicyAllowed = isHttpThumbnailPolicyAllowedForNetworkThumbnail(item);
@@ -460,6 +466,9 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
                         holder.fileIcon.setImageTintList(holder.defaultIconTint);
                         holder.fileIcon.setImageResource(R.drawable.ic_file);
+                    } else if (deferExclusiveUserReloadThumbnail(holder, item)) {
+                        startupBranch = "deferredForUserReload";
+                        startupPolicyAllowed = true;
                     } else {
                         startupBranch = "imageThumb";
                         startupPolicyAllowed = true;
@@ -530,6 +539,9 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
                         holder.fileIcon.setImageTintList(holder.defaultIconTint);
                         holder.fileIcon.setImageResource(R.drawable.ic_file);
+                    } else if (deferExclusiveUserReloadThumbnail(holder, item)) {
+                        startupBranch = "deferredForUserReload";
+                        startupPolicyAllowed = true;
                     } else {
                         startupBranch = "videoThumb";
                         startupPolicyAllowed = true;
@@ -915,6 +927,9 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
      * so list scroll position is preserved when the thumbnail server restarts.
      */
     public void notifyThumbnailRefreshForVisibleRange() {
+        if (ThumbnailReloadPriority.isExclusiveActive()) {
+            return;
+        }
         RecyclerView rv = attachedRecyclerView;
         if (rv == null || !showThumbnails || files == null || files.isEmpty()) {
             return;
@@ -1006,6 +1021,66 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                             + " serveGen=" + ThumbnailServerManager.getInstance().getServeGeneration());
         }
         notifyItemChanged(position, THUMBNAIL_PAYLOAD);
+    }
+
+    /**
+     * Stops in-flight thumbnail work on other visible rows so a user reload gets exclusive bandwidth.
+     */
+    public void prepareExclusiveUserReload(int targetPosition) {
+        RecyclerView rv = attachedRecyclerView;
+        if (rv == null || context == null || files == null) {
+            return;
+        }
+        RecyclerView.LayoutManager layoutManager = rv.getLayoutManager();
+        if (!(layoutManager instanceof LinearLayoutManager)) {
+            return;
+        }
+        LinearLayoutManager linearLayoutManager = (LinearLayoutManager) layoutManager;
+        int first = linearLayoutManager.findFirstVisibleItemPosition();
+        int last = linearLayoutManager.findLastVisibleItemPosition();
+        if (first == RecyclerView.NO_POSITION || last == RecyclerView.NO_POSITION) {
+            return;
+        }
+        int cancelled = 0;
+        for (int i = first; i <= last; i++) {
+            if (i == targetPosition) {
+                continue;
+            }
+            RecyclerView.ViewHolder holder = rv.findViewHolderForAdapterPosition(i);
+            if (holder instanceof ViewHolder) {
+                ViewHolder viewHolder = (ViewHolder) holder;
+                cancelActiveRetryListener(viewHolder);
+                Glide.with(context.getApplicationContext()).clear(viewHolder.fileIcon);
+                cancelled++;
+            }
+        }
+        SyncLog.info(
+                context.getApplicationContext(),
+                "ThumbReloadDbg",
+                "event=exclusiveReloadPrepared targetPosition=" + targetPosition
+                        + " cancelledVisibleRows=" + cancelled);
+    }
+
+    private boolean deferExclusiveUserReloadThumbnail(
+            @NonNull ViewHolder holder,
+            @NonNull FileItem item) {
+        if (!ThumbnailReloadPriority.shouldDeferThumbnailLoad(
+                item.getRemote().getName(), item.getPath())) {
+            return false;
+        }
+        maybeLogThumbPipelineDbg(item, "deferredForUserReload", true);
+        cancelActiveRetryListener(holder);
+        Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+        holder.fileIcon.setImageTintList(holder.defaultIconTint);
+        holder.fileIcon.setImageResource(R.drawable.ic_file);
+        if (item.isDir()) {
+            holder.fileIcon.setVisibility(View.GONE);
+            holder.dirIcon.setVisibility(View.VISIBLE);
+        } else {
+            holder.fileIcon.setVisibility(View.VISIBLE);
+            holder.dirIcon.setVisibility(View.GONE);
+        }
+        return true;
     }
 
     /**

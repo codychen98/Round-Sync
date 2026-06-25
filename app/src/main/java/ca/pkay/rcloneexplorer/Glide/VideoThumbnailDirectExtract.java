@@ -14,6 +14,7 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 
 import ca.pkay.rcloneexplorer.util.SyncLog;
+import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import okhttp3.Request;
 import okhttp3.Response;
 
@@ -38,20 +39,22 @@ final class VideoThumbnailDirectExtract {
         final long t0 = SystemClock.elapsedRealtime();
         log(appContext, "directExtractStart basename=" + base + " stablePath=" + stablePath);
 
+        String liveUrl = resolveLiveUrl(stablePath, url);
         Bitmap frame = VideoThumbnailExoFallback.tryGrabFirstFrame(
                 appContext,
-                url,
+                liveUrl,
                 0L,
                 VideoThumbnailCancellation.NEVER_CANCELLED,
                 true,
                 true);
         String stage = frame != null ? "exo" : "exoMiss";
         if (frame == null) {
-            frame = extractWithMmr(appContext, url, stablePath);
+            frame = extractWithMmr(appContext, liveUrl, stablePath);
             stage = frame != null ? "mmr" : "mmrMiss";
         }
         if (frame == null) {
-            frame = extractFromPartialLocalFile(appContext, url, stablePath);
+            liveUrl = resolveLiveUrl(stablePath, url);
+            frame = extractFromPartialLocalFile(appContext, liveUrl, stablePath);
             stage = frame != null ? "partialFile" : "partialFileMiss";
         }
         if (frame == null) {
@@ -245,5 +248,14 @@ final class VideoThumbnailDirectExtract {
 
     private static void log(@NonNull Context appContext, @NonNull String message) {
         SyncLog.info(appContext.getApplicationContext(), LOG_TAG, "event=" + message);
+    }
+
+    @NonNull
+    private static String resolveLiveUrl(@NonNull String stablePath, @NonNull String fallbackUrl) {
+        String base = ThumbnailServerManager.getInstance().getCurrentBaseUrlOrNull();
+        if (base == null || base.isEmpty()) {
+            return fallbackUrl;
+        }
+        return stablePath.startsWith("/") ? base + stablePath : base + "/" + stablePath;
     }
 }

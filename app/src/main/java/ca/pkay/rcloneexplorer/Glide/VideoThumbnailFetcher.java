@@ -38,6 +38,9 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
     private static final int MAX_FAILURE_LOG_URLS = 512;
     private static final Set<String> loggedSyncFailureUrls =
             Collections.newSetFromMap(new ConcurrentHashMap<>());
+  /** In-flight fetchers; used to cancel non-target work during exclusive user reload. */
+    private static final Set<VideoThumbnailFetcher> activeFetchers =
+            Collections.newSetFromMap(new ConcurrentHashMap<>());
     /** Caps {@code event=fetcherCancel} SyncLog volume (includes basename when pending). */
     private static final AtomicInteger fetcherCancelLogCount = new AtomicInteger(0);
     private static final int MAX_FETCHER_CANCEL_DEBUG_LOGS = 100;
@@ -96,7 +99,9 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
             callback.onLoadFailed(new RuntimeException("Cancelled"));
             return;
         }
+        activeFetchers.add(this);
         pendingTask = VIDEO_POOL.submit(() -> {
+            try {
             if (cancelled) {
                 logThumbPipe(appContext, "fetcherEarlyCancel",
                         "basename=" + basenameForThumbUrl(url) + " when=poolEntry " + mgrDebugSuffix());
@@ -106,6 +111,12 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
             final long t0 = SystemClock.elapsedRealtime();
             final String base = basenameForThumbUrl(url);
             final String stablePath = ThumbnailStablePath.canonicalFromServeUrl(url);
+            if (ThumbnailReloadPriority.shouldDeferVideoFetch(stablePath)) {
+                logThumbPipe(appContext, "fetcherDeferred",
+                        "basename=" + base + " reason=exclusiveUserReload " + mgrDebugSuffix());
+                callback.onLoadFailed(new RuntimeException("Deferred for exclusive user reload"));
+                return;
+            }
             byte[] reloadJpeg = ThumbnailReloadResultCache.get(stablePath);
             if (reloadJpeg != null) {
                 logThumbPipe(appContext, "reloadCacheHit",
@@ -255,6 +266,9 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
                     }
                 }
             }
+            } finally {
+                activeFetchers.remove(VideoThumbnailFetcher.this);
+            }
         });
     }
 
@@ -271,6 +285,19 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
     /** Clears the once-per-URL failure throttle so user reload can log and retry cleanly. */
     static void clearFailureLogForUrl(@NonNull String url) {
         loggedSyncFailureUrls.remove(url);
+    }
+
+    /**
+     * Cancels every in-flight video thumbnail fetch except the file the user is reloading.
+     */
+    static void cancelAllExcept(@NonNull String targetStablePath) {
+        String target = ThumbnailStablePath.normalize(targetStablePath);
+        for (VideoThumbnailFetcher fetcher : activeFetchers) {
+            String stablePath = ThumbnailStablePath.canonicalFromServeUrl(fetcher.url);
+            if (!target.equals(ThumbnailStablePath.normalize(stablePath))) {
+                fetcher.cancel();
+            }
+        }
     }
 
     private boolean deliverJpegFrame(

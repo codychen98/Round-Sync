@@ -51,6 +51,9 @@ object ThumbnailReloadHelper {
             return
         }
 
+        ThumbnailReloadPriority.beginExclusive(appContext, stablePath)
+        adapter.prepareExclusiveUserReload(position)
+
         GlideExecutor.newDiskCacheExecutor().execute {
             var success = true
             var detail = "ok"
@@ -171,6 +174,8 @@ object ThumbnailReloadHelper {
         onComplete: OnCompleteListener,
         jpegBytes: ByteArray?,
     ) {
+        val stablePath = ThumbnailCacheIdentity.stableServePath(fileItem.remote.name, fileItem.path)
+        try {
         log(
             context,
             "reloadMainThread path=$path success=$success detail=$detail position=$position",
@@ -185,13 +190,16 @@ object ThumbnailReloadHelper {
             adapter.reloadThumbnailAt(position)
             log(context, "reloadAdapterNotified path=$path position=$position")
         } else {
-            val stablePath = ThumbnailCacheIdentity.stableServePath(fileItem.remote.name, fileItem.path)
             ThumbnailReloadEpoch.markPreferExoDecode(stablePath)
             ThumbnailReloadEpoch.markPendingUserReload(stablePath)
             adapter.reloadThumbnailAt(position)
             log(context, "reloadGlideFallback path=$path position=$position detail=$detail")
         }
         onComplete.onComplete(success)
+        } finally {
+            ThumbnailReloadPriority.endExclusive(context, stablePath)
+            adapter.notifyThumbnailRefreshForVisibleRange()
+        }
     }
 
     private fun evictVideoDiskKeys(
