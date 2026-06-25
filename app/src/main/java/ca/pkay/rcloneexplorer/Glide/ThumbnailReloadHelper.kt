@@ -75,6 +75,7 @@ object ThumbnailReloadHelper {
                         } else {
                             val previousEpoch = ThumbnailReloadEpoch.get(stablePath)
                             videoEpoch = ThumbnailReloadEpoch.increment(stablePath)
+                            ThumbnailReloadResultCache.remove(stablePath)
                             clearVideoFailureLog(appContext, stablePath)
                             evictVideoDiskKeys(appContext, remoteName, path, previousEpoch, videoEpoch)
                             log(
@@ -136,13 +137,10 @@ object ThumbnailReloadHelper {
                     stablePath,
                 )
                 if (jpeg != null) {
-                    val cacheKey = ObjectKey(
-                        ThumbnailCacheIdentity.videoReloadDataCacheKey(remoteName, path, epochForVideo),
-                    )
-                    val cached = ThumbnailDiskCacheWriter.put(appContext, cacheKey, jpeg)
+                    ThumbnailReloadResultCache.put(stablePath, jpeg)
                     log(
                         appContext,
-                        "reloadDirectCacheWrite path=$path epoch=$epochForVideo cached=$cached bytes=${jpeg.size}",
+                        "reloadDirectCacheStore path=$path epoch=$epochForVideo bytes=${jpeg.size}",
                     )
                 }
                 mainHandler.post {
