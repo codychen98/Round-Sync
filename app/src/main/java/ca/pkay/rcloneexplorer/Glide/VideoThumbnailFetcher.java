@@ -48,6 +48,11 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
     private static final java.util.concurrent.atomic.AtomicInteger thumbPipeLogCount =
             new java.util.concurrent.atomic.AtomicInteger(0);
     private static final int MAX_THUMB_PIPE_LOGS = 2500;
+    /**
+     * Hidden SDK key ({@code MediaMetadataRetriever.METADATA_KEY_VIDEO_CODEC_MIME_TYPE}).
+     * Used only for debug suffix logging on API 30+.
+     */
+    private static final int METADATA_KEY_VIDEO_CODEC_MIME_TYPE = 40;
     private static final long LARGE_VIDEO_THRESHOLD_BYTES = 500L * 1024L * 1024L;
 
     private final String url;
@@ -328,7 +333,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
         String mime = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE);
         String codec = null;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            codec = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_CODEC);
+            codec = mmr.extractMetadata(METADATA_KEY_VIDEO_CODEC_MIME_TYPE);
         }
         return "durationMs=" + (durationStr != null ? durationStr : "?")
                 + " bitrate=" + (bitrateStr != null ? bitrateStr : "?")
