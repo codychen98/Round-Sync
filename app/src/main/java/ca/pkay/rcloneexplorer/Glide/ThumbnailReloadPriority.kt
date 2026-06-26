@@ -1,14 +1,12 @@
 package ca.pkay.rcloneexplorer.Glide
 
 import android.content.Context
-import androidx.work.WorkManager
 import ca.pkay.rcloneexplorer.util.SyncLog
-import ca.pkay.rcloneexplorer.workmanager.LastFolderThumbnailPrefetchWorker
-import ca.pkay.rcloneexplorer.workmanager.MediaFolderPolicyThumbnailPrefetchWorker
 
 /**
- * While the user has tapped Reload thumbnail on one file, background thumbnail work is paused
- * and only that file may load through Glide or [VideoThumbnailFetcher].
+ * While the user has tapped Reload thumbnail on one file, in-flight video fetchers for other files
+ * are cancelled and only that file may load through Glide or [VideoThumbnailFetcher].
+ * Visible rows keep their current thumbnail drawable (no placeholder wipe).
  */
 object ThumbnailReloadPriority {
 
@@ -45,7 +43,7 @@ object ThumbnailReloadPriority {
     }
 
   /**
-     * Cancels prefetch workers and in-flight video fetchers, then pins exclusive priority on one file.
+     * Cancels in-flight video fetchers for other files, then pins exclusive priority on one file.
      */
     @JvmStatic
     fun beginExclusive(context: Context, stablePath: String) {
@@ -53,7 +51,6 @@ object ThumbnailReloadPriority {
         synchronized(lock) {
             exclusiveStablePath = normalized
         }
-        cancelBackgroundPrefetch(context.applicationContext)
         VideoThumbnailFetcher.cancelAllExcept(normalized)
         log(context, "exclusiveReloadBegin stablePath=$normalized")
     }
@@ -67,15 +64,6 @@ object ThumbnailReloadPriority {
             }
         }
         log(context, "exclusiveReloadEnd stablePath=$normalized")
-    }
-
-    @JvmStatic
-    fun cancelBackgroundPrefetch(context: Context) {
-        val app = context.applicationContext
-        val wm = WorkManager.getInstance(app)
-        wm.cancelUniqueWork(MediaFolderPolicyThumbnailPrefetchWorker.UNIQUE_WORK_NAME)
-        wm.cancelUniqueWork(LastFolderThumbnailPrefetchWorker.UNIQUE_WORK_NAME)
-        log(app, "exclusivePrefetchCancelled")
     }
 
     private fun log(context: Context, message: String) {

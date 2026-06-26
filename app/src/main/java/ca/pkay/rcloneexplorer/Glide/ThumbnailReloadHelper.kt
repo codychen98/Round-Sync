@@ -199,6 +199,7 @@ object ThumbnailReloadHelper {
         } finally {
             ThumbnailReloadPriority.endExclusive(context, stablePath)
             adapter.notifyThumbnailRefreshForVisibleRange()
+            log(context, "reloadVisibleRangeRefresh path=$path")
         }
     }
 

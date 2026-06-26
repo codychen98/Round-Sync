@@ -25,7 +25,7 @@ import okhttp3.Response;
 final class VideoThumbnailDirectExtract {
 
     private static final String LOG_TAG = "ThumbReloadDbg";
-    private static final long PARTIAL_DOWNLOAD_BYTES = 48L * 1024L * 1024L;
+    private static final long PARTIAL_DOWNLOAD_BYTES = 96L * 1024L * 1024L;
 
     private VideoThumbnailDirectExtract() {
     }
@@ -155,7 +155,9 @@ final class VideoThumbnailDirectExtract {
             return new long[] { 2_000_000L, 5_000_000L, 1_000_000L, 0L };
         }
         return new long[] {
+                0L,
                 clampTimeUs(2_000_000L, durationUs),
+                clampTimeUs(5_000_000L, durationUs),
                 clampTimeUs(durationUs / 8, durationUs),
                 clampTimeUs(durationUs / 4, durationUs),
                 clampTimeUs(durationUs / 2, durationUs),
@@ -186,13 +188,25 @@ final class VideoThumbnailDirectExtract {
             }
             log(appContext, "partialDownloadOk stablePath=" + stablePath + " bytes=" + temp.length());
             MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+            long durationMs = 0L;
             try {
                 mmr.setDataSource(temp.getAbsolutePath());
-                long durationMs = readDurationMs(mmr);
+                durationMs = readDurationMs(mmr);
                 int reloadEpoch = ThumbnailReloadEpoch.get(ThumbnailStablePath.normalize(stablePath));
                 Bitmap frame = extractFrameWithReloadOffsets(mmr, durationMs, reloadEpoch);
                 if (frame == null) {
                     frame = mmr.getFrameAtTime(2_000_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+                }
+                if (frame == null) {
+                    frame = VideoThumbnailExoFallback.tryGrabLocalPrefixFrame(
+                            appContext,
+                            temp.getAbsolutePath(),
+                            durationMs,
+                            stablePath,
+                            VideoThumbnailCancellation.NEVER_CANCELLED);
+                    if (frame != null) {
+                        log(appContext, "partialFileExoOk stablePath=" + stablePath);
+                    }
                 }
                 return frame;
             } finally {

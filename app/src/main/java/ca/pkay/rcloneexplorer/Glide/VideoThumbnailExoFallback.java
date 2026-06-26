@@ -20,6 +20,7 @@ import androidx.media3.common.Player;
 import androidx.media3.common.util.Util;
 import androidx.media3.datasource.okhttp.OkHttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.exoplayer.source.ProgressiveMediaSource;
 
 import java.util.concurrent.CountDownLatch;
@@ -146,16 +147,37 @@ final class VideoThumbnailExoFallback {
     }
 
     @Nullable
-    static Bitmap tryGrabFirstFrame(
+    static Bitmap tryGrabLocalPrefixFrame(
+            @NonNull Context appContext,
+            @NonNull String absolutePath,
+            long durationMs,
+            @NonNull String stablePath,
+            @NonNull VideoThumbnailCancellation cancellation) {
+        String fileUri = Uri.fromFile(new java.io.File(absolutePath)).toString();
+        return tryGrabFirstFrameInternal(
+                appContext,
+                fileUri,
+                durationMs,
+                cancellation,
+                true,
+                true,
+                stablePath);
+    }
+
+    @Nullable
+    private static Bitmap tryGrabFirstFrameInternal(
             @NonNull Context appContext,
             @NonNull String url,
             long durationMs,
             @NonNull VideoThumbnailCancellation cancellation,
             boolean relaxDurationCheck,
-            boolean extendedPrepareTimeout) {
+            boolean extendedPrepareTimeout,
+            @Nullable String reloadEpochStablePath) {
         final String base = VideoThumbnailFetcher.basenameForThumbUrl(url);
         final long outerWaitMs = (extendedPrepareTimeout ? USER_RELOAD_PREPARE_TIMEOUT_MS : PREPARE_TIMEOUT_MS)
-                + RENDER_WAIT_MS + PIXEL_COPY_MS + 5_000L;
+                + (RENDER_WAIT_MS * VideoThumbnailSeekProbe.exoSeekAttemptsMs(
+                        durationMs > 0 ? durationMs : 60_000L, 0).length)
+                + PIXEL_COPY_MS + 5_000L;
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
             VideoThumbnailFetcher.logThumbPipe(appContext, "exoSkip",
                     "basename=" + base + " reason=apiLtN");
@@ -183,7 +205,18 @@ final class VideoThumbnailExoFallback {
         exoH.post(() -> {
             try {
                 result.set(grabOnExoLooper(
-                        appContext, url, durationMs, cancellation, relaxDurationCheck, extendedPrepareTimeout));
+                        appContext, url, durationMs, cancellation, relaxDurationCheck,
+                        extendedPrepareTimeout, false, reloadEpochStablePath));
+                if (result.get() == null && !cancellation.isCancelled()) {
+                    Bitmap primed = grabOnExoLooper(
+                            appContext, url, durationMs, cancellation, relaxDurationCheck,
+                            extendedPrepareTimeout, true, reloadEpochStablePath);
+                    if (primed != null) {
+                        VideoThumbnailFetcher.logThumbPipe(appContext, "exoPlaybackPrimeRetryOk",
+                                "basename=" + base);
+                    }
+                    result.set(primed);
+                }
             } catch (Exception e) {
                 errorMsg.set(e.getMessage());
                 FLog.w(TAG, "Exo thumbnail fallback failed: %s", e.getMessage());
@@ -213,15 +246,30 @@ final class VideoThumbnailExoFallback {
     }
 
     @Nullable
+    static Bitmap tryGrabFirstFrame(
+            @NonNull Context appContext,
+            @NonNull String url,
+            long durationMs,
+            @NonNull VideoThumbnailCancellation cancellation,
+            boolean relaxDurationCheck,
+            boolean extendedPrepareTimeout) {
+        return tryGrabFirstFrameInternal(
+                appContext, url, durationMs, cancellation, relaxDurationCheck, extendedPrepareTimeout, null);
+    }
+
+    @Nullable
     private static Bitmap grabOnExoLooper(
             @NonNull Context appContext,
             @NonNull String url,
             long durationMs,
             @NonNull VideoThumbnailCancellation cancellation,
             boolean relaxDurationCheck,
-            boolean extendedPrepareTimeout) throws Exception {
+            boolean extendedPrepareTimeout,
+            boolean primePlayback,
+            @Nullable String reloadEpochStablePath) throws Exception {
         final String base = VideoThumbnailFetcher.basenameForThumbUrl(url);
-        final String stablePath = stablePathForUrl(url);
+        final boolean localFile = url.regionMatches(true, 0, "file:", 0, 5);
+        final String stablePath = localFile ? url : stablePathForUrl(url);
         ExoPlayer player = null;
         ImageReader reader = null;
         try {
@@ -230,24 +278,34 @@ final class VideoThumbnailExoFallback {
                     .build();
             reader = ImageReader.newInstance(OUT_W, OUT_H, PixelFormat.RGBA_8888, 2);
             player.setVideoSurface(reader.getSurface());
-            player.setPlayWhenReady(false);
+            player.setPlayWhenReady(primePlayback);
             player.setVolume(0f);
 
             androidx.media3.datasource.okhttp.OkHttpDataSource.Factory httpFactory = new androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(OkHttpMediaDataSource.getClient())
                     .setUserAgent(Util.getUserAgent(appContext, appContext.getPackageName()));
+            androidx.media3.datasource.DataSource.Factory dataSourceFactory = localFile
+                    ? new DefaultDataSource.Factory(appContext)
+                    : httpFactory;
             ProgressiveMediaSource.Factory progressiveFactory =
-                    new ProgressiveMediaSource.Factory(httpFactory);
-            String liveUrl = resolveLiveUrlOrNull(stablePath);
-            if (liveUrl == null) {
-                VideoThumbnailFetcher.logThumbPipe(appContext, "exoSkip",
-                        "basename=" + base + " reason=serveNotReady");
-                return null;
+                    new ProgressiveMediaSource.Factory(dataSourceFactory);
+            final String mediaUri;
+            if (localFile) {
+                mediaUri = url;
+            } else {
+                String liveUrl = resolveLiveUrlOrNull(stablePath);
+                if (liveUrl == null) {
+                    VideoThumbnailFetcher.logThumbPipe(appContext, "exoSkip",
+                            "basename=" + base + " reason=serveNotReady");
+                    return null;
+                }
+                mediaUri = liveUrl;
             }
-            MediaItem item = MediaItem.fromUri(liveUrl);
+            MediaItem item = MediaItem.fromUri(mediaUri);
             player.setMediaSource(progressiveFactory.createMediaSource(item));
             VideoThumbnailFetcher.logThumbPipe(appContext, "exoPrepareStart",
                     "basename=" + base + " durationMs=" + durationMs + " relaxDuration=" + relaxDurationCheck
-                            + " " + thumbUrlForSyncLog(liveUrl)
+                            + " primePlayback=" + primePlayback
+                            + " " + thumbUrlForSyncLog(localFile ? url : mediaUri)
                             + " httpEngine=OkHttpDataSource ProgressiveMediaSource"
                             + " extensionRendererMode=on");
             player.prepare();
@@ -264,7 +322,45 @@ final class VideoThumbnailExoFallback {
                     effectiveDurationMs = 60_000L;
                 }
             }
-            long seekMs = resolveExoSeekMs(url, effectiveDurationMs);
+            int reloadEpoch = reloadEpochStablePath != null
+                    ? ThumbnailReloadEpoch.get(ThumbnailStablePath.normalize(reloadEpochStablePath))
+                    : ThumbnailReloadEpoch.getEpochForVideoUrl(url);
+            long[] seekAttemptsMs = VideoThumbnailSeekProbe.exoSeekAttemptsMs(
+                    effectiveDurationMs, reloadEpoch);
+            for (long seekMs : seekAttemptsMs) {
+                if (cancellation.isCancelled()) {
+                    break;
+                }
+                Bitmap bitmap = captureFrameAtSeekMs(
+                        appContext, base, player, reader, cancellation, seekMs);
+                if (bitmap != null) {
+                    VideoThumbnailFetcher.logThumbPipe(appContext, "exoSeekOk",
+                            "basename=" + base + " seekMs=" + seekMs + " epoch=" + reloadEpoch);
+                    return bitmap;
+                }
+            }
+            VideoThumbnailFetcher.logThumbPipe(appContext, "exoAllSeeksFailed",
+                    "basename=" + base + " attempts=" + seekAttemptsMs.length
+                            + " durationMs=" + effectiveDurationMs + " epoch=" + reloadEpoch);
+            return null;
+        } finally {
+            if (player != null) {
+                player.release();
+            }
+            if (reader != null) {
+                reader.close();
+            }
+        }
+    }
+
+    @Nullable
+    private static Bitmap captureFrameAtSeekMs(
+            @NonNull Context appContext,
+            @NonNull String base,
+            @NonNull ExoPlayer player,
+            @NonNull ImageReader reader,
+            @NonNull VideoThumbnailCancellation cancellation,
+            long seekMs) throws InterruptedException {
             CountDownLatch rendered = new CountDownLatch(1);
             Player.Listener listener = new Player.Listener() {
                 @Override
@@ -273,7 +369,7 @@ final class VideoThumbnailExoFallback {
                 }
             };
             player.addListener(listener);
-            player.seekTo(seekMs);
+            player.seekTo(Math.max(0L, seekMs));
             boolean gotFrame = rendered.await(RENDER_WAIT_MS, TimeUnit.MILLISECONDS);
             player.removeListener(listener);
             if (!gotFrame || cancellation.isCancelled()) {
@@ -295,25 +391,18 @@ final class VideoThumbnailExoFallback {
             if (!copied.await(PIXEL_COPY_MS, TimeUnit.MILLISECONDS) || cancellation.isCancelled()) {
                 bitmap.recycle();
                 VideoThumbnailFetcher.logThumbPipe(appContext, "exoPixelCopyTimeout",
-                        "basename=" + base + " cancelled=" + cancellation.isCancelled());
+                        "basename=" + base + " seekMs=" + seekMs
+                                + " cancelled=" + cancellation.isCancelled());
                 return null;
             }
             if (copyResult.get() != PixelCopy.SUCCESS) {
                 FLog.w(TAG, "PixelCopy failed code=%s", copyResult.get());
                 VideoThumbnailFetcher.logThumbPipe(appContext, "exoPixelCopyFail",
-                        "basename=" + base + " code=" + copyResult.get());
+                        "basename=" + base + " seekMs=" + seekMs + " code=" + copyResult.get());
                 bitmap.recycle();
                 return null;
             }
             return bitmap;
-        } finally {
-            if (player != null) {
-                player.release();
-            }
-            if (reader != null) {
-                reader.close();
-            }
-        }
     }
 
     private static boolean waitForReady(
@@ -325,6 +414,8 @@ final class VideoThumbnailExoFallback {
             throws InterruptedException {
         long timeoutMs = extendedPrepareTimeout ? USER_RELOAD_PREPARE_TIMEOUT_MS : PREPARE_TIMEOUT_MS;
         long deadline = System.currentTimeMillis() + timeoutMs;
+        long startedAt = System.currentTimeMillis();
+        boolean primedPlayback = player.getPlayWhenReady();
         while (System.currentTimeMillis() < deadline) {
             if (cancellation.isCancelled()) {
                 VideoThumbnailFetcher.logThumbPipe(appContext, "exoPrepareAbort",
@@ -342,28 +433,19 @@ final class VideoThumbnailExoFallback {
             if (state == Player.STATE_READY) {
                 return true;
             }
+            if (!primedPlayback
+                    && state == Player.STATE_BUFFERING
+                    && player.getBufferedPosition() <= 0L
+                    && System.currentTimeMillis() - startedAt >= 3_000L) {
+                player.setPlayWhenReady(true);
+                primedPlayback = true;
+                VideoThumbnailFetcher.logThumbPipe(appContext, "exoPrimePlaybackForBuffer",
+                        "basename=" + basename + " " + exoPlayerSnapshotForSyncLog(player));
+            }
             Thread.sleep(20L);
         }
         VideoThumbnailFetcher.logThumbPipe(appContext, "exoPrepareTimeout",
                 "basename=" + basename + " " + exoPlayerSnapshotForSyncLog(player));
         return false;
-    }
-
-    private static long resolveExoSeekMs(@NonNull String url, long effectiveDurationMs) {
-        if (effectiveDurationMs <= 0) {
-            return 1L;
-        }
-        int reloadEpoch = ThumbnailReloadEpoch.getEpochForVideoUrl(url);
-        if (reloadEpoch > 0) {
-            long[] seekFractionsMs = new long[] {
-                    0L,
-                    effectiveDurationMs / 10,
-                    effectiveDurationMs / 4,
-                    effectiveDurationMs / 2,
-            };
-            int index = reloadEpoch % seekFractionsMs.length;
-            return Math.max(1L, seekFractionsMs[index]);
-        }
-        return Math.max(1L, effectiveDurationMs / 4);
     }
 }

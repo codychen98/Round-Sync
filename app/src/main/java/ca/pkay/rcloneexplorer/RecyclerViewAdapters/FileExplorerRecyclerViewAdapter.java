@@ -219,7 +219,10 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
         if (showThumbnails && context != null) {
             cancelActiveRetryListener(holder);
-            Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+            if (!ThumbnailReloadPriority.shouldDeferThumbnailLoad(
+                    item.getRemote().getName(), item.getPath())) {
+                Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+            }
         }
 
         if (holder.gridThumbnailContainer != null) {
@@ -373,6 +376,9 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
      */
     private void bindThumbnails(@NonNull ViewHolder holder, @NonNull FileItem item, int position) {
         if (!showThumbnails || context == null) {
+            return;
+        }
+        if (deferExclusiveUserReloadThumbnail(holder, item)) {
             return;
         }
         cancelActiveRetryListener(holder);
@@ -946,6 +952,13 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         }
         int count = last - first + 1;
         if (count > 0) {
+            if (context != null) {
+                SyncLog.info(
+                        context.getApplicationContext(),
+                        "ThumbReloadDbg",
+                        "event=visibleRangeThumbnailRefresh first=" + first
+                                + " count=" + count);
+            }
             notifyItemRangeChanged(first, count, THUMBNAIL_PAYLOAD);
         }
     }
@@ -1050,7 +1063,6 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             if (holder instanceof ViewHolder) {
                 ViewHolder viewHolder = (ViewHolder) holder;
                 cancelActiveRetryListener(viewHolder);
-                Glide.with(context.getApplicationContext()).clear(viewHolder.fileIcon);
                 cancelled++;
             }
         }
@@ -1058,7 +1070,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 context.getApplicationContext(),
                 "ThumbReloadDbg",
                 "event=exclusiveReloadPrepared targetPosition=" + targetPosition
-                        + " cancelledVisibleRows=" + cancelled);
+                        + " pausedVisibleRows=" + cancelled);
     }
 
     private boolean deferExclusiveUserReloadThumbnail(
@@ -1068,18 +1080,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 item.getRemote().getName(), item.getPath())) {
             return false;
         }
-        maybeLogThumbPipelineDbg(item, "deferredForUserReload", true);
+        maybeLogThumbPipelineDbg(item, "deferredForUserReloadKeepDrawable", true);
         cancelActiveRetryListener(holder);
-        Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
-        holder.fileIcon.setImageTintList(holder.defaultIconTint);
-        holder.fileIcon.setImageResource(R.drawable.ic_file);
-        if (item.isDir()) {
-            holder.fileIcon.setVisibility(View.GONE);
-            holder.dirIcon.setVisibility(View.VISIBLE);
-        } else {
-            holder.fileIcon.setVisibility(View.VISIBLE);
-            holder.dirIcon.setVisibility(View.GONE);
-        }
         return true;
     }
 

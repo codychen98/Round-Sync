@@ -133,7 +133,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
                         "basename=" + base + " epoch=" + ThumbnailReloadEpoch.getEpochForVideoUrl(url)
                                 + " " + mgrDebugSuffix());
                 Bitmap exoFrame = VideoThumbnailExoFallback.tryGrabFirstFrame(
-                        appContext, url, 0L, VideoThumbnailFetcher.this, true);
+                        appContext, url, 0L, VideoThumbnailFetcher.this, true, true);
                 if (exoFrame != null) {
                     deliverJpegFrame(exoFrame, base, t0, callback);
                     return;
@@ -167,7 +167,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
                                     + " thresholdBytes=" + LARGE_VIDEO_THRESHOLD_BYTES
                                     + " durationMs=" + durationMs + " " + mgrDebugSuffix());
                     frame = VideoThumbnailExoFallback.tryGrabFirstFrame(
-                            appContext, url, durationMs, VideoThumbnailFetcher.this);
+                            appContext, url, durationMs, VideoThumbnailFetcher.this, true, false);
                     long b2Ms = SystemClock.elapsedRealtime() - tB2;
                     logThumbPipe(appContext, "b2FirstEnd",
                             "basename=" + base + " result=" + (frame != null ? "OK" : "null")
@@ -206,7 +206,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
                         long tExo = SystemClock.elapsedRealtime();
                         int reloadEpoch = ThumbnailReloadEpoch.getEpochForVideoUrl(url);
                         frame = VideoThumbnailExoFallback.tryGrabFirstFrame(
-                                appContext, url, durationMs, VideoThumbnailFetcher.this, reloadEpoch > 0);
+                                appContext, url, durationMs, VideoThumbnailFetcher.this, true, true);
                         long exoMs = SystemClock.elapsedRealtime() - tExo;
                         logThumbPipe(appContext, "exoEnd",
                                 "basename=" + base + " result=" + (frame != null ? "frame" : "null")
@@ -239,7 +239,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
                     logThumbPipe(appContext, "fetcherFailTryExo",
                             "basename=" + base + " " + mgrDebugSuffix());
                     Bitmap exoFrame = VideoThumbnailExoFallback.tryGrabFirstFrame(
-                            appContext, url, 0L, VideoThumbnailFetcher.this, true);
+                            appContext, url, 0L, VideoThumbnailFetcher.this, true, true);
                     if (exoFrame != null) {
                         deliverJpegFrame(exoFrame, base, t0, callback);
                         return;
@@ -325,8 +325,15 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
     private static String frameExtractDebugSuffix(@NonNull MediaMetadataRetriever mmr) {
         String durationStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
         String bitrateStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE);
+        String mime = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE);
+        String codec = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            codec = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_CODEC);
+        }
         return "durationMs=" + (durationStr != null ? durationStr : "?")
-                + " bitrate=" + (bitrateStr != null ? bitrateStr : "?");
+                + " bitrate=" + (bitrateStr != null ? bitrateStr : "?")
+                + " mime=" + (mime != null ? mime : "?")
+                + " codec=" + (codec != null ? codec : "?");
     }
 
     private static long readDurationMsFromRetriever(@NonNull MediaMetadataRetriever mmr) {
