@@ -509,14 +509,22 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 .into(holder.fileIcon);
                     }
                 } else {
-                    startupBranch = "imagePlaceholderNotReady";
-                    startupPolicyAllowed = isHttpThumbnailPolicyAllowedForNetworkThumbnail(item);
-                    maybeLogThumbPipelineDbg(item, "imagePlaceholderNotReady",
-                            isHttpThumbnailPolicyAllowedForNetworkThumbnail(item));
-                    cancelActiveRetryListener(holder);
-                    Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
-                    holder.fileIcon.setImageTintList(holder.defaultIconTint);
-                    holder.fileIcon.setImageResource(R.drawable.ic_file);
+                    if (deferExclusiveUserReloadThumbnail(holder, item)) {
+                        startupBranch = "deferredForUserReload";
+                        startupPolicyAllowed = true;
+                    } else if (bindCachedNetworkThumbnailIfPresent(holder, item, glideOption, "image")) {
+                        startupBranch = "imageCachedWhileServerStarting";
+                        startupPolicyAllowed = true;
+                    } else {
+                        startupBranch = "imagePlaceholderNotReady";
+                        startupPolicyAllowed = isHttpThumbnailPolicyAllowedForNetworkThumbnail(item);
+                        maybeLogThumbPipelineDbg(item, "imagePlaceholderNotReady",
+                                isHttpThumbnailPolicyAllowedForNetworkThumbnail(item));
+                        cancelActiveRetryListener(holder);
+                        Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+                        holder.fileIcon.setImageTintList(holder.defaultIconTint);
+                        holder.fileIcon.setImageResource(R.drawable.ic_file);
+                    }
                 }
             } else if (mimeType.startsWith("video/") && !localLoad) {
                 startupBranch = "videoCandidate";
@@ -580,14 +588,22 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 .into(holder.fileIcon);
                     }
                 } else {
-                    startupBranch = "videoPlaceholderNotReady";
-                    startupPolicyAllowed = isHttpThumbnailPolicyAllowedForNetworkThumbnail(item);
-                    maybeLogThumbPipelineDbg(item, "videoPlaceholderNotReady",
-                            isHttpThumbnailPolicyAllowedForNetworkThumbnail(item));
-                    cancelActiveRetryListener(holder);
-                    Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
-                    holder.fileIcon.setImageTintList(holder.defaultIconTint);
-                    holder.fileIcon.setImageResource(R.drawable.ic_file);
+                    if (deferExclusiveUserReloadThumbnail(holder, item)) {
+                        startupBranch = "deferredForUserReload";
+                        startupPolicyAllowed = true;
+                    } else if (bindCachedNetworkThumbnailIfPresent(holder, item, glideOption, "video")) {
+                        startupBranch = "videoCachedWhileServerStarting";
+                        startupPolicyAllowed = true;
+                    } else {
+                        startupBranch = "videoPlaceholderNotReady";
+                        startupPolicyAllowed = isHttpThumbnailPolicyAllowedForNetworkThumbnail(item);
+                        maybeLogThumbPipelineDbg(item, "videoPlaceholderNotReady",
+                                isHttpThumbnailPolicyAllowedForNetworkThumbnail(item));
+                        cancelActiveRetryListener(holder);
+                        Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+                        holder.fileIcon.setImageTintList(holder.defaultIconTint);
+                        holder.fileIcon.setImageResource(R.drawable.ic_file);
+                    }
                 }
             } else {
                 startupBranch = "plainFileIcon";
@@ -618,6 +634,38 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
         holder.fileIcon.setImageTintList(null);
         holder.fileIcon.setImageResource(placeholderRes);
+    }
+
+    /**
+     * When the thumbnail server is restarting, still show rows that already have a disk-cached thumb.
+     */
+    private boolean bindCachedNetworkThumbnailIfPresent(
+            @NonNull ViewHolder holder,
+            @NonNull FileItem item,
+            @NonNull RequestOptions glideOption,
+            @NonNull String kind) {
+        if (context == null || !isHttpThumbnailPolicyAllowedForNetworkThumbnail(item)) {
+            return false;
+        }
+        if (!ThumbnailCacheIdentity.isPrefetchThumbnailCached(context, item)) {
+            return false;
+        }
+        Object model = ThumbnailCacheIdentity.buildDiskCacheLoadModel(
+                item.getRemote().getName(), item.getPath(), item.getMimeType());
+        if (model == null) {
+            return false;
+        }
+        maybeLogThumbPipelineDbg(item, kind + "CachedWhileServerStarting", true);
+        prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
+        RequestOptions cacheOnly = new RequestOptions()
+                .apply(glideOption)
+                .onlyRetrieveFromCache(true)
+                .skipMemoryCache(true);
+        Glide.with(context.getApplicationContext())
+                .load(model)
+                .apply(cacheOnly)
+                .into(holder.fileIcon);
+        return true;
     }
 
     private void resetRecycledFileIcon(@NonNull ViewHolder holder) {

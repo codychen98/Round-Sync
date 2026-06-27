@@ -93,6 +93,14 @@ public final class ThumbnailCacheIdentity {
     }
 
     @Nullable
+    public static Object buildDiskCacheLoadModel(
+            @NonNull String remoteName,
+            @NonNull String remoteFilePath,
+            @Nullable String mimeType) {
+        return buildCacheProbeModel(remoteName, remoteFilePath, mimeType);
+    }
+
+    @Nullable
     static Object buildCacheProbeModel(
             @NonNull String remoteName,
             @NonNull String remoteFilePath,

@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Base64
 import ca.pkay.rcloneexplorer.Glide.HttpServeThumbnailGlideUrl
 import ca.pkay.rcloneexplorer.Glide.ThumbnailCacheIdentity
+import ca.pkay.rcloneexplorer.Glide.ThumbnailReloadPriority
 import ca.pkay.rcloneexplorer.Glide.VideoThumbnailUrl
 import ca.pkay.rcloneexplorer.Items.FileItem
 import ca.pkay.rcloneexplorer.Items.RemoteItem
@@ -29,6 +30,8 @@ object ThumbnailPrefetchExecutor {
     private const val TAG = "ThumbnailPrefetchExecutor"
     const val THUMB_PORT_PREFERRED = 29_180
     private const val SERVER_READY_TIMEOUT_MS = 45_000L
+    private const val EXCLUSIVE_RELOAD_WAIT_MS = 180_000L
+    private const val EXCLUSIVE_RELOAD_POLL_MS = 250L
     private const val POLL_MS = 100L
     const val PREFETCH_ITEM_TIMEOUT_S = 45L
 
@@ -90,6 +93,11 @@ object ThumbnailPrefetchExecutor {
         try {
             BackgroundMediaPrepWorkTracker.incrementThumbnailPrefetchWork()
             prefetchRefIncremented = true
+            waitWhileExclusiveUserReload(app, isStopped)
+            if (isStopped()) {
+                stoppedEarly = true
+                return FolderPrefetchOutcome(loaded = loaded, total = targets.size, stoppedEarly = true)
+            }
             serveLeaseId = ThumbnailServerManager.getInstance().acquireServeLease(app, remote, port, auth)
             if (serveLeaseId == 0) {
                 SyncLog.error(
@@ -175,6 +183,40 @@ object ThumbnailPrefetchExecutor {
             if (serveLeaseId != 0) {
                 ThumbnailServerManager.getInstance().releaseServeLease(serveLeaseId)
             }
+        }
+    }
+
+    private suspend fun waitWhileExclusiveUserReload(
+        app: Context,
+        isStopped: () -> Boolean,
+    ) {
+        if (!ThumbnailReloadPriority.isExclusiveActive()) {
+            return
+        }
+        SyncLog.info(
+            app,
+            "MediaPrepDbg",
+            "event=prefetchWaitExclusiveReload",
+        )
+        val deadline = System.currentTimeMillis() + EXCLUSIVE_RELOAD_WAIT_MS
+        while (ThumbnailReloadPriority.isExclusiveActive()
+            && !isStopped()
+            && System.currentTimeMillis() < deadline
+        ) {
+            delay(EXCLUSIVE_RELOAD_POLL_MS)
+        }
+        if (ThumbnailReloadPriority.isExclusiveActive()) {
+            SyncLog.info(
+                app,
+                "MediaPrepDbg",
+                "event=prefetchExclusiveReloadTimeout",
+            )
+        } else {
+            SyncLog.info(
+                app,
+                "MediaPrepDbg",
+                "event=prefetchExclusiveReloadEnded",
+            )
         }
     }
 

@@ -35,6 +35,8 @@ final class VideoAv1ThumbnailHelper {
     private static final long RELOAD_CLUSTER_BYTES = 96L * 1024L * 1024L;
     private static final int MAX_CLUSTER_ATTEMPTS = 4;
     private static final int[] GAP_PERCENTILES = {25, 50, 75};
+    private static final long CLUSTER_ALIGN_PROBE_BACK_BYTES = 512L * 1024L;
+    private static final long CLUSTER_ALIGN_PROBE_LENGTH_BYTES = 768L * 1024L;
 
     private VideoAv1ThumbnailHelper() {
     }
@@ -173,6 +175,20 @@ final class VideoAv1ThumbnailHelper {
         boolean gapFallback = false;
         try {
             if (clusterPos >= actualHead && clusterPos < tailRemoteStart) {
+                long alignedPos = alignClusterDownloadStart(
+                        appContext,
+                        url,
+                        clusterPos,
+                        actualHead,
+                        tailRemoteStart);
+                if (alignedPos != clusterPos) {
+                    VideoThumbnailFetcher.logThumbPipe(appContext, "sparseClusterAlign",
+                            "basename=" + base
+                            + " rawStart=" + clusterPos
+                            + " alignedStart=" + alignedPos
+                            + " attempt=" + (attemptIndex + 1));
+                    clusterPos = alignedPos;
+                }
                 long clusterLength = Math.min(clusterCap, tailRemoteStart - clusterPos);
                 if (clusterLength > 0L) {
                     clusterFile = File.createTempFile("thumb_mkv_cluster_", ".bin", appContext.getCacheDir());
@@ -239,6 +255,55 @@ final class VideoAv1ThumbnailHelper {
             return null;
         } finally {
             deleteQuietly(clusterFile);
+        }
+    }
+
+    private static long alignClusterDownloadStart(
+            @NonNull Context appContext,
+            @NonNull String url,
+            long candidatePos,
+            long headBytes,
+            long tailRemoteStart) {
+        if (candidatePos < headBytes || candidatePos >= tailRemoteStart) {
+            return candidatePos;
+        }
+        long probeStart = Math.max(headBytes, candidatePos - CLUSTER_ALIGN_PROBE_BACK_BYTES);
+        long probeLength = Math.min(CLUSTER_ALIGN_PROBE_LENGTH_BYTES, tailRemoteStart - probeStart);
+        if (probeLength <= 0L) {
+            return candidatePos;
+        }
+        File probeFile = null;
+        try {
+            probeFile = File.createTempFile("thumb_mkv_cluster_probe_", ".bin", appContext.getCacheDir());
+            if (!downloadRange(url, probeFile, probeStart, probeLength)) {
+                return candidatePos;
+            }
+            byte[] probeBytes = readProbeBytes(probeFile);
+            return VideoMkvClusterAlign.alignClusterStart(probeBytes, probeStart, candidatePos);
+        } catch (Exception ignored) {
+            return candidatePos;
+        } finally {
+            deleteQuietly(probeFile);
+        }
+    }
+
+    @NonNull
+    private static byte[] readProbeBytes(@NonNull File file) throws java.io.IOException {
+        long length = file.length();
+        if (length <= 0L || length > CLUSTER_ALIGN_PROBE_LENGTH_BYTES) {
+            throw new java.io.IOException("cluster probe too large");
+        }
+        byte[] data = new byte[(int) length];
+        try (java.io.FileInputStream input = new java.io.FileInputStream(file)) {
+            int offset = 0;
+            while (offset < data.length) {
+                int read = input.read(data, offset, data.length - offset);
+                if (read == -1) {
+                    break;
+                }
+                offset += read;
+            }
+            return offset == data.length ? data : java.util.Arrays.copyOf(data, offset);
         }
     }
 
