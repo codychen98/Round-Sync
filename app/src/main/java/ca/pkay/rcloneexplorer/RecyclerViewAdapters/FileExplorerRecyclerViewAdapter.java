@@ -378,7 +378,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         if (!showThumbnails || context == null) {
             return;
         }
-        if (deferExclusiveUserReloadThumbnail(holder, item)) {
+        if (deferExclusiveUserReloadThumbnail(holder, item, null, null)) {
             return;
         }
         cancelActiveRetryListener(holder);
@@ -389,7 +389,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
         if (item.isDir()) {
             if (isNetworkFolderThumbnailCandidate(item) && serverReady) {
-                if (deferExclusiveUserReloadThumbnail(holder, item)) {
+                if (deferExclusiveUserReloadThumbnail(holder, item, null, null)) {
                     startupBranch = "deferredForUserReload";
                     startupPolicyAllowed = true;
                 } else {
@@ -472,7 +472,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
                         holder.fileIcon.setImageTintList(holder.defaultIconTint);
                         holder.fileIcon.setImageResource(R.drawable.ic_file);
-                    } else if (deferExclusiveUserReloadThumbnail(holder, item)) {
+                    } else if (deferExclusiveUserReloadThumbnail(holder, item, glideOption, "image")) {
                         startupBranch = "deferredForUserReload";
                         startupPolicyAllowed = true;
                     } else {
@@ -509,7 +509,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 .into(holder.fileIcon);
                     }
                 } else {
-                    if (deferExclusiveUserReloadThumbnail(holder, item)) {
+                    if (deferExclusiveUserReloadThumbnail(holder, item, glideOption, "image")) {
                         startupBranch = "deferredForUserReload";
                         startupPolicyAllowed = true;
                     } else if (bindCachedNetworkThumbnailIfPresent(holder, item, glideOption, "image")) {
@@ -553,7 +553,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
                         holder.fileIcon.setImageTintList(holder.defaultIconTint);
                         holder.fileIcon.setImageResource(R.drawable.ic_file);
-                    } else if (deferExclusiveUserReloadThumbnail(holder, item)) {
+                    } else if (deferExclusiveUserReloadThumbnail(holder, item, glideOption, "video")) {
                         startupBranch = "deferredForUserReload";
                         startupPolicyAllowed = true;
                     } else {
@@ -588,7 +588,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 .into(holder.fileIcon);
                     }
                 } else {
-                    if (deferExclusiveUserReloadThumbnail(holder, item)) {
+                    if (deferExclusiveUserReloadThumbnail(holder, item, glideOption, "video")) {
                         startupBranch = "deferredForUserReload";
                         startupPolicyAllowed = true;
                     } else if (bindCachedNetworkThumbnailIfPresent(holder, item, glideOption, "video")) {
@@ -1123,10 +1123,27 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
     private boolean deferExclusiveUserReloadThumbnail(
             @NonNull ViewHolder holder,
-            @NonNull FileItem item) {
-        if (!ThumbnailReloadPriority.shouldDeferThumbnailLoad(
-                item.getRemote().getName(), item.getPath())) {
+            @NonNull FileItem item,
+            @Nullable RequestOptions glideOption,
+            @Nullable String cacheKind) {
+        if (!ThumbnailReloadPriority.isExclusiveActive()) {
             return false;
+        }
+        String remoteName = item.getRemote().getName();
+        String path = item.getPath();
+        if (ThumbnailReloadPriority.isExclusiveTarget(remoteName, path)) {
+            maybeLogThumbPipelineDbg(item, "deferredExclusiveTargetPending", true);
+            cancelActiveRetryListener(holder);
+            return true;
+        }
+        if (!ThumbnailReloadPriority.shouldDeferThumbnailLoad(remoteName, path)) {
+            return false;
+        }
+        if (glideOption != null
+                && cacheKind != null
+                && bindCachedNetworkThumbnailIfPresent(holder, item, glideOption, cacheKind)) {
+            maybeLogThumbPipelineDbg(item, "deferredForUserReloadDiskCache", true);
+            return true;
         }
         maybeLogThumbPipelineDbg(item, "deferredForUserReloadKeepDrawable", true);
         cancelActiveRetryListener(holder);

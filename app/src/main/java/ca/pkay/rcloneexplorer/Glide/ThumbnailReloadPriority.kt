@@ -5,8 +5,8 @@ import ca.pkay.rcloneexplorer.util.SyncLog
 
 /**
  * While the user has tapped Reload thumbnail on one file, in-flight video fetchers for other files
- * are cancelled and only that file may load through Glide or [VideoThumbnailFetcher].
- * Visible rows keep their current thumbnail drawable (no placeholder wipe).
+ * are cancelled. Direct extract on the target file runs outside Glide; list rows bind from disk
+ * cache or keep their drawable until reload finishes.
  */
 object ThumbnailReloadPriority {
 

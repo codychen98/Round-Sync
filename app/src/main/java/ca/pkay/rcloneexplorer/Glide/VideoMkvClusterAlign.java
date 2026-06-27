@@ -28,7 +28,24 @@ final class VideoMkvClusterAlign {
         if (lastCluster >= 0L && lastCluster <= candidatePos) {
             return lastCluster;
         }
+        long firstCluster = findFirstClusterOffsetInProbe(probe, probeFileStart);
+        if (firstCluster >= 0L && firstCluster >= candidatePos) {
+            return firstCluster;
+        }
         return candidatePos;
+    }
+
+    /**
+     * @return absolute file offset of the first Cluster marker in the probe slice, or {@code -1}
+     */
+    static long findFirstClusterOffsetInProbe(@NonNull byte[] probe, long probeFileStart) {
+        int limit = probe.length - 3;
+        for (int i = 0; i < limit; i++) {
+            if (isClusterId(probe, i)) {
+                return probeFileStart + i;
+            }
+        }
+        return -1L;
     }
 
     /**
