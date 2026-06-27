@@ -25,8 +25,10 @@ final class VideoAv1ThumbnailHelper {
     private static final int METADATA_KEY_VIDEO_CODEC_MIME_TYPE = 40;
     private static final long DEFAULT_HEAD_BYTES = 48L * 1024L * 1024L;
     private static final long DEFAULT_TAIL_BYTES = 24L * 1024L * 1024L;
+    private static final long DEFAULT_CLUSTER_BYTES = 32L * 1024L * 1024L;
     private static final long RELOAD_HEAD_BYTES = 64L * 1024L * 1024L;
     private static final long RELOAD_TAIL_BYTES = 32L * 1024L * 1024L;
+    private static final long RELOAD_CLUSTER_BYTES = 48L * 1024L * 1024L;
 
     private VideoAv1ThumbnailHelper() {
     }
@@ -70,6 +72,7 @@ final class VideoAv1ThumbnailHelper {
         }
         File headFile = null;
         File tailFile = null;
+        File clusterFile = null;
         try {
             headFile = File.createTempFile("thumb_mkv_head_", ".bin", appContext.getCacheDir());
             tailFile = File.createTempFile("thumb_mkv_tail_", ".bin", appContext.getCacheDir());
@@ -86,17 +89,50 @@ final class VideoAv1ThumbnailHelper {
             }
             long actualHead = headFile.length();
             long actualTail = tailFile.length();
+            long clusterRemoteStart = 0L;
+            long actualCluster = 0L;
+            long clusterCap = userReload ? RELOAD_CLUSTER_BYTES : DEFAULT_CLUSTER_BYTES;
+            long clusterPos = findClusterDownloadStart(tailFile, fileSizeBytes, actualHead, tailRemoteStart);
+            if (clusterPos >= actualHead && clusterPos < tailRemoteStart) {
+                long clusterLength = Math.min(clusterCap, tailRemoteStart - clusterPos);
+                if (clusterLength > 0L) {
+                    clusterFile = File.createTempFile("thumb_mkv_cluster_", ".bin", appContext.getCacheDir());
+                    if (downloadRange(url, clusterFile, clusterPos, clusterLength)) {
+                        clusterRemoteStart = clusterPos;
+                        actualCluster = clusterFile.length();
+                        VideoThumbnailFetcher.logThumbPipe(appContext, "sparseClusterOk",
+                                "basename=" + base
+                                + " clusterStart=" + clusterRemoteStart
+                                + " clusterBytes=" + actualCluster);
+                    } else {
+                        deleteQuietly(clusterFile);
+                        clusterFile = null;
+                        VideoThumbnailFetcher.logThumbPipe(appContext, "sparseClusterFail",
+                                "basename=" + base + " clusterStart=" + clusterPos);
+                    }
+                }
+            } else {
+                VideoThumbnailFetcher.logThumbPipe(appContext, "sparseClusterSkip",
+                        "basename=" + base
+                        + " clusterPos=" + clusterPos
+                        + " headBytes=" + actualHead
+                        + " tailStart=" + tailRemoteStart);
+            }
             VideoThumbnailFetcher.logThumbPipe(appContext, "sparseDownloadOk",
                     "basename=" + base
                     + " totalSize=" + fileSizeBytes
                     + " headBytes=" + actualHead
                     + " tailStart=" + tailRemoteStart
                     + " tailBytes=" + actualTail
+                    + " clusterBytes=" + actualCluster
                     + " userReload=" + userReload);
             VideoMkvSparseDataSource.HeadTailFiles files = new VideoMkvSparseDataSource.HeadTailFiles(
                     fileSizeBytes,
                     headFile,
                     actualHead,
+                    clusterFile,
+                    clusterRemoteStart,
+                    actualCluster,
                     tailFile,
                     tailRemoteStart,
                     actualTail);
@@ -117,7 +153,34 @@ final class VideoAv1ThumbnailHelper {
         } finally {
             deleteQuietly(headFile);
             deleteQuietly(tailFile);
+            deleteQuietly(clusterFile);
         }
+    }
+
+    /**
+     * Cluster byte offset to download, or {@code -1} when head/tail already cover it.
+     */
+    static long findClusterDownloadStart(
+            @NonNull File tailFile,
+            long fileSizeBytes,
+            long headBytes,
+            long tailRemoteStart) {
+        long clusterPos = -1L;
+        try {
+            clusterPos = VideoMkvCueParser.findEarliestClusterPosition(tailFile);
+        } catch (Exception ignored) {
+            clusterPos = -1L;
+        }
+        if (clusterPos < 0L) {
+            clusterPos = fileSizeBytes / 20L;
+        }
+        if (clusterPos < headBytes) {
+            return -1L;
+        }
+        if (clusterPos >= tailRemoteStart) {
+            return -1L;
+        }
+        return clusterPos;
     }
 
     static long readRemoteFileSize(@NonNull String url) {

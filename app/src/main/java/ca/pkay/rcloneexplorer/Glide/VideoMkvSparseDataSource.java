@@ -24,6 +24,10 @@ final class VideoMkvSparseDataSource extends BaseDataSource {
         final long totalSize;
         final File headFile;
         final long headBytes;
+        @Nullable
+        final File clusterFile;
+        final long clusterRemoteStart;
+        final long clusterBytes;
         final File tailFile;
         final long tailRemoteStart;
         final long tailBytes;
@@ -32,12 +36,18 @@ final class VideoMkvSparseDataSource extends BaseDataSource {
                 long totalSize,
                 @NonNull File headFile,
                 long headBytes,
+                @Nullable File clusterFile,
+                long clusterRemoteStart,
+                long clusterBytes,
                 @NonNull File tailFile,
                 long tailRemoteStart,
                 long tailBytes) {
             this.totalSize = totalSize;
             this.headFile = headFile;
             this.headBytes = headBytes;
+            this.clusterFile = clusterFile;
+            this.clusterRemoteStart = clusterRemoteStart;
+            this.clusterBytes = clusterBytes;
             this.tailFile = tailFile;
             this.tailRemoteStart = tailRemoteStart;
             this.tailBytes = tailBytes;
@@ -126,6 +136,13 @@ final class VideoMkvSparseDataSource extends BaseDataSource {
             throws IOException {
         if (position < files.headBytes) {
             return readFromFile(files.headFile, 0L, position, buffer, offset, length);
+        }
+        if (files.clusterFile != null
+                && files.clusterBytes > 0L
+                && position >= files.clusterRemoteStart
+                && position < files.clusterRemoteStart + files.clusterBytes) {
+            long clusterOffset = position - files.clusterRemoteStart;
+            return readFromFile(files.clusterFile, 0L, clusterOffset, buffer, offset, length);
         }
         if (position >= files.tailRemoteStart && position < files.tailRemoteStart + files.tailBytes) {
             long tailOffset = position - files.tailRemoteStart;
