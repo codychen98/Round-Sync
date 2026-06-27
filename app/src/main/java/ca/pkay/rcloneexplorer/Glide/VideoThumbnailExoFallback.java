@@ -263,11 +263,11 @@ final class VideoThumbnailExoFallback {
                 boolean initialPrime = av1Codec;
                 result.set(grabOnExoLooper(
                         appContext, url, durationMs, cancellation, relaxDurationCheck,
-                        extendedPrepareTimeout, initialPrime, reloadEpochStablePath, av1Codec));
+                        extendedPrepareTimeout, initialPrime, reloadEpochStablePath, av1Codec, null));
                 if (result.get() == null && !av1Codec && !cancellation.isCancelled()) {
                     Bitmap primed = grabOnExoLooper(
                             appContext, url, durationMs, cancellation, relaxDurationCheck,
-                            extendedPrepareTimeout, true, reloadEpochStablePath, false);
+                            extendedPrepareTimeout, true, reloadEpochStablePath, false, null);
                     if (primed != null) {
                         VideoThumbnailFetcher.logThumbPipe(appContext, "exoPlaybackPrimeRetryOk",
                                 "basename=" + base);
