@@ -124,27 +124,67 @@ class VideoMkvCueParserTest {
     }
 
     @Test
-    fun findClusterDownloadStart_fallsBackToGapStartWhenCuesMissing() {
+    fun findClusterDownloadStart_fallsBackToGapPercentileWhenCuesMissing() {
         val tail = File.createTempFile("mkv_cue_test_", ".bin")
         val head = File.createTempFile("mkv_head_test_", ".bin")
         try {
             Files.write(tail.toPath(), byteArrayOf(0x01, 0x02, 0x03))
             Files.write(head.toPath(), byteArrayOf())
+            val fileSize = 400_000_000L
             val headBytes = 80_000_000L
+            val tailStart = 360_000_000L
             assertEquals(
-                headBytes,
+                fileSize * 25 / 100,
                 VideoAv1ThumbnailHelper.findClusterDownloadStart(
                     "http://example.test/file.mkv",
                     head,
                     tail,
-                    400_000_000L,
+                    fileSize,
                     headBytes,
-                    360_000_000L,
+                    tailStart,
                 ),
             )
         } finally {
             tail.delete()
             head.delete()
+        }
+    }
+
+    @Test
+    fun findClusterDownloadCandidates_returnsMultipleCuePositionsInGap() {
+        val tail = File.createTempFile("mkv_cue_test_", ".bin")
+        val head = File.createTempFile("mkv_head_test_", ".bin")
+        try {
+            Files.write(tail.toPath(), cuesElement(150_000_000L, 220_000_000L, 90_000_000L))
+            Files.write(head.toPath(), byteArrayOf())
+            val candidates = VideoAv1ThumbnailHelper.findClusterDownloadCandidates(
+                "http://example.test/file.mkv",
+                head,
+                tail,
+                400_000_000L,
+                80_000_000L,
+                360_000_000L,
+            )
+            assertTrue(candidates.contains(90_000_000L))
+            assertTrue(candidates.contains(150_000_000L))
+            assertTrue(candidates.size >= 2)
+        } finally {
+            tail.delete()
+            head.delete()
+        }
+    }
+
+    @Test
+    fun findAllClusterPositions_returnsSortedUniqueCuePositions() {
+        val tail = File.createTempFile("mkv_cue_test_", ".bin")
+        try {
+            Files.write(tail.toPath(), cuesElement(120_000_000L, 60_000_000L, 120_000_000L))
+            assertEquals(
+                listOf(60_000_000L, 120_000_000L),
+                VideoMkvCueParser.findAllClusterPositions(null, tail),
+            )
+        } finally {
+            tail.delete()
         }
     }
 

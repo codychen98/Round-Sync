@@ -11,6 +11,10 @@ import androidx.annotation.Nullable;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 
 import okhttp3.Request;
 import okhttp3.Response;
@@ -25,10 +29,12 @@ final class VideoAv1ThumbnailHelper {
     private static final int METADATA_KEY_VIDEO_CODEC_MIME_TYPE = 40;
     private static final long DEFAULT_HEAD_BYTES = 48L * 1024L * 1024L;
     private static final long DEFAULT_TAIL_BYTES = 24L * 1024L * 1024L;
-    private static final long DEFAULT_CLUSTER_BYTES = 32L * 1024L * 1024L;
+    private static final long DEFAULT_CLUSTER_BYTES = 64L * 1024L * 1024L;
     private static final long RELOAD_HEAD_BYTES = 64L * 1024L * 1024L;
     private static final long RELOAD_TAIL_BYTES = 32L * 1024L * 1024L;
-    private static final long RELOAD_CLUSTER_BYTES = 48L * 1024L * 1024L;
+    private static final long RELOAD_CLUSTER_BYTES = 96L * 1024L * 1024L;
+    private static final int MAX_CLUSTER_ATTEMPTS = 4;
+    private static final int[] GAP_PERCENTILES = {25, 50, 75};
 
     private VideoAv1ThumbnailHelper() {
     }
@@ -72,7 +78,6 @@ final class VideoAv1ThumbnailHelper {
         }
         File headFile = null;
         File tailFile = null;
-        File clusterFile = null;
         try {
             headFile = File.createTempFile("thumb_mkv_head_", ".bin", appContext.getCacheDir());
             tailFile = File.createTempFile("thumb_mkv_tail_", ".bin", appContext.getCacheDir());
@@ -89,16 +94,84 @@ final class VideoAv1ThumbnailHelper {
             }
             long actualHead = headFile.length();
             long actualTail = tailFile.length();
-            long clusterRemoteStart = 0L;
-            long actualCluster = 0L;
             long clusterCap = userReload ? RELOAD_CLUSTER_BYTES : DEFAULT_CLUSTER_BYTES;
-            long clusterPos = findClusterDownloadStart(
+            List<Long> clusterCandidates = findClusterDownloadCandidates(
                     url,
                     headFile,
                     tailFile,
                     fileSizeBytes,
                     actualHead,
                     tailRemoteStart);
+            if (clusterCandidates.isEmpty()) {
+                VideoThumbnailFetcher.logThumbPipe(appContext, "sparseClusterSkip",
+                        "basename=" + base
+                        + " clusterPos=-1"
+                        + " headBytes=" + actualHead
+                        + " tailStart=" + tailRemoteStart);
+            }
+            int attemptLimit = Math.min(clusterCandidates.size(), MAX_CLUSTER_ATTEMPTS);
+            for (int attempt = 0; attempt < attemptLimit; attempt++) {
+                if (cancellation.isCancelled()) {
+                    return null;
+                }
+                long clusterPos = clusterCandidates.get(attempt);
+                Bitmap frame = trySparseExoWithCluster(
+                        appContext,
+                        url,
+                        base,
+                        fileSizeBytes,
+                        durationMs,
+                        cancellation,
+                        stablePath,
+                        userReload,
+                        headFile,
+                        actualHead,
+                        tailFile,
+                        tailRemoteStart,
+                        actualTail,
+                        clusterPos,
+                        clusterCap,
+                        attempt,
+                        clusterCandidates.size());
+                if (frame != null) {
+                    return frame;
+                }
+            }
+            return null;
+        } catch (Exception e) {
+            VideoThumbnailFetcher.logThumbPipe(appContext, "sparseExtractFail",
+                    "basename=" + base + " what=" + e.getClass().getSimpleName());
+            return null;
+        } finally {
+            deleteQuietly(headFile);
+            deleteQuietly(tailFile);
+        }
+    }
+
+    @Nullable
+    private static Bitmap trySparseExoWithCluster(
+            @NonNull Context appContext,
+            @NonNull String url,
+            @NonNull String base,
+            long fileSizeBytes,
+            long durationMs,
+            @NonNull VideoThumbnailCancellation cancellation,
+            @Nullable String stablePath,
+            boolean userReload,
+            @NonNull File headFile,
+            long actualHead,
+            @NonNull File tailFile,
+            long tailRemoteStart,
+            long actualTail,
+            long clusterPos,
+            long clusterCap,
+            int attemptIndex,
+            int candidateCount) {
+        File clusterFile = null;
+        long clusterRemoteStart = 0L;
+        long actualCluster = 0L;
+        boolean gapFallback = false;
+        try {
             if (clusterPos >= actualHead && clusterPos < tailRemoteStart) {
                 long clusterLength = Math.min(clusterCap, tailRemoteStart - clusterPos);
                 if (clusterLength > 0L) {
@@ -106,24 +179,24 @@ final class VideoAv1ThumbnailHelper {
                     if (downloadRange(url, clusterFile, clusterPos, clusterLength)) {
                         clusterRemoteStart = clusterPos;
                         actualCluster = clusterFile.length();
+                        gapFallback = !clusterPosFromCues(headFile, tailFile, clusterPos);
                         VideoThumbnailFetcher.logThumbPipe(appContext, "sparseClusterOk",
                                 "basename=" + base
                                 + " clusterStart=" + clusterRemoteStart
                                 + " clusterBytes=" + actualCluster
-                                + " gapFallback=" + (clusterRemoteStart == actualHead));
+                                + " gapFallback=" + gapFallback
+                                + " attempt=" + (attemptIndex + 1)
+                                + " candidates=" + candidateCount);
                     } else {
                         deleteQuietly(clusterFile);
                         clusterFile = null;
                         VideoThumbnailFetcher.logThumbPipe(appContext, "sparseClusterFail",
-                                "basename=" + base + " clusterStart=" + clusterPos);
+                                "basename=" + base
+                                + " clusterStart=" + clusterPos
+                                + " attempt=" + (attemptIndex + 1));
+                        return null;
                     }
                 }
-            } else {
-                VideoThumbnailFetcher.logThumbPipe(appContext, "sparseClusterSkip",
-                        "basename=" + base
-                        + " clusterPos=" + clusterPos
-                        + " headBytes=" + actualHead
-                        + " tailStart=" + tailRemoteStart);
             }
             VideoThumbnailFetcher.logThumbPipe(appContext, "sparseDownloadOk",
                     "basename=" + base
@@ -132,7 +205,8 @@ final class VideoAv1ThumbnailHelper {
                     + " tailStart=" + tailRemoteStart
                     + " tailBytes=" + actualTail
                     + " clusterBytes=" + actualCluster
-                    + " userReload=" + userReload);
+                    + " userReload=" + userReload
+                    + " attempt=" + (attemptIndex + 1));
             VideoMkvSparseDataSource.HeadTailFiles files = new VideoMkvSparseDataSource.HeadTailFiles(
                     fileSizeBytes,
                     headFile,
@@ -143,8 +217,8 @@ final class VideoAv1ThumbnailHelper {
                     tailFile,
                     tailRemoteStart,
                     actualTail);
-            Uri sparseUri = Uri.parse("sparse-mkv://" + base);
-            return VideoThumbnailExoFallback.tryGrabFromDataSourceFactory(
+            Uri sparseUri = Uri.parse("sparse-mkv://" + base + "#" + attemptIndex);
+            Bitmap frame = VideoThumbnailExoFallback.tryGrabFromDataSourceFactory(
                     appContext,
                     new VideoMkvSparseDataSource.Factory(files, sparseUri),
                     sparseUri.toString(),
@@ -153,15 +227,32 @@ final class VideoAv1ThumbnailHelper {
                     true,
                     userReload,
                     stablePath);
-        } catch (Exception e) {
-            VideoThumbnailFetcher.logThumbPipe(appContext, "sparseExtractFail",
-                    "basename=" + base + " what=" + e.getClass().getSimpleName());
-            return null;
+            if (frame == null) {
+                VideoThumbnailFetcher.logThumbPipe(appContext, "sparseClusterRetry",
+                        "basename=" + base
+                        + " clusterStart=" + clusterRemoteStart
+                        + " attempt=" + (attemptIndex + 1)
+                        + " candidates=" + candidateCount);
+            }
+            return frame;
         } finally {
-            deleteQuietly(headFile);
-            deleteQuietly(tailFile);
             deleteQuietly(clusterFile);
         }
+    }
+
+    private static boolean clusterPosFromCues(
+            @NonNull File headFile,
+            @NonNull File tailFile,
+            long clusterPos) {
+        try {
+            for (long cuePos : VideoMkvCueParser.findAllClusterPositions(headFile, tailFile)) {
+                if (cuePos == clusterPos) {
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
     }
 
     /**
@@ -174,68 +265,207 @@ final class VideoAv1ThumbnailHelper {
             long fileSizeBytes,
             long headBytes,
             long tailRemoteStart) {
-        long clusterPos = -1L;
+        List<Long> candidates = findClusterDownloadCandidates(
+                url,
+                headFile,
+                tailFile,
+                fileSizeBytes,
+                headBytes,
+                tailRemoteStart);
+        return candidates.isEmpty() ? -1L : candidates.get(0);
+    }
+
+    @NonNull
+    static List<Long> findClusterDownloadCandidates(
+            @NonNull String url,
+            @NonNull File headFile,
+            @NonNull File tailFile,
+            long fileSizeBytes,
+            long headBytes,
+            long tailRemoteStart) {
+        Set<Long> ordered = new LinkedHashSet<>();
         try {
-            clusterPos = VideoMkvCueParser.findEarliestClusterPosition(headFile, tailFile);
+            for (long clusterPos : VideoMkvCueParser.findClusterPositionsInGap(
+                    headFile,
+                    tailFile,
+                    headBytes,
+                    tailRemoteStart,
+                    MAX_CLUSTER_ATTEMPTS)) {
+                ordered.add(clusterPos);
+            }
         } catch (Exception ignored) {
-            clusterPos = -1L;
         }
-        if (clusterPos < 0L) {
-            clusterPos = resolveClusterFromCuesSlice(url, headFile, fileSizeBytes, headBytes, tailRemoteStart);
+        long fromCuesSlice = resolveClusterFromCuesSlice(url, headFile, tailFile, fileSizeBytes, headBytes, tailRemoteStart);
+        if (fromCuesSlice >= headBytes && fromCuesSlice < tailRemoteStart) {
+            ordered.add(fromCuesSlice);
         }
-        if (clusterPos < 0L) {
-            clusterPos = headBytes;
+        for (long secondCue : resolveAdditionalClustersFromCuesSlice(
+                url,
+                headFile,
+                tailFile,
+                fileSizeBytes,
+                headBytes,
+                tailRemoteStart,
+                MAX_CLUSTER_ATTEMPTS)) {
+            if (secondCue >= headBytes && secondCue < tailRemoteStart) {
+                ordered.add(secondCue);
+            }
         }
-        if (clusterPos < headBytes) {
-            return -1L;
+        for (long percentilePos : gapPercentileFallbacks(fileSizeBytes, headBytes, tailRemoteStart)) {
+            ordered.add(percentilePos);
         }
-        if (clusterPos >= tailRemoteStart) {
-            return -1L;
+        List<Long> result = new ArrayList<>(ordered);
+        if (result.size() > MAX_CLUSTER_ATTEMPTS) {
+            return result.subList(0, MAX_CLUSTER_ATTEMPTS);
         }
-        return clusterPos;
+        return result;
+    }
+
+    @NonNull
+    private static long[] gapPercentileFallbacks(long fileSizeBytes, long headBytes, long tailRemoteStart) {
+        if (tailRemoteStart <= headBytes || fileSizeBytes <= 0L) {
+            return new long[0];
+        }
+        List<Long> positions = new ArrayList<>(GAP_PERCENTILES.length);
+        for (int percentile : GAP_PERCENTILES) {
+            long pos = (fileSizeBytes * percentile) / 100L;
+            if (pos >= headBytes && pos < tailRemoteStart) {
+                positions.add(pos);
+            }
+        }
+        long[] result = new long[positions.size()];
+        for (int i = 0; i < positions.size(); i++) {
+            result[i] = positions.get(i);
+        }
+        return result;
     }
 
     /**
-     * When Cues starts before the downloaded tail slice, fetch a small Cues range via SeekHead.
+     * When Cues starts before the downloaded tail slice, fetch a Cues range via SeekHead.
      */
     private static long resolveClusterFromCuesSlice(
             @NonNull String url,
             @NonNull File headFile,
+            @NonNull File tailFile,
             long fileSizeBytes,
             long headBytes,
             long tailRemoteStart) {
+        List<Long> fromSlice = resolveClustersFromCuesSlice(
+                url,
+                headFile,
+                tailFile,
+                fileSizeBytes,
+                headBytes,
+                tailRemoteStart,
+                1);
+        return fromSlice.isEmpty() ? -1L : fromSlice.get(0);
+    }
+
+    @NonNull
+    private static List<Long> resolveAdditionalClustersFromCuesSlice(
+            @NonNull String url,
+            @NonNull File headFile,
+            @NonNull File tailFile,
+            long fileSizeBytes,
+            long headBytes,
+            long tailRemoteStart,
+            int maxCount) {
+        List<Long> fromSlice = resolveClustersFromCuesSlice(
+                url,
+                headFile,
+                tailFile,
+                fileSizeBytes,
+                headBytes,
+                tailRemoteStart,
+                maxCount);
+        if (fromSlice.size() <= 1) {
+            return fromSlice;
+        }
+        return fromSlice.subList(1, fromSlice.size());
+    }
+
+    @NonNull
+    private static List<Long> resolveClustersFromCuesSlice(
+            @NonNull String url,
+            @NonNull File headFile,
+            @NonNull File tailFile,
+            long fileSizeBytes,
+            long headBytes,
+            long tailRemoteStart,
+            int maxCount) {
         long cuesOffset;
         try {
             cuesOffset = VideoMkvCueParser.findCuesByteOffset(headFile);
         } catch (Exception ignored) {
-            return -1L;
+            return new ArrayList<>();
         }
-        if (cuesOffset < 0L || cuesOffset >= tailRemoteStart) {
-            return -1L;
+        if (cuesOffset < 0L) {
+            return new ArrayList<>();
+        }
+        long segmentStart;
+        try {
+            segmentStart = VideoMkvCueParser.findSegmentStartOffset(headFile);
+        } catch (Exception ignored) {
+            segmentStart = 0L;
+        }
+        if (cuesOffset >= tailRemoteStart) {
+            return clustersFromTailCuesSlice(tailFile, tailRemoteStart, cuesOffset, segmentStart, headBytes, maxCount);
         }
         long sliceBytes = Math.min(VideoMkvCueParser.cuesSliceBytes(), fileSizeBytes - cuesOffset);
         if (sliceBytes <= 0L) {
-            return -1L;
+            return new ArrayList<>();
         }
         File cuesSlice = null;
         try {
             cuesSlice = File.createTempFile("thumb_mkv_cues_", ".bin", headFile.getParentFile());
             if (!downloadRange(url, cuesSlice, cuesOffset, sliceBytes)) {
-                return -1L;
+                return new ArrayList<>();
             }
-            long segmentStart = VideoMkvCueParser.findSegmentStartOffset(headFile);
             byte[] cuesBytes = readFileBytes(cuesSlice);
-            long clusterPos = VideoMkvCueParser.findEarliestClusterPositionInCuesSlice(
-                    cuesBytes,
-                    segmentStart);
-            if (clusterPos < headBytes || clusterPos >= tailRemoteStart) {
-                return -1L;
+            List<Long> inGap = new ArrayList<>();
+            for (long clusterPos : VideoMkvCueParser.findAllClusterPositionsInCuesSlice(cuesBytes, segmentStart)) {
+                if (clusterPos >= headBytes && clusterPos < tailRemoteStart) {
+                    inGap.add(clusterPos);
+                }
             }
-            return clusterPos;
+            if (inGap.size() > maxCount) {
+                return inGap.subList(0, maxCount);
+            }
+            return inGap;
         } catch (Exception ignored) {
-            return -1L;
+            return new ArrayList<>();
         } finally {
             deleteQuietly(cuesSlice);
+        }
+    }
+
+    @NonNull
+    private static List<Long> clustersFromTailCuesSlice(
+            @NonNull File tailFile,
+            long tailRemoteStart,
+            long cuesOffset,
+            long segmentStart,
+            long headBytes,
+            int maxCount) {
+        try {
+            byte[] tailBytes = readFileBytes(tailFile);
+            int relOffset = (int) (cuesOffset - tailRemoteStart);
+            if (relOffset < 0 || relOffset >= tailBytes.length) {
+                return new ArrayList<>();
+            }
+            byte[] cuesPart = java.util.Arrays.copyOfRange(tailBytes, relOffset, tailBytes.length);
+            List<Long> inGap = new ArrayList<>();
+            for (long clusterPos : VideoMkvCueParser.findAllClusterPositionsInCuesSlice(cuesPart, segmentStart)) {
+                if (clusterPos >= headBytes && clusterPos < tailRemoteStart) {
+                    inGap.add(clusterPos);
+                }
+            }
+            if (inGap.size() > maxCount) {
+                return inGap.subList(0, maxCount);
+            }
+            return inGap;
+        } catch (Exception ignored) {
+            return new ArrayList<>();
         }
     }
 

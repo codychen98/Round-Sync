@@ -6,7 +6,10 @@ import androidx.annotation.Nullable;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * Minimal Matroska Cues scan: finds the earliest {@code CueClusterPosition} so AV1 sparse Exo
@@ -22,7 +25,7 @@ final class VideoMkvCueParser {
     private static final int ID_SEEK_ID = 0x53AB;
     private static final int ID_SEEK_POSITION = 0x53AC;
     private static final int ID_SEGMENT = 0x18538067;
-    private static final long CUES_SLICE_BYTES = 512L * 1024L;
+    private static final long CUES_SLICE_BYTES = 2L * 1024L * 1024L;
 
     private VideoMkvCueParser() {
     }
@@ -80,6 +83,56 @@ final class VideoMkvCueParser {
         return findEarliestClusterPositionInBytes(cuesSlice, segmentStart);
     }
 
+    @NonNull
+    static List<Long> findAllClusterPositionsInCuesSlice(
+            @NonNull byte[] cuesSlice,
+            long segmentStart) {
+        return findAllClusterPositionsInBytes(cuesSlice, segmentStart);
+    }
+
+    /**
+     * All cue cluster byte offsets in the full file, sorted ascending.
+     */
+    @NonNull
+    static List<Long> findAllClusterPositions(@Nullable File headFile, @NonNull File tailFile)
+            throws IOException {
+        long segmentStart = headFile != null ? findSegmentStartOffset(headFile) : 0L;
+        List<Long> positions = new ArrayList<>();
+        positions.addAll(findAllClusterPositionsInBytes(readAllBytes(tailFile), segmentStart));
+        if (headFile != null) {
+            positions.addAll(findAllClusterPositionsInBytes(readAllBytes(headFile), segmentStart));
+        }
+        Collections.sort(positions);
+        return dedupeSorted(positions);
+    }
+
+    /**
+     * Cluster positions inside {@code [headBytes, tailRemoteStart)}, up to {@code maxCount}.
+     */
+    @NonNull
+    static List<Long> findClusterPositionsInGap(
+            @Nullable File headFile,
+            @NonNull File tailFile,
+            long headBytes,
+            long tailRemoteStart,
+            int maxCount) throws IOException {
+        List<Long> inGap = new ArrayList<>();
+        for (long clusterPos : findAllClusterPositions(headFile, tailFile)) {
+            if (clusterPos >= headBytes && clusterPos < tailRemoteStart) {
+                inGap.add(clusterPos);
+            }
+        }
+        if (inGap.size() > maxCount) {
+            return inGap.subList(0, maxCount);
+        }
+        return inGap;
+    }
+
+    static long findEarliestClusterPositionInBytes(@NonNull byte[] data, long segmentStart) {
+        List<Long> all = findAllClusterPositionsInBytes(data, segmentStart);
+        return all.isEmpty() ? -1L : all.get(0);
+    }
+
     private static long findCuesOffsetFromSeekHead(@NonNull byte[] head, long segmentStart) {
         int seekHeadOffset = indexOf(head, new byte[]{(byte) 0x11, (byte) 0x4D, (byte) 0x9B, (byte) 0x74});
         if (seekHeadOffset < 0 || seekHeadOffset + 8 > head.length) {
@@ -132,12 +185,9 @@ final class VideoMkvCueParser {
             if (elementEnd > seekEnd) {
                 break;
             }
-            if (id == ID_SEEK_ID && size == 4L && cursor.position + 4 <= headSafeLength(cursor)) {
-                byte[] seekIdBytes = Arrays.copyOfRange(cursor.data, cursor.position, cursor.position + 4);
-                seeksCues = seekIdBytes[0] == (byte) 0x1C
-                        && seekIdBytes[1] == (byte) 0x53
-                        && seekIdBytes[2] == (byte) 0xBB
-                        && seekIdBytes[3] == (byte) 0x6B;
+            if (id == ID_SEEK_ID && size >= 4L && cursor.position + size <= elementEnd) {
+                byte[] seekIdBytes = Arrays.copyOfRange(cursor.data, cursor.position, cursor.position + (int) size);
+                seeksCues = bytesContainCuesId(seekIdBytes);
             } else if (id == ID_SEEK_POSITION) {
                 seekPosition = cursor.readUnsignedVint((int) size);
             }
@@ -149,23 +199,20 @@ final class VideoMkvCueParser {
         return segmentStart + seekPosition;
     }
 
-    private static int headSafeLength(@NonNull EbmlCursor cursor) {
-        return cursor.data.length;
-    }
-
-    private static long findEarliestClusterPositionInBytes(@NonNull byte[] data, long segmentStart) {
+    @NonNull
+    private static List<Long> findAllClusterPositionsInBytes(@NonNull byte[] data, long segmentStart) {
         int cuesOffset = indexOf(data, new byte[]{(byte) 0x1C, (byte) 0x53, (byte) 0xBB, (byte) 0x6B});
         if (cuesOffset < 0 || cuesOffset + 5 > data.length) {
-            return -1L;
+            return Collections.emptyList();
         }
         EbmlCursor cursor = new EbmlCursor(data);
         cursor.position = cuesOffset + 4;
         long cuesSize = cursor.readElementSize();
         if (cuesSize <= 0L) {
-            return -1L;
+            return Collections.emptyList();
         }
         long cuesEnd = Math.min(cursor.position + cuesSize, data.length);
-        long earliest = Long.MAX_VALUE;
+        List<Long> positions = new ArrayList<>();
         while (cursor.position < cuesEnd) {
             int id = cursor.readElementId();
             if (id < 0) {
@@ -181,13 +228,50 @@ final class VideoMkvCueParser {
             }
             if (id == ID_CUE_POINT) {
                 long clusterPos = readEarliestClusterPositionInCuePoint(cursor, elementEnd, segmentStart);
-                if (clusterPos >= 0L && clusterPos < earliest) {
-                    earliest = clusterPos;
+                if (clusterPos >= 0L) {
+                    positions.add(clusterPos);
                 }
             }
             cursor.position = (int) elementEnd;
         }
-        return earliest == Long.MAX_VALUE ? -1L : earliest;
+        Collections.sort(positions);
+        return dedupeSorted(positions);
+    }
+
+    private static boolean bytesContainCuesId(@NonNull byte[] seekIdBytes) {
+        byte[] cuesId = new byte[]{(byte) 0x1C, (byte) 0x53, (byte) 0xBB, (byte) 0x6B};
+        if (seekIdBytes.length < cuesId.length) {
+            return false;
+        }
+        for (int i = 0; i <= seekIdBytes.length - cuesId.length; i++) {
+            boolean match = true;
+            for (int j = 0; j < cuesId.length; j++) {
+                if (seekIdBytes[i + j] != cuesId[j]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @NonNull
+    private static List<Long> dedupeSorted(@NonNull List<Long> sorted) {
+        if (sorted.isEmpty()) {
+            return sorted;
+        }
+        List<Long> out = new ArrayList<>();
+        long previous = Long.MIN_VALUE;
+        for (long value : sorted) {
+            if (value != previous) {
+                out.add(value);
+                previous = value;
+            }
+        }
+        return out;
     }
 
     private static long readEarliestClusterPositionInCuePoint(
