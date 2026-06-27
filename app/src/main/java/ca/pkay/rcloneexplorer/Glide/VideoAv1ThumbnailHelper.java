@@ -235,6 +235,8 @@ final class VideoAv1ThumbnailHelper {
                         + " candidates=" + candidateCount);
             }
             return frame;
+        } catch (Exception ignored) {
+            return null;
         } finally {
             deleteQuietly(clusterFile);
         }
