@@ -117,8 +117,11 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
             final String base = basenameForThumbUrl(url);
             final String stablePath = ThumbnailStablePath.canonicalFromServeUrl(url);
             if (ThumbnailReloadPriority.shouldDeferVideoFetch(stablePath)) {
-                logThumbPipe(appContext, "fetcherDeferred",
-                        "basename=" + base + " reason=exclusiveUserReload " + mgrDebugSuffix());
+                boolean targetFetch = ThumbnailReloadPriority.isDeferredTargetVideoFetch(stablePath);
+                logThumbPipe(appContext, targetFetch ? "fetcherDeferredTarget" : "fetcherDeferred",
+                        "basename=" + base
+                                + " reason=" + (targetFetch ? "exclusiveTargetDirectExtract" : "exclusiveUserReload")
+                                + " " + mgrDebugSuffix());
                 callback.onLoadFailed(new RuntimeException("Deferred for exclusive user reload"));
                 return;
             }
@@ -322,6 +325,13 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
             if (!target.equals(ThumbnailStablePath.normalize(stablePath))) {
                 fetcher.cancel();
             }
+        }
+    }
+
+    /** Cancels every in-flight fetcher (exclusive reload — direct extract owns the target). */
+    static void cancelAllActive() {
+        for (VideoThumbnailFetcher fetcher : activeFetchers) {
+            fetcher.cancel();
         }
     }
 

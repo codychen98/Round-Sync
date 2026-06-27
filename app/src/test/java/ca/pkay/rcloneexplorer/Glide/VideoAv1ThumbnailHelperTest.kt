@@ -77,4 +77,49 @@ class VideoAv1ThumbnailHelperTest {
             ),
         )
     }
+
+    @Test
+    fun earliestGapCluster_picksEarliestMidGapCandidate() {
+        val headBytes = 48L * 1024L * 1024L
+        val tailStart = 316_243_451L
+        val candidates = listOf(
+            120_000_000L,
+            85_352_318L,
+            200_000_000L,
+        )
+        assertEquals(
+            85_352_318L,
+            VideoAv1ThumbnailHelper.earliestGapCluster(candidates, headBytes, tailStart),
+        )
+    }
+
+    @Test
+    fun earliestGapCluster_skipsPositionsInsideHead() {
+        val headBytes = 48L * 1024L * 1024L
+        val tailStart = 316_243_451L
+        val candidates = listOf(12L * 1024L * 1024L, 85_352_318L)
+        assertEquals(
+            85_352_318L,
+            VideoAv1ThumbnailHelper.earliestGapCluster(candidates, headBytes, tailStart),
+        )
+    }
+
+    @Test
+    fun computeExpandedHeadEnd_imaizuminEp05CandidateExpandsHead() {
+        val actualHead = 64L * 1024L * 1024L
+        val firstCluster = 85_352_318L
+        val clusterCap = 96L * 1024L * 1024L
+        val tailStart = 307_854_843L
+        val maxExpanded = 192L * 1024L * 1024L
+        assertEquals(
+            firstCluster + clusterCap,
+            VideoAv1ThumbnailHelper.computeExpandedHeadEnd(
+                actualHead,
+                firstCluster,
+                clusterCap,
+                tailStart,
+                maxExpanded,
+            ),
+        )
+    }
 }

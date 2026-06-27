@@ -31,9 +31,15 @@ class ThumbnailReloadPriorityTest {
                 "Video Archive/Anime/other.mkv",
             ),
         )
-        assertFalse(ThumbnailReloadPriority.shouldDeferVideoFetch(stable))
+        assertTrue(ThumbnailReloadPriority.shouldDeferVideoFetch(stable))
+        assertTrue(ThumbnailReloadPriority.isDeferredTargetVideoFetch(stable))
         assertTrue(
             ThumbnailReloadPriority.shouldDeferVideoFetch(
+                ThumbnailCacheIdentity.stableServePath(remote, "Video Archive/Anime/other.mkv"),
+            ),
+        )
+        assertFalse(
+            ThumbnailReloadPriority.isDeferredTargetVideoFetch(
                 ThumbnailCacheIdentity.stableServePath(remote, "Video Archive/Anime/other.mkv"),
             ),
         )

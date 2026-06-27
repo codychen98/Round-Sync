@@ -40,25 +40,13 @@ final class VideoThumbnailDirectExtract {
         log(appContext, "directExtractStart basename=" + base + " stablePath=" + stablePath);
 
         String liveUrl = resolveLiveUrl(stablePath, url);
-        Bitmap frame = VideoThumbnailExoFallback.tryGrabFirstFrame(
-                appContext,
-                liveUrl,
-                0L,
-                VideoThumbnailCancellation.NEVER_CANCELLED,
-                true,
-                true);
-        String stage = frame != null ? "exo" : "exoMiss";
-        String codecMime = null;
-        long durationMs = 0L;
-        if (frame == null) {
-            MmrExtractResult mmrResult = extractWithMmr(appContext, liveUrl, stablePath);
-            frame = mmrResult.frame;
-            codecMime = mmrResult.codecMime;
-            durationMs = mmrResult.durationMs;
-            stage = frame != null ? "mmr" : "mmrMiss";
-        }
-        if (frame == null
-                && VideoAv1ThumbnailHelper.isAv1Codec(codecMime)) {
+        MmrExtractResult mmrResult = extractWithMmr(appContext, liveUrl, stablePath);
+        Bitmap frame = mmrResult.frame;
+        String codecMime = mmrResult.codecMime;
+        long durationMs = mmrResult.durationMs;
+        String stage = frame != null ? "mmr" : "mmrMiss";
+
+        if (frame == null && VideoAv1ThumbnailHelper.isAv1Codec(codecMime)) {
             liveUrl = resolveLiveUrl(stablePath, url);
             long fileSizeBytes = VideoAv1ThumbnailHelper.readRemoteFileSize(liveUrl);
             if (fileSizeBytes > 0L) {
@@ -73,7 +61,18 @@ final class VideoThumbnailDirectExtract {
                 stage = frame != null ? "sparseHeadTail" : "sparseHeadTailMiss";
             }
         }
-        if (frame == null) {
+        if (frame == null && !VideoAv1ThumbnailHelper.isAv1Codec(codecMime)) {
+            liveUrl = resolveLiveUrl(stablePath, url);
+            frame = VideoThumbnailExoFallback.tryGrabFirstFrame(
+                    appContext,
+                    liveUrl,
+                    durationMs,
+                    VideoThumbnailCancellation.NEVER_CANCELLED,
+                    true,
+                    true);
+            stage = frame != null ? "exo" : "exoMiss";
+        }
+        if (frame == null && !VideoAv1ThumbnailHelper.isAv1Codec(codecMime)) {
             liveUrl = resolveLiveUrl(stablePath, url);
             frame = extractFromPartialLocalFile(appContext, liveUrl, stablePath);
             stage = frame != null ? "partialFile" : "partialFileMiss";

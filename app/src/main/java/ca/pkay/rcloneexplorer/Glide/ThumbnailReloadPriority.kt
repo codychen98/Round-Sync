@@ -36,10 +36,15 @@ object ThumbnailReloadPriority {
         return !isExclusiveTarget(remoteName, path)
     }
 
+  /** True while exclusive reload is active — direct extract owns the target; others wait. */
     @JvmStatic
-    fun shouldDeferVideoFetch(stablePath: String): Boolean {
+    fun shouldDeferVideoFetch(stablePath: String): Boolean = exclusiveStablePath != null
+
+    /** True when this path is the exclusive reload target (defer Glide; direct extract runs). */
+    @JvmStatic
+    fun isDeferredTargetVideoFetch(stablePath: String): Boolean {
         val target = exclusiveStablePath ?: return false
-        return target != ThumbnailStablePath.normalize(stablePath)
+        return target == ThumbnailStablePath.normalize(stablePath)
     }
 
   /**
@@ -51,7 +56,7 @@ object ThumbnailReloadPriority {
         synchronized(lock) {
             exclusiveStablePath = normalized
         }
-        VideoThumbnailFetcher.cancelAllExcept(normalized)
+        VideoThumbnailFetcher.cancelAllActive()
         log(context, "exclusiveReloadBegin stablePath=$normalized")
     }
 

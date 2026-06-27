@@ -1104,9 +1104,6 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         }
         int cancelled = 0;
         for (int i = first; i <= last; i++) {
-            if (i == targetPosition) {
-                continue;
-            }
             RecyclerView.ViewHolder holder = rv.findViewHolderForAdapterPosition(i);
             if (holder instanceof ViewHolder) {
                 ViewHolder viewHolder = (ViewHolder) holder;
