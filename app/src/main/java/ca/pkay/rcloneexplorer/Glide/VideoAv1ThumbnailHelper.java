@@ -137,9 +137,10 @@ final class VideoAv1ThumbnailHelper {
                         + " firstCluster=" + firstCluster
                         + " headBytes=" + actualHead
                         + " userReload=" + userReload);
-            } else if (firstCluster < 0L && !clusterCandidates.isEmpty()) {
+            } else if (!clusterCandidates.isEmpty()) {
                 long fromCandidates = earliestGapCluster(clusterCandidates, actualHead, tailRemoteStart);
-                if (fromCandidates >= 0L) {
+                if (fromCandidates >= actualHead
+                        && (firstCluster < 0L || firstCluster < actualHead)) {
                     firstCluster = fromCandidates;
                     expandedHead = maybeExpandHeadForFirstCluster(
                             appContext,
@@ -173,7 +174,10 @@ final class VideoAv1ThumbnailHelper {
                         + " firstCluster=" + firstCluster
                         + " headBytes=" + actualHead);
             }
-            if (firstCluster >= 0L && firstCluster < actualHead) {
+            long gapClusterForExpand = earliestGapCluster(clusterCandidates, actualHead, tailRemoteStart);
+            if (firstCluster >= 0L
+                    && firstCluster < actualHead
+                    && gapClusterForExpand < actualHead) {
                 Bitmap expandedOnly = trySparseExoWithCluster(
                         appContext,
                         url,
@@ -468,7 +472,8 @@ final class VideoAv1ThumbnailHelper {
     }
 
     /**
-     * Earliest in-gap cluster for head expansion: scan + cue/candidate discovery unified.
+     * Earliest in-gap cluster for head expansion. Ignores Cluster IDs inside the downloaded
+     * head prefix (e.g. attachments at ~400 KB) — only positions in the head/tail gap count.
      */
     static long discoverFirstClusterForHeadExpand(
             @NonNull Context appContext,
@@ -481,7 +486,7 @@ final class VideoAv1ThumbnailHelper {
             long tailRemoteStart,
             @NonNull List<Long> clusterCandidates) {
         StringBuilder sources = new StringBuilder();
-        long fromScan = findEarliestClusterPosition(
+        long fromGapScan = findEarliestGapClusterPosition(
                 appContext,
                 url,
                 headFile,
@@ -489,8 +494,8 @@ final class VideoAv1ThumbnailHelper {
                 fileSizeBytes,
                 headBytes,
                 tailRemoteStart);
-        if (fromScan >= 0L) {
-            sources.append("scan");
+        if (fromGapScan >= 0L) {
+            sources.append("gapScan");
         }
         long fromCandidates = earliestGapCluster(clusterCandidates, headBytes, tailRemoteStart);
         if (fromCandidates >= 0L) {
@@ -499,19 +504,40 @@ final class VideoAv1ThumbnailHelper {
             }
             sources.append("candidates");
         }
-        long result = -1L;
-        if (fromScan >= 0L) {
-            result = fromScan;
-        }
-        if (fromCandidates >= 0L && (result < 0L || fromCandidates < result)) {
-            result = fromCandidates;
-        }
+        long skippedInHead = findEarliestClusterInHeadPrefix(headFile);
+        long result = resolveHeadExpandCluster(headBytes, tailRemoteStart, fromGapScan, fromCandidates);
         VideoThumbnailFetcher.logThumbPipe(appContext, "firstClusterDiscovery",
                 "basename=" + base
                 + " sources=" + (sources.length() > 0 ? sources : "none")
                 + " result=" + result
-                + " headBytes=" + headBytes);
+                + " headBytes=" + headBytes
+                + (skippedInHead >= 0L ? " skippedInHead=" + skippedInHead : ""));
         return result;
+    }
+
+    /**
+     * Picks the earliest cluster strictly in the head/tail gap for head-prefix expansion.
+     */
+    static long resolveHeadExpandCluster(
+            long headBytes,
+            long tailRemoteStart,
+            long fromGapScan,
+            long fromCandidates) {
+        long result = -1L;
+        if (fromGapScan >= headBytes && fromGapScan < tailRemoteStart) {
+            result = fromGapScan;
+        }
+        if (fromCandidates >= headBytes
+                && fromCandidates < tailRemoteStart
+                && (result < 0L || fromCandidates < result)) {
+            result = fromCandidates;
+        }
+        return result;
+    }
+
+    /** Earliest Cluster in the head prefix (for diagnostics only). */
+    static long findEarliestClusterInHeadPrefix(@NonNull File headFile) {
+        return scanFileForEarliestCluster(headFile, 0L);
     }
 
     static long earliestGapCluster(
@@ -529,7 +555,7 @@ final class VideoAv1ThumbnailHelper {
         return earliest;
     }
 
-    private static long findEarliestClusterPosition(
+    private static long findEarliestGapClusterPosition(
             @NonNull Context appContext,
             @NonNull String url,
             @NonNull File headFile,
@@ -538,11 +564,11 @@ final class VideoAv1ThumbnailHelper {
             long headBytes,
             long tailRemoteStart) {
         long earliest = Long.MAX_VALUE;
-        earliest = minPositive(earliest, scanFileForEarliestCluster(headFile, 0L));
-        earliest = minPositive(earliest, scanFileForEarliestCluster(tailFile, tailRemoteStart));
         try {
             long fromCues = VideoMkvCueParser.findEarliestClusterPosition(headFile, tailFile);
-            earliest = minPositive(earliest, fromCues);
+            if (fromCues >= headBytes && fromCues < tailRemoteStart) {
+                earliest = minPositive(earliest, fromCues);
+            }
         } catch (Exception ignored) {
         }
         long fromCuesSlice = resolveClusterFromCuesSlice(
@@ -552,7 +578,9 @@ final class VideoAv1ThumbnailHelper {
                 fileSizeBytes,
                 headBytes,
                 tailRemoteStart);
-        earliest = minPositive(earliest, fromCuesSlice);
+        if (fromCuesSlice >= headBytes && fromCuesSlice < tailRemoteStart) {
+            earliest = minPositive(earliest, fromCuesSlice);
+        }
         for (long fromProbe : probeGapForEarliestCluster(
                 appContext,
                 url,
@@ -561,7 +589,11 @@ final class VideoAv1ThumbnailHelper {
                 tailRemoteStart)) {
             earliest = minPositive(earliest, fromProbe);
         }
-        return earliest == Long.MAX_VALUE ? -1L : earliest;
+        long resolved = earliest == Long.MAX_VALUE ? -1L : earliest;
+        if (resolved >= 0L && (resolved < headBytes || resolved >= tailRemoteStart)) {
+            return -1L;
+        }
+        return resolved;
     }
 
     private static long minPositive(long current, long candidate) {

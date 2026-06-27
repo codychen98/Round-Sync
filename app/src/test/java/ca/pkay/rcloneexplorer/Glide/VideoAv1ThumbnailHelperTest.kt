@@ -122,4 +122,51 @@ class VideoAv1ThumbnailHelperTest {
             ),
         )
     }
+
+    @Test
+    fun resolveHeadExpandCluster_ignoresInHeadScanPicksGapCandidate() {
+        val headBytes = 64L * 1024L * 1024L
+        val tailStart = 307_854_843L
+        val inHeadFalsePositive = 403_519L
+        val gapCluster = 85_352_318L
+        assertEquals(
+            gapCluster,
+            VideoAv1ThumbnailHelper.resolveHeadExpandCluster(
+                headBytes,
+                tailStart,
+                inHeadFalsePositive,
+                gapCluster,
+            ),
+        )
+    }
+
+    @Test
+    fun resolveHeadExpandCluster_picksEarliestGapPosition() {
+        val headBytes = 64L * 1024L * 1024L
+        val tailStart = 307_854_843L
+        assertEquals(
+            85_352_318L,
+            VideoAv1ThumbnailHelper.resolveHeadExpandCluster(
+                headBytes,
+                tailStart,
+                90_000_000L,
+                85_352_318L,
+            ),
+        )
+    }
+
+    @Test
+    fun resolveHeadExpandCluster_returnsNegativeWhenOnlyInHeadCluster() {
+        val headBytes = 64L * 1024L * 1024L
+        val tailStart = 307_854_843L
+        assertEquals(
+            -1L,
+            VideoAv1ThumbnailHelper.resolveHeadExpandCluster(
+                headBytes,
+                tailStart,
+                403_519L,
+                -1L,
+            ),
+        )
+    }
 }
