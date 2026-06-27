@@ -169,4 +169,20 @@ class VideoAv1ThumbnailHelperTest {
             ),
         )
     }
+
+    @Test
+    fun computeExpandedHeadEnd_imaizuminReloadHeadCoversFirstCluster() {
+        val actualHead = 186_015_614L
+        val firstCluster = 85_352_318L
+        assertEquals(
+            actualHead,
+            VideoAv1ThumbnailHelper.computeExpandedHeadEnd(
+                actualHead,
+                firstCluster,
+                96L * 1024L * 1024L,
+                307_854_843L,
+                192L * 1024L * 1024L,
+            ),
+        )
+    }
 }

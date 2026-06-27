@@ -35,6 +35,8 @@ final class VideoAv1ThumbnailHelper {
     private static final long RELOAD_CLUSTER_BYTES = 96L * 1024L * 1024L;
     private static final long DEFAULT_MAX_EXPANDED_HEAD_BYTES = 160L * 1024L * 1024L;
     private static final long RELOAD_MAX_EXPANDED_HEAD_BYTES = 192L * 1024L * 1024L;
+    /** User reload: download head through tail as one file when sparse Exo cannot prepare. */
+    private static final long RELOAD_MAX_CONTIGUOUS_PREFIX_BYTES = 340L * 1024L * 1024L;
     private static final int MAX_CLUSTER_ATTEMPTS = 4;
     private static final int[] GAP_PERCENTILES = {25, 50, 75};
     private static final int[] GAP_CLUSTER_PROBE_PERCENTILES = {10, 25, 50};
@@ -174,6 +176,33 @@ final class VideoAv1ThumbnailHelper {
                         + " firstCluster=" + firstCluster
                         + " headBytes=" + actualHead);
             }
+            if (expandedHead.expanded) {
+                clusterCandidates = findClusterDownloadCandidates(
+                        url,
+                        headFile,
+                        tailFile,
+                        fileSizeBytes,
+                        actualHead,
+                        tailRemoteStart);
+                Bitmap expandedFrame = tryExpandedHeadExoPaths(
+                        appContext,
+                        url,
+                        base,
+                        fileSizeBytes,
+                        durationMs,
+                        cancellation,
+                        stablePath,
+                        userReload,
+                        headFile,
+                        actualHead,
+                        tailFile,
+                        tailRemoteStart,
+                        actualTail,
+                        clusterCap);
+                if (expandedFrame != null) {
+                    return expandedFrame;
+                }
+            }
             long gapClusterForExpand = earliestGapCluster(clusterCandidates, actualHead, tailRemoteStart);
             if (firstCluster >= 0L
                     && firstCluster < actualHead
@@ -240,6 +269,20 @@ final class VideoAv1ThumbnailHelper {
                     return frame;
                 }
             }
+            if (userReload) {
+                Bitmap contiguous = tryGrabFromContiguousPrefix(
+                        appContext,
+                        url,
+                        base,
+                        fileSizeBytes,
+                        durationMs,
+                        cancellation,
+                        stablePath,
+                        Math.min(tailRemoteStart + actualTail, fileSizeBytes));
+                if (contiguous != null) {
+                    return contiguous;
+                }
+            }
             return null;
         } catch (Exception e) {
             VideoThumbnailFetcher.logThumbPipe(appContext, "sparseExtractFail",
@@ -248,6 +291,128 @@ final class VideoAv1ThumbnailHelper {
         } finally {
             deleteQuietly(headFile);
             deleteQuietly(tailFile);
+        }
+    }
+
+    /**
+     * After head expands through the first gap cluster, try Exo on the contiguous expanded head
+     * file and on head+tail sparse (no mid-gap cluster) before separate cluster downloads.
+     */
+    @Nullable
+    private static Bitmap tryExpandedHeadExoPaths(
+            @NonNull Context appContext,
+            @NonNull String url,
+            @NonNull String base,
+            long fileSizeBytes,
+            long durationMs,
+            @NonNull VideoThumbnailCancellation cancellation,
+            @Nullable String stablePath,
+            boolean userReload,
+            @NonNull File headFile,
+            long actualHead,
+            @NonNull File tailFile,
+            long tailRemoteStart,
+            long actualTail,
+            long clusterCap) {
+        String epochPath = stablePath != null ? stablePath : url;
+        Bitmap localFrame = VideoThumbnailExoFallback.tryGrabLocalPrefixFrame(
+                appContext,
+                headFile.getAbsolutePath(),
+                durationMs,
+                epochPath,
+                cancellation);
+        if (localFrame != null) {
+            VideoThumbnailFetcher.logThumbPipe(appContext, "sparseExpandedHeadLocalExoOk",
+                    "basename=" + base + " headBytes=" + actualHead + " userReload=" + userReload);
+            return localFrame;
+        }
+        VideoThumbnailFetcher.logThumbPipe(appContext, "sparseExpandedHeadLocalExoMiss",
+                "basename=" + base + " headBytes=" + actualHead + " userReload=" + userReload);
+        if (cancellation.isCancelled()) {
+            return null;
+        }
+        Bitmap headTailOnly = trySparseExoWithCluster(
+                appContext,
+                url,
+                base,
+                fileSizeBytes,
+                durationMs,
+                cancellation,
+                stablePath,
+                userReload,
+                headFile,
+                actualHead,
+                tailFile,
+                tailRemoteStart,
+                actualTail,
+                -1L,
+                clusterCap,
+                0,
+                1);
+        if (headTailOnly != null) {
+            VideoThumbnailFetcher.logThumbPipe(appContext, "sparseHeadTailOnlyExoOk",
+                    "basename=" + base + " headBytes=" + actualHead + " userReload=" + userReload);
+            return headTailOnly;
+        }
+        VideoThumbnailFetcher.logThumbPipe(appContext, "sparseHeadTailOnlyExoMiss",
+                "basename=" + base + " headBytes=" + actualHead + " userReload=" + userReload);
+        return null;
+    }
+
+    /**
+     * User reload last resort: one contiguous prefix (head + gap + tail) so Exo demuxes without
+     * sparse EOF between expanded head and Cues in tail.
+     */
+    @Nullable
+    private static Bitmap tryGrabFromContiguousPrefix(
+            @NonNull Context appContext,
+            @NonNull String url,
+            @NonNull String base,
+            long fileSizeBytes,
+            long durationMs,
+            @NonNull VideoThumbnailCancellation cancellation,
+            @Nullable String stablePath,
+            long prefixEndBytes) {
+        if (cancellation.isCancelled() || fileSizeBytes <= 0L) {
+            return null;
+        }
+        long prefixBytes = Math.min(prefixEndBytes, fileSizeBytes);
+        prefixBytes = Math.min(prefixBytes, RELOAD_MAX_CONTIGUOUS_PREFIX_BYTES);
+        if (prefixBytes <= 0L) {
+            return null;
+        }
+        File prefixFile = null;
+        try {
+            prefixFile = File.createTempFile("thumb_mkv_prefix_", ".bin", appContext.getCacheDir());
+            if (!downloadRange(url, prefixFile, 0L, prefixBytes)) {
+                VideoThumbnailFetcher.logThumbPipe(appContext, "sparseContiguousPrefixFail",
+                        "basename=" + base + " prefixBytes=" + prefixBytes);
+                return null;
+            }
+            long actualPrefix = prefixFile.length();
+            VideoThumbnailFetcher.logThumbPipe(appContext, "sparseContiguousPrefixOk",
+                    "basename=" + base + " prefixBytes=" + actualPrefix);
+            String epochPath = stablePath != null ? stablePath : url;
+            Bitmap frame = VideoThumbnailExoFallback.tryGrabLocalPrefixFrame(
+                    appContext,
+                    prefixFile.getAbsolutePath(),
+                    durationMs,
+                    epochPath,
+                    cancellation);
+            if (frame != null) {
+                VideoThumbnailFetcher.logThumbPipe(appContext, "sparseContiguousPrefixExoOk",
+                        "basename=" + base + " prefixBytes=" + actualPrefix);
+                return frame;
+            }
+            VideoThumbnailFetcher.logThumbPipe(appContext, "sparseContiguousPrefixExoMiss",
+                    "basename=" + base + " prefixBytes=" + actualPrefix);
+            return null;
+        } catch (Exception e) {
+            VideoThumbnailFetcher.logThumbPipe(appContext, "sparseContiguousPrefixFail",
+                    "basename=" + base + " what=" + e.getClass().getSimpleName());
+            return null;
+        } finally {
+            deleteQuietly(prefixFile);
         }
     }
 
