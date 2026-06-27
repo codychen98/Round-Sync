@@ -48,9 +48,30 @@ final class VideoThumbnailDirectExtract {
                 true,
                 true);
         String stage = frame != null ? "exo" : "exoMiss";
+        String codecMime = null;
+        long durationMs = 0L;
         if (frame == null) {
-            frame = extractWithMmr(appContext, liveUrl, stablePath);
+            MmrExtractResult mmrResult = extractWithMmr(appContext, liveUrl, stablePath);
+            frame = mmrResult.frame;
+            codecMime = mmrResult.codecMime;
+            durationMs = mmrResult.durationMs;
             stage = frame != null ? "mmr" : "mmrMiss";
+        }
+        if (frame == null
+                && VideoAv1ThumbnailHelper.isAv1Codec(codecMime)) {
+            liveUrl = resolveLiveUrl(stablePath, url);
+            long fileSizeBytes = VideoAv1ThumbnailHelper.readRemoteFileSize(liveUrl);
+            if (fileSizeBytes > 0L) {
+                frame = VideoAv1ThumbnailHelper.tryGrabFromSparseHeadTail(
+                        appContext,
+                        liveUrl,
+                        fileSizeBytes,
+                        durationMs,
+                        VideoThumbnailCancellation.NEVER_CANCELLED,
+                        stablePath,
+                        true);
+                stage = frame != null ? "sparseHeadTail" : "sparseHeadTailMiss";
+            }
         }
         if (frame == null) {
             liveUrl = resolveLiveUrl(stablePath, url);
@@ -72,17 +93,36 @@ final class VideoThumbnailDirectExtract {
         }
     }
 
-    @Nullable
-    private static Bitmap extractWithMmr(@NonNull Context appContext, @NonNull String url, @NonNull String stablePath) {
+    private static final class MmrExtractResult {
+        @Nullable
+        final Bitmap frame;
+        final long durationMs;
+        @Nullable
+        final String codecMime;
+
+        MmrExtractResult(@Nullable Bitmap frame, long durationMs, @Nullable String codecMime) {
+            this.frame = frame;
+            this.durationMs = durationMs;
+            this.codecMime = codecMime;
+        }
+    }
+
+    @NonNull
+    private static MmrExtractResult extractWithMmr(
+            @NonNull Context appContext,
+            @NonNull String url,
+            @NonNull String stablePath) {
         MediaMetadataRetriever mmr = new MediaMetadataRetriever();
         OkHttpMediaDataSource dataSource = new OkHttpMediaDataSource(url, appContext);
         try {
             mmr.setDataSource(dataSource);
             long durationMs = readDurationMs(mmr);
+            String codecMime = VideoAv1ThumbnailHelper.readVideoCodecMime(mmr);
             int reloadEpoch = ThumbnailReloadEpoch.get(ThumbnailStablePath.normalize(stablePath));
-            return extractFrameWithReloadOffsets(mmr, durationMs, reloadEpoch);
+            Bitmap frame = extractFrameWithReloadOffsets(mmr, durationMs, reloadEpoch);
+            return new MmrExtractResult(frame, durationMs, codecMime);
         } catch (Exception ignored) {
-            return null;
+            return new MmrExtractResult(null, 0L, null);
         } finally {
             try {
                 mmr.release();

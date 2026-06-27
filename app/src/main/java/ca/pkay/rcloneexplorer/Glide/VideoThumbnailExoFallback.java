@@ -258,6 +258,56 @@ final class VideoThumbnailExoFallback {
     }
 
     @Nullable
+    static Bitmap tryGrabFromDataSourceFactory(
+            @NonNull Context appContext,
+            @NonNull androidx.media3.datasource.DataSource.Factory dataSourceFactory,
+            @NonNull String logUrl,
+            long durationMs,
+            @NonNull VideoThumbnailCancellation cancellation,
+            boolean relaxDurationCheck,
+            boolean extendedPrepareTimeout,
+            @Nullable String reloadEpochStablePath) {
+        final String base = VideoThumbnailFetcher.basenameForThumbUrl(logUrl);
+        final long outerWaitMs = (extendedPrepareTimeout ? USER_RELOAD_PREPARE_TIMEOUT_MS : PREPARE_TIMEOUT_MS)
+                + (RENDER_WAIT_MS * VideoThumbnailSeekProbe.exoSeekAttemptsMs(
+                        durationMs > 0 ? durationMs : 60_000L, 0).length)
+                + PIXEL_COPY_MS + 5_000L;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            VideoThumbnailFetcher.logThumbPipe(appContext, "exoSkip",
+                    "basename=" + base + " reason=apiLtN");
+            return null;
+        }
+        if (cancellation.isCancelled()) {
+            return null;
+        }
+        Handler exoH = exoThumbHandler();
+        CountDownLatch done = new CountDownLatch(1);
+        AtomicReference<Bitmap> result = new AtomicReference<>();
+        exoH.post(() -> {
+            try {
+                result.set(grabOnExoLooper(
+                        appContext, logUrl, durationMs, cancellation, relaxDurationCheck,
+                        extendedPrepareTimeout, true, reloadEpochStablePath, dataSourceFactory));
+            } catch (Exception e) {
+                FLog.w(TAG, "Sparse Exo thumbnail failed: %s", e.getMessage());
+            } finally {
+                done.countDown();
+            }
+        });
+        try {
+            if (!done.await(outerWaitMs, TimeUnit.MILLISECONDS)) {
+                VideoThumbnailFetcher.logThumbPipe(appContext, "exoOuterTimeout",
+                        "basename=" + base + " waitMs=" + outerWaitMs + " source=sparseMkv");
+                return null;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+        return result.get();
+    }
+
+    @Nullable
     private static Bitmap grabOnExoLooper(
             @NonNull Context appContext,
             @NonNull String url,
@@ -267,9 +317,27 @@ final class VideoThumbnailExoFallback {
             boolean extendedPrepareTimeout,
             boolean primePlayback,
             @Nullable String reloadEpochStablePath) throws Exception {
+        return grabOnExoLooper(
+                appContext, url, durationMs, cancellation, relaxDurationCheck, extendedPrepareTimeout,
+                primePlayback, reloadEpochStablePath, null);
+    }
+
+    @Nullable
+    private static Bitmap grabOnExoLooper(
+            @NonNull Context appContext,
+            @NonNull String url,
+            long durationMs,
+            @NonNull VideoThumbnailCancellation cancellation,
+            boolean relaxDurationCheck,
+            boolean extendedPrepareTimeout,
+            boolean primePlayback,
+            @Nullable String reloadEpochStablePath,
+            @Nullable androidx.media3.datasource.DataSource.Factory overrideDataSourceFactory)
+            throws Exception {
         final String base = VideoThumbnailFetcher.basenameForThumbUrl(url);
         final boolean localFile = url.regionMatches(true, 0, "file:", 0, 5);
-        final String stablePath = localFile ? url : stablePathForUrl(url);
+        final boolean sparseSource = overrideDataSourceFactory != null;
+        final String stablePath = localFile || sparseSource ? url : stablePathForUrl(url);
         ExoPlayer player = null;
         ImageReader reader = null;
         try {
@@ -278,18 +346,24 @@ final class VideoThumbnailExoFallback {
                     .build();
             reader = ImageReader.newInstance(OUT_W, OUT_H, PixelFormat.RGBA_8888, 2);
             player.setVideoSurface(reader.getSurface());
-            player.setPlayWhenReady(primePlayback);
+            player.setPlayWhenReady(primePlayback || sparseSource);
             player.setVolume(0f);
 
-            androidx.media3.datasource.okhttp.OkHttpDataSource.Factory httpFactory = new androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(OkHttpMediaDataSource.getClient())
-                    .setUserAgent(Util.getUserAgent(appContext, appContext.getPackageName()));
-            androidx.media3.datasource.DataSource.Factory dataSourceFactory = localFile
-                    ? new DefaultDataSource.Factory(appContext)
-                    : httpFactory;
+            androidx.media3.datasource.DataSource.Factory dataSourceFactory;
+            if (overrideDataSourceFactory != null) {
+                dataSourceFactory = overrideDataSourceFactory;
+            } else {
+                androidx.media3.datasource.okhttp.OkHttpDataSource.Factory httpFactory =
+                        new androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(OkHttpMediaDataSource.getClient())
+                                .setUserAgent(Util.getUserAgent(appContext, appContext.getPackageName()));
+                dataSourceFactory = localFile
+                        ? new DefaultDataSource.Factory(appContext)
+                        : httpFactory;
+            }
             ProgressiveMediaSource.Factory progressiveFactory =
                     new ProgressiveMediaSource.Factory(dataSourceFactory);
             final String mediaUri;
-            if (localFile) {
+            if (localFile || sparseSource) {
                 mediaUri = url;
             } else {
                 String liveUrl = resolveLiveUrlOrNull(stablePath);
@@ -302,11 +376,14 @@ final class VideoThumbnailExoFallback {
             }
             MediaItem item = MediaItem.fromUri(mediaUri);
             player.setMediaSource(progressiveFactory.createMediaSource(item));
+            String engine = sparseSource
+                    ? "SparseMkvDataSource ProgressiveMediaSource"
+                    : "OkHttpDataSource ProgressiveMediaSource";
             VideoThumbnailFetcher.logThumbPipe(appContext, "exoPrepareStart",
                     "basename=" + base + " durationMs=" + durationMs + " relaxDuration=" + relaxDurationCheck
-                            + " primePlayback=" + primePlayback
-                            + " " + thumbUrlForSyncLog(localFile ? url : mediaUri)
-                            + " httpEngine=OkHttpDataSource ProgressiveMediaSource"
+                            + " primePlayback=" + (primePlayback || sparseSource)
+                            + " " + thumbUrlForSyncLog(localFile || sparseSource ? url : mediaUri)
+                            + " httpEngine=" + engine
                             + " extensionRendererMode=on");
             player.prepare();
 

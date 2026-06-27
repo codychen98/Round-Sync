@@ -161,6 +161,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
                 mmr.setDataSource(dataSource);
                 final String debugSuffix = frameExtractDebugSuffix(mmr);
                 final long durationMs = readDurationMsFromRetriever(mmr);
+                final String codecMime = VideoAv1ThumbnailHelper.readVideoCodecMime(mmr);
                 Bitmap frame = null;
                 boolean exoAttempted = false;
 
@@ -207,7 +208,26 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
                     } catch (Exception ignore) {
                     }
                     dataSourceClosed = true;
-                    if (!cancelled && !exoAttempted) {
+                    if (!cancelled
+                            && frame == null
+                            && VideoAv1ThumbnailHelper.isAv1Codec(codecMime)
+                            && fileSizeBytes > 0L) {
+                        long tSparse = SystemClock.elapsedRealtime();
+                        frame = VideoAv1ThumbnailHelper.tryGrabFromSparseHeadTail(
+                                appContext,
+                                url,
+                                fileSizeBytes,
+                                durationMs,
+                                VideoThumbnailFetcher.this,
+                                stablePath,
+                                false);
+                        logThumbPipe(appContext, "sparseExoEnd",
+                                "basename=" + base + " result=" + (frame != null ? "frame" : "null")
+                                        + " cancelled=" + cancelled
+                                        + " sparseMs=" + (SystemClock.elapsedRealtime() - tSparse)
+                                        + " " + mgrDebugSuffix());
+                    }
+                    if (!cancelled && frame == null && !exoAttempted) {
                         long tExo = SystemClock.elapsedRealtime();
                         int reloadEpoch = ThumbnailReloadEpoch.getEpochForVideoUrl(url);
                         frame = VideoThumbnailExoFallback.tryGrabFirstFrame(
@@ -331,8 +351,8 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
         String durationStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
         String bitrateStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE);
         String mime = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE);
-        String codec = null;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        String codec = VideoAv1ThumbnailHelper.readVideoCodecMime(mmr);
+        if (codec == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             codec = mmr.extractMetadata(METADATA_KEY_VIDEO_CODEC_MIME_TYPE);
         }
         return "durationMs=" + (durationStr != null ? durationStr : "?")
