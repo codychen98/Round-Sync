@@ -92,7 +92,13 @@ final class VideoAv1ThumbnailHelper {
             long clusterRemoteStart = 0L;
             long actualCluster = 0L;
             long clusterCap = userReload ? RELOAD_CLUSTER_BYTES : DEFAULT_CLUSTER_BYTES;
-            long clusterPos = findClusterDownloadStart(tailFile, fileSizeBytes, actualHead, tailRemoteStart);
+            long clusterPos = findClusterDownloadStart(
+                    url,
+                    headFile,
+                    tailFile,
+                    fileSizeBytes,
+                    actualHead,
+                    tailRemoteStart);
             if (clusterPos >= actualHead && clusterPos < tailRemoteStart) {
                 long clusterLength = Math.min(clusterCap, tailRemoteStart - clusterPos);
                 if (clusterLength > 0L) {
@@ -103,7 +109,8 @@ final class VideoAv1ThumbnailHelper {
                         VideoThumbnailFetcher.logThumbPipe(appContext, "sparseClusterOk",
                                 "basename=" + base
                                 + " clusterStart=" + clusterRemoteStart
-                                + " clusterBytes=" + actualCluster);
+                                + " clusterBytes=" + actualCluster
+                                + " gapFallback=" + (clusterRemoteStart == actualHead));
                     } else {
                         deleteQuietly(clusterFile);
                         clusterFile = null;
@@ -161,18 +168,23 @@ final class VideoAv1ThumbnailHelper {
      * Cluster byte offset to download, or {@code -1} when head/tail already cover it.
      */
     static long findClusterDownloadStart(
+            @NonNull String url,
+            @NonNull File headFile,
             @NonNull File tailFile,
             long fileSizeBytes,
             long headBytes,
             long tailRemoteStart) {
         long clusterPos = -1L;
         try {
-            clusterPos = VideoMkvCueParser.findEarliestClusterPosition(tailFile);
+            clusterPos = VideoMkvCueParser.findEarliestClusterPosition(headFile, tailFile);
         } catch (Exception ignored) {
             clusterPos = -1L;
         }
         if (clusterPos < 0L) {
-            clusterPos = fileSizeBytes / 20L;
+            clusterPos = resolveClusterFromCuesSlice(url, headFile, fileSizeBytes, headBytes, tailRemoteStart);
+        }
+        if (clusterPos < 0L) {
+            clusterPos = headBytes;
         }
         if (clusterPos < headBytes) {
             return -1L;
@@ -181,6 +193,70 @@ final class VideoAv1ThumbnailHelper {
             return -1L;
         }
         return clusterPos;
+    }
+
+    /**
+     * When Cues starts before the downloaded tail slice, fetch a small Cues range via SeekHead.
+     */
+    private static long resolveClusterFromCuesSlice(
+            @NonNull String url,
+            @NonNull File headFile,
+            long fileSizeBytes,
+            long headBytes,
+            long tailRemoteStart) {
+        long cuesOffset;
+        try {
+            cuesOffset = VideoMkvCueParser.findCuesByteOffset(headFile);
+        } catch (Exception ignored) {
+            return -1L;
+        }
+        if (cuesOffset < 0L || cuesOffset >= tailRemoteStart) {
+            return -1L;
+        }
+        long sliceBytes = Math.min(VideoMkvCueParser.cuesSliceBytes(), fileSizeBytes - cuesOffset);
+        if (sliceBytes <= 0L) {
+            return -1L;
+        }
+        File cuesSlice = null;
+        try {
+            cuesSlice = File.createTempFile("thumb_mkv_cues_", ".bin", headFile.getParentFile());
+            if (!downloadRange(url, cuesSlice, cuesOffset, sliceBytes)) {
+                return -1L;
+            }
+            long segmentStart = VideoMkvCueParser.findSegmentStartOffset(headFile);
+            byte[] cuesBytes = readFileBytes(cuesSlice);
+            long clusterPos = VideoMkvCueParser.findEarliestClusterPositionInCuesSlice(
+                    cuesBytes,
+                    segmentStart);
+            if (clusterPos < headBytes || clusterPos >= tailRemoteStart) {
+                return -1L;
+            }
+            return clusterPos;
+        } catch (Exception ignored) {
+            return -1L;
+        } finally {
+            deleteQuietly(cuesSlice);
+        }
+    }
+
+    @NonNull
+    private static byte[] readFileBytes(@NonNull File file) throws java.io.IOException {
+        long length = file.length();
+        if (length <= 0L || length > 64L * 1024L * 1024L) {
+            throw new java.io.IOException("cues slice too large");
+        }
+        byte[] data = new byte[(int) length];
+        try (java.io.FileInputStream input = new java.io.FileInputStream(file)) {
+            int offset = 0;
+            while (offset < data.length) {
+                int read = input.read(data, offset, data.length - offset);
+                if (read == -1) {
+                    break;
+                }
+                offset += read;
+            }
+            return offset == data.length ? data : java.util.Arrays.copyOf(data, offset);
+        }
     }
 
     static long readRemoteFileSize(@NonNull String url) {

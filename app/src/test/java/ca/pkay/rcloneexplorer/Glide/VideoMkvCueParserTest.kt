@@ -21,6 +21,25 @@ class VideoMkvCueParserTest {
     }
 
     @Test
+    fun findEarliestClusterPosition_appliesSegmentOffset() {
+        val segmentStart = 1_000L
+        val clusterInSegment = 75_000_000L
+        val head = File.createTempFile("mkv_head_test_", ".bin")
+        val tail = File.createTempFile("mkv_cue_test_", ".bin")
+        try {
+            Files.write(head.toPath(), ByteArray(segmentStart.toInt()) { 0x00 } + segmentElement())
+            Files.write(tail.toPath(), cuesElement(clusterInSegment))
+            assertEquals(
+                segmentStart + clusterInSegment,
+                VideoMkvCueParser.findEarliestClusterPosition(head, tail),
+            )
+        } finally {
+            head.delete()
+            tail.delete()
+        }
+    }
+
+    @Test
     fun findEarliestClusterPosition_returnsSmallestCuePoint() {
         val tail = File.createTempFile("mkv_cue_test_", ".bin")
         try {
@@ -39,13 +58,35 @@ class VideoMkvCueParserTest {
     }
 
     @Test
+    fun findCuesByteOffset_readsSeekHead() {
+        val cuesOffsetInSegment = 300_000_000L
+        val head = File.createTempFile("mkv_head_test_", ".bin")
+        try {
+            Files.write(
+                head.toPath(),
+                segmentElement() + seekHeadElement(cuesOffsetInSegment),
+            )
+            assertEquals(
+                cuesOffsetInSegment,
+                VideoMkvCueParser.findCuesByteOffset(head),
+            )
+        } finally {
+            head.delete()
+        }
+    }
+
+    @Test
     fun findClusterDownloadStart_skipsWhenClusterInHead() {
         val tail = File.createTempFile("mkv_cue_test_", ".bin")
+        val head = File.createTempFile("mkv_head_test_", ".bin")
         try {
             Files.write(tail.toPath(), cuesElement(60_000_000L))
+            Files.write(head.toPath(), byteArrayOf())
             assertEquals(
                 -1L,
                 VideoAv1ThumbnailHelper.findClusterDownloadStart(
+                    "http://example.test/file.mkv",
+                    head,
                     tail,
                     400_000_000L,
                     80_000_000L,
@@ -54,17 +95,22 @@ class VideoMkvCueParserTest {
             )
         } finally {
             tail.delete()
+            head.delete()
         }
     }
 
     @Test
     fun findClusterDownloadStart_returnsGapClusterPosition() {
         val tail = File.createTempFile("mkv_cue_test_", ".bin")
+        val head = File.createTempFile("mkv_head_test_", ".bin")
         try {
             Files.write(tail.toPath(), cuesElement(150_000_000L))
+            Files.write(head.toPath(), byteArrayOf())
             assertEquals(
                 150_000_000L,
                 VideoAv1ThumbnailHelper.findClusterDownloadStart(
+                    "http://example.test/file.mkv",
+                    head,
                     tail,
                     400_000_000L,
                     80_000_000L,
@@ -73,7 +119,52 @@ class VideoMkvCueParserTest {
             )
         } finally {
             tail.delete()
+            head.delete()
         }
+    }
+
+    @Test
+    fun findClusterDownloadStart_fallsBackToGapStartWhenCuesMissing() {
+        val tail = File.createTempFile("mkv_cue_test_", ".bin")
+        val head = File.createTempFile("mkv_head_test_", ".bin")
+        try {
+            Files.write(tail.toPath(), byteArrayOf(0x01, 0x02, 0x03))
+            Files.write(head.toPath(), byteArrayOf())
+            val headBytes = 80_000_000L
+            assertEquals(
+                headBytes,
+                VideoAv1ThumbnailHelper.findClusterDownloadStart(
+                    "http://example.test/file.mkv",
+                    head,
+                    tail,
+                    400_000_000L,
+                    headBytes,
+                    360_000_000L,
+                ),
+            )
+        } finally {
+            tail.delete()
+            head.delete()
+        }
+    }
+
+    private fun segmentElement(): ByteArray {
+        return byteArrayOf(0x18, 0x53, 0x80, 0x67, 0x01, 0xFF.toByte(), 0x00)
+    }
+
+    private fun seekHeadElement(cuesOffsetInSegment: Long): ByteArray {
+        val seekId = byteArrayOf(0x53, 0xAB.toByte()) + ebmlSize(4) + byteArrayOf(
+            0x1C,
+            0x53,
+            0xBB.toByte(),
+            0x6B,
+        )
+        val seekPosition = byteArrayOf(0x53, 0xAC.toByte()) +
+            ebmlSize(valueVintBytes(cuesOffsetInSegment).size) +
+            valueVintBytes(cuesOffsetInSegment)
+        val seekBody = seekId + seekPosition
+        val seek = byteArrayOf(0x4D, 0xBB.toByte()) + ebmlSize(seekBody.size) + seekBody
+        return byteArrayOf(0x11, 0x4D, 0x9B.toByte(), 0x74) + ebmlSize(seek.size) + seek
     }
 
     private fun cuesElement(vararg clusterPositions: Long): ByteArray {
