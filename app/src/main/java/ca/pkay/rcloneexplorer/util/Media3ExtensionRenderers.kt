@@ -14,4 +14,12 @@ object Media3ExtensionRenderers {
         return DefaultRenderersFactory(context)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
     }
+
+    /** AV1 thumbnail/reload: prefer FFmpeg extension decoders (matches in-app playback reliability). */
+    @JvmStatic
+    fun newAv1PreferRenderersFactory(context: Context): DefaultRenderersFactory {
+        return DefaultRenderersFactory(context)
+            .setEnableDecoderFallback(true)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+    }
 }

@@ -43,6 +43,8 @@ final class VideoThumbnailExoFallback {
     private static final int OUT_H = 180;
     private static final long PREPARE_TIMEOUT_MS = 20_000L;
     private static final long USER_RELOAD_PREPARE_TIMEOUT_MS = 60_000L;
+    /** AV1 user reload: cold software decode + large MKV demux can exceed 60s on low-end devices. */
+    private static final long AV1_USER_RELOAD_PREPARE_TIMEOUT_MS = 180_000L;
     private static final long RENDER_WAIT_MS = 12_000L;
     private static final long PIXEL_COPY_MS = 5_000L;
     private static final long MAX_DURATION_MS = 6L * 60L * 60L * 1000L;
@@ -153,6 +155,18 @@ final class VideoThumbnailExoFallback {
             long durationMs,
             @NonNull String stablePath,
             @NonNull VideoThumbnailCancellation cancellation) {
+        return tryGrabLocalPrefixFrame(
+                appContext, absolutePath, durationMs, stablePath, cancellation, false);
+    }
+
+    @Nullable
+    static Bitmap tryGrabLocalPrefixFrame(
+            @NonNull Context appContext,
+            @NonNull String absolutePath,
+            long durationMs,
+            @NonNull String stablePath,
+            @NonNull VideoThumbnailCancellation cancellation,
+            boolean av1Codec) {
         String fileUri = Uri.fromFile(new java.io.File(absolutePath)).toString();
         return tryGrabFirstFrameInternal(
                 appContext,
@@ -161,7 +175,27 @@ final class VideoThumbnailExoFallback {
                 cancellation,
                 true,
                 true,
-                stablePath);
+                stablePath,
+                av1Codec);
+    }
+
+    /** HTTP Exo for AV1 reload when local/sparse paths miss (matches {@code VideoPlayerActivity} streaming). */
+    @Nullable
+    static Bitmap tryGrabAv1HttpFrame(
+            @NonNull Context appContext,
+            @NonNull String url,
+            long durationMs,
+            @NonNull VideoThumbnailCancellation cancellation,
+            @Nullable String stablePath) {
+        return tryGrabFirstFrameInternal(
+                appContext,
+                url,
+                durationMs,
+                cancellation,
+                true,
+                true,
+                stablePath,
+                true);
     }
 
     @Nullable
@@ -173,8 +207,30 @@ final class VideoThumbnailExoFallback {
             boolean relaxDurationCheck,
             boolean extendedPrepareTimeout,
             @Nullable String reloadEpochStablePath) {
+        return tryGrabFirstFrameInternal(
+                appContext,
+                url,
+                durationMs,
+                cancellation,
+                relaxDurationCheck,
+                extendedPrepareTimeout,
+                reloadEpochStablePath,
+                false);
+    }
+
+    @Nullable
+    private static Bitmap tryGrabFirstFrameInternal(
+            @NonNull Context appContext,
+            @NonNull String url,
+            long durationMs,
+            @NonNull VideoThumbnailCancellation cancellation,
+            boolean relaxDurationCheck,
+            boolean extendedPrepareTimeout,
+            @Nullable String reloadEpochStablePath,
+            boolean av1Codec) {
         final String base = VideoThumbnailFetcher.basenameForThumbUrl(url);
-        final long outerWaitMs = (extendedPrepareTimeout ? USER_RELOAD_PREPARE_TIMEOUT_MS : PREPARE_TIMEOUT_MS)
+        final long prepareTimeoutMs = resolvePrepareTimeoutMs(extendedPrepareTimeout, av1Codec);
+        final long outerWaitMs = prepareTimeoutMs
                 + (RENDER_WAIT_MS * VideoThumbnailSeekProbe.exoSeekAttemptsMs(
                         durationMs > 0 ? durationMs : 60_000L, 0).length)
                 + PIXEL_COPY_MS + 5_000L;
@@ -204,13 +260,14 @@ final class VideoThumbnailExoFallback {
         AtomicReference<String> errorMsg = new AtomicReference<>();
         exoH.post(() -> {
             try {
+                boolean initialPrime = av1Codec;
                 result.set(grabOnExoLooper(
                         appContext, url, durationMs, cancellation, relaxDurationCheck,
-                        extendedPrepareTimeout, false, reloadEpochStablePath));
-                if (result.get() == null && !cancellation.isCancelled()) {
+                        extendedPrepareTimeout, initialPrime, reloadEpochStablePath, av1Codec));
+                if (result.get() == null && !av1Codec && !cancellation.isCancelled()) {
                     Bitmap primed = grabOnExoLooper(
                             appContext, url, durationMs, cancellation, relaxDurationCheck,
-                            extendedPrepareTimeout, true, reloadEpochStablePath);
+                            extendedPrepareTimeout, true, reloadEpochStablePath, false);
                     if (primed != null) {
                         VideoThumbnailFetcher.logThumbPipe(appContext, "exoPlaybackPrimeRetryOk",
                                 "basename=" + base);
@@ -267,8 +324,32 @@ final class VideoThumbnailExoFallback {
             boolean relaxDurationCheck,
             boolean extendedPrepareTimeout,
             @Nullable String reloadEpochStablePath) {
+        return tryGrabFromDataSourceFactory(
+                appContext,
+                dataSourceFactory,
+                logUrl,
+                durationMs,
+                cancellation,
+                relaxDurationCheck,
+                extendedPrepareTimeout,
+                reloadEpochStablePath,
+                false);
+    }
+
+    @Nullable
+    static Bitmap tryGrabFromDataSourceFactory(
+            @NonNull Context appContext,
+            @NonNull androidx.media3.datasource.DataSource.Factory dataSourceFactory,
+            @NonNull String logUrl,
+            long durationMs,
+            @NonNull VideoThumbnailCancellation cancellation,
+            boolean relaxDurationCheck,
+            boolean extendedPrepareTimeout,
+            @Nullable String reloadEpochStablePath,
+            boolean av1Codec) {
         final String base = VideoThumbnailFetcher.basenameForThumbUrl(logUrl);
-        final long outerWaitMs = (extendedPrepareTimeout ? USER_RELOAD_PREPARE_TIMEOUT_MS : PREPARE_TIMEOUT_MS)
+        final long prepareTimeoutMs = resolvePrepareTimeoutMs(extendedPrepareTimeout, av1Codec);
+        final long outerWaitMs = prepareTimeoutMs
                 + (RENDER_WAIT_MS * VideoThumbnailSeekProbe.exoSeekAttemptsMs(
                         durationMs > 0 ? durationMs : 60_000L, 0).length)
                 + PIXEL_COPY_MS + 5_000L;
@@ -287,7 +368,7 @@ final class VideoThumbnailExoFallback {
             try {
                 result.set(grabOnExoLooper(
                         appContext, logUrl, durationMs, cancellation, relaxDurationCheck,
-                        extendedPrepareTimeout, true, reloadEpochStablePath, dataSourceFactory));
+                        extendedPrepareTimeout, true, reloadEpochStablePath, av1Codec, dataSourceFactory));
             } catch (Exception e) {
                 FLog.w(TAG, "Sparse Exo thumbnail failed: %s", e.getMessage());
             } finally {
@@ -307,6 +388,13 @@ final class VideoThumbnailExoFallback {
         return result.get();
     }
 
+    private static long resolvePrepareTimeoutMs(boolean extendedPrepareTimeout, boolean av1Codec) {
+        if (av1Codec && extendedPrepareTimeout) {
+            return AV1_USER_RELOAD_PREPARE_TIMEOUT_MS;
+        }
+        return extendedPrepareTimeout ? USER_RELOAD_PREPARE_TIMEOUT_MS : PREPARE_TIMEOUT_MS;
+    }
+
     @Nullable
     private static Bitmap grabOnExoLooper(
             @NonNull Context appContext,
@@ -319,7 +407,7 @@ final class VideoThumbnailExoFallback {
             @Nullable String reloadEpochStablePath) throws Exception {
         return grabOnExoLooper(
                 appContext, url, durationMs, cancellation, relaxDurationCheck, extendedPrepareTimeout,
-                primePlayback, reloadEpochStablePath, null);
+                primePlayback, reloadEpochStablePath, false, null);
     }
 
     @Nullable
@@ -332,6 +420,7 @@ final class VideoThumbnailExoFallback {
             boolean extendedPrepareTimeout,
             boolean primePlayback,
             @Nullable String reloadEpochStablePath,
+            boolean av1Codec,
             @Nullable androidx.media3.datasource.DataSource.Factory overrideDataSourceFactory)
             throws Exception {
         final String base = VideoThumbnailFetcher.basenameForThumbUrl(url);
@@ -341,12 +430,15 @@ final class VideoThumbnailExoFallback {
         ExoPlayer player = null;
         ImageReader reader = null;
         try {
-            player = new ExoPlayer.Builder(appContext, Media3ExtensionRenderers.newDefaultRenderersFactory(appContext))
+            androidx.media3.exoplayer.DefaultRenderersFactory renderersFactory = av1Codec
+                    ? Media3ExtensionRenderers.newAv1PreferRenderersFactory(appContext)
+                    : Media3ExtensionRenderers.newDefaultRenderersFactory(appContext);
+            player = new ExoPlayer.Builder(appContext, renderersFactory)
                     .setLooper(Looper.myLooper())
                     .build();
             reader = ImageReader.newInstance(OUT_W, OUT_H, PixelFormat.RGBA_8888, 2);
             player.setVideoSurface(reader.getSurface());
-            player.setPlayWhenReady(primePlayback || sparseSource);
+            player.setPlayWhenReady(primePlayback || sparseSource || av1Codec);
             player.setVolume(0f);
 
             androidx.media3.datasource.DataSource.Factory dataSourceFactory;
@@ -381,13 +473,14 @@ final class VideoThumbnailExoFallback {
                     : "OkHttpDataSource ProgressiveMediaSource";
             VideoThumbnailFetcher.logThumbPipe(appContext, "exoPrepareStart",
                     "basename=" + base + " durationMs=" + durationMs + " relaxDuration=" + relaxDurationCheck
-                            + " primePlayback=" + (primePlayback || sparseSource)
+                            + " primePlayback=" + (primePlayback || sparseSource || av1Codec)
+                            + (av1Codec ? " av1ExoPreferExt=true" : "")
                             + " " + thumbUrlForSyncLog(localFile || sparseSource ? url : mediaUri)
                             + " httpEngine=" + engine
-                            + " extensionRendererMode=on");
+                            + " extensionRendererMode=" + (av1Codec ? "prefer" : "on"));
             player.prepare();
 
-            if (!waitForReady(appContext, base, player, cancellation, extendedPrepareTimeout)) {
+            if (!waitForReady(appContext, base, player, cancellation, extendedPrepareTimeout, av1Codec)) {
                 return null;
             }
             long effectiveDurationMs = durationMs;
@@ -487,9 +580,10 @@ final class VideoThumbnailExoFallback {
             @NonNull String basename,
             @NonNull ExoPlayer player,
             @NonNull VideoThumbnailCancellation cancellation,
-            boolean extendedPrepareTimeout)
+            boolean extendedPrepareTimeout,
+            boolean av1Codec)
             throws InterruptedException {
-        long timeoutMs = extendedPrepareTimeout ? USER_RELOAD_PREPARE_TIMEOUT_MS : PREPARE_TIMEOUT_MS;
+        long timeoutMs = resolvePrepareTimeoutMs(extendedPrepareTimeout, av1Codec);
         long deadline = System.currentTimeMillis() + timeoutMs;
         long startedAt = System.currentTimeMillis();
         boolean primedPlayback = player.getPlayWhenReady();

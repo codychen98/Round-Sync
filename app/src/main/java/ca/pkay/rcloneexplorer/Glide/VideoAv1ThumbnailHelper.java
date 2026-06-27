@@ -282,6 +282,19 @@ final class VideoAv1ThumbnailHelper {
                 if (contiguous != null) {
                     return contiguous;
                 }
+                Bitmap httpFrame = VideoThumbnailExoFallback.tryGrabAv1HttpFrame(
+                        appContext,
+                        url,
+                        durationMs,
+                        cancellation,
+                        stablePath);
+                if (httpFrame != null) {
+                    VideoThumbnailFetcher.logThumbPipe(appContext, "sparseHttpExoOk",
+                            "basename=" + base + " userReload=" + userReload);
+                    return httpFrame;
+                }
+                VideoThumbnailFetcher.logThumbPipe(appContext, "sparseHttpExoMiss",
+                        "basename=" + base + " userReload=" + userReload);
             }
             return null;
         } catch (Exception e) {
@@ -320,7 +333,8 @@ final class VideoAv1ThumbnailHelper {
                 headFile.getAbsolutePath(),
                 durationMs,
                 epochPath,
-                cancellation);
+                cancellation,
+                true);
         if (localFrame != null) {
             VideoThumbnailFetcher.logThumbPipe(appContext, "sparseExpandedHeadLocalExoOk",
                     "basename=" + base + " headBytes=" + actualHead + " userReload=" + userReload);
@@ -383,7 +397,7 @@ final class VideoAv1ThumbnailHelper {
         }
         File prefixFile = null;
         try {
-            prefixFile = File.createTempFile("thumb_mkv_prefix_", ".bin", appContext.getCacheDir());
+            prefixFile = File.createTempFile("thumb_mkv_prefix_", ".mkv", appContext.getCacheDir());
             if (!downloadRange(url, prefixFile, 0L, prefixBytes)) {
                 VideoThumbnailFetcher.logThumbPipe(appContext, "sparseContiguousPrefixFail",
                         "basename=" + base + " prefixBytes=" + prefixBytes);
@@ -398,13 +412,30 @@ final class VideoAv1ThumbnailHelper {
                     prefixFile.getAbsolutePath(),
                     durationMs,
                     epochPath,
-                    cancellation);
+                    cancellation,
+                    true);
             if (frame != null) {
                 VideoThumbnailFetcher.logThumbPipe(appContext, "sparseContiguousPrefixExoOk",
                         "basename=" + base + " prefixBytes=" + actualPrefix);
                 return frame;
             }
             VideoThumbnailFetcher.logThumbPipe(appContext, "sparseContiguousPrefixExoMiss",
+                    "basename=" + base + " prefixBytes=" + actualPrefix);
+            if (cancellation.isCancelled()) {
+                return null;
+            }
+            Bitmap httpFrame = VideoThumbnailExoFallback.tryGrabAv1HttpFrame(
+                    appContext,
+                    url,
+                    durationMs,
+                    cancellation,
+                    stablePath);
+            if (httpFrame != null) {
+                VideoThumbnailFetcher.logThumbPipe(appContext, "contiguousHttpExoOk",
+                        "basename=" + base + " prefixBytes=" + actualPrefix);
+                return httpFrame;
+            }
+            VideoThumbnailFetcher.logThumbPipe(appContext, "contiguousHttpExoMiss",
                     "basename=" + base + " prefixBytes=" + actualPrefix);
             return null;
         } catch (Exception e) {
@@ -516,7 +547,8 @@ final class VideoAv1ThumbnailHelper {
                     cancellation,
                     true,
                     userReload,
-                    stablePath);
+                    stablePath,
+                    true);
             if (frame == null) {
                 VideoThumbnailFetcher.logThumbPipe(appContext, "sparseClusterRetry",
                         "basename=" + base
