@@ -91,4 +91,14 @@ class ThumbnailReloadEpochTest {
         assertEquals(25_000L, ThumbnailReloadEpoch.getLastSourcePositionMs(path))
         assertEquals(setOf(2_000L, 25_000L), ThumbnailReloadEpoch.getUsedSourcePositionsMs(path))
     }
+
+    @Test
+    fun clearUsedSourcePositionsMs_resetsRegistry() {
+        val path = "/pCloudLock/Video Archive/Anime/ep.mkv"
+        ThumbnailReloadEpoch.recordSourcePositionMs(path, 2_000L)
+        ThumbnailReloadEpoch.recordSourcePositionMs(path, 25_000L)
+        ThumbnailReloadEpoch.clearUsedSourcePositionsMs(path)
+        assertEquals(emptySet<Long>(), ThumbnailReloadEpoch.getUsedSourcePositionsMs(path))
+        assertEquals(ThumbnailReloadEpoch.NO_SOURCE_POSITION, ThumbnailReloadEpoch.getLastSourcePositionMs(path))
+    }
 }

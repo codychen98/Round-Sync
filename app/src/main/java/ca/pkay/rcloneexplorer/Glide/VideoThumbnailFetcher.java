@@ -410,6 +410,10 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
             if (cancelled) {
                 break;
             }
+            if (reloadEpoch > 0
+                    && VideoThumbnailSeekProbe.matchesAnyUsedSourceMs(ts / 1_000L, usedSourceMs)) {
+                continue;
+            }
             Bitmap frame = retrieveFrameAtTime(mmr, ts, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
             if (frame != null) {
                 best.consider(frame, ts);
@@ -422,6 +426,10 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
         for (long ts : timestamps) {
             if (cancelled) {
                 break;
+            }
+            if (reloadEpoch > 0
+                    && VideoThumbnailSeekProbe.matchesAnyUsedSourceMs(ts / 1_000L, usedSourceMs)) {
+                continue;
             }
             for (int option : new int[]{
                     MediaMetadataRetriever.OPTION_PREVIOUS_SYNC,
@@ -507,29 +515,8 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
             long durationUs,
             int reloadEpoch,
             java.util.Collection<Long> usedSourcePositionsMs) {
-        long[] fractionsUs;
-        if (durationMs > 0) {
-            fractionsUs = new long[] {
-                    0L,
-                    durationUs / 10,
-                    durationUs / 4,
-                    durationUs / 2,
-            };
-        } else {
-            fractionsUs = new long[] {
-                    0L,
-                    1_000_000L,
-                    2_500_000L,
-                    5_000_000L,
-            };
-        }
-        int start = reloadEpoch % fractionsUs.length;
-        LinkedHashSet<Long> ordered = new LinkedHashSet<>();
-        for (int i = 0; i < fractionsUs.length; i++) {
-            ordered.add(clampTimeUs(fractionsUs[(start + i) % fractionsUs.length], durationUs));
-        }
-        return VideoThumbnailSeekProbe.deprioritizeUsedSourceUs(
-                longSetToArray(ordered), usedSourcePositionsMs);
+        return VideoThumbnailSeekProbe.mmrReloadProbeTimesUs(
+                durationMs, durationUs, reloadEpoch, usedSourcePositionsMs);
     }
 
     private static long clampTimeUs(long timeUs, long durationUs) {

@@ -2,6 +2,7 @@ package ca.pkay.rcloneexplorer.Glide
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VideoThumbnailSeekProbeTest {
@@ -27,10 +28,12 @@ class VideoThumbnailSeekProbeTest {
     }
 
     @Test
-    fun exoSeekAttemptsMs_reloadEpoch_deprioritizesLastSourcePosition() {
+    fun exoSeekAttemptsMs_reloadEpoch_excludesLastSourcePosition() {
         val seeks = VideoThumbnailSeekProbe.exoSeekAttemptsMs(100_000L, 1, 2_000L)
         assertEquals(5_000L, seeks[0])
-        assertEquals(2_000L, seeks[seeks.size - 1])
+        for (seek in seeks) {
+            assertEquals(false, VideoThumbnailSeekProbe.isSameFrameMs(seek, 2_000L))
+        }
     }
 
     @Test
@@ -47,24 +50,42 @@ class VideoThumbnailSeekProbeTest {
     }
 
     @Test
-    fun deprioritizeUsedSourceMs_movesAllNearDuplicatesToEnd() {
+    fun excludeUsedSourceMs_removesNearDuplicates() {
         val input = longArrayOf(2_000L, 5_000L, 10_000L, 2_500L)
-        val out = VideoThumbnailSeekProbe.deprioritizeUsedSourceMs(input, setOf(2_000L, 5_000L))
-        assertArrayEquals(longArrayOf(10_000L, 2_500L, 2_000L, 5_000L), out)
+        val out = VideoThumbnailSeekProbe.excludeUsedSourceMs(input, setOf(2_000L, 5_000L))
+        assertArrayEquals(longArrayOf(10_000L, 2_500L), out)
     }
 
     @Test
-    fun deprioritizeUsedSourceMs_whenAllUsed_returnsOriginalOrder() {
+    fun excludeUsedSourceMs_whenAllUsed_returnsEmpty() {
         val input = longArrayOf(2_000L, 5_000L)
-        val out = VideoThumbnailSeekProbe.deprioritizeUsedSourceMs(input, setOf(2_000L, 5_000L))
-        assertArrayEquals(input, out)
+        val out = VideoThumbnailSeekProbe.excludeUsedSourceMs(input, setOf(2_000L, 5_000L))
+        assertEquals(0, out.size)
     }
 
     @Test
-    fun exoSeekAttemptsMs_reloadEpoch_deprioritizesAllUsedSourcePositions() {
-        val seeks = VideoThumbnailSeekProbe.exoSeekAttemptsMs(100_000L, 1, setOf(2_000L, 5_000L))
-        assertEquals(10_000L, seeks[0])
-        assertEquals(2_000L, seeks[seeks.size - 2])
-        assertEquals(5_000L, seeks[seeks.size - 1])
+    fun exoSeekAttemptsMs_reloadEpoch_excludesAllUsedSourcePositions() {
+        val used = setOf(2_000L, 5_000L, 10_000L, 25_000L, 0L)
+        val seeks = VideoThumbnailSeekProbe.exoSeekAttemptsMs(100_000L, 1, used)
+        assertTrue(seeks.isNotEmpty())
+        for (seek in seeks) {
+            assertEquals(false, VideoThumbnailSeekProbe.matchesAnyUsedSourceMs(seek, used))
+        }
+    }
+
+    @Test
+    fun buildExpandedSeekCandidatesMs_skipsUsedPositions() {
+        val expanded = VideoThumbnailSeekProbe.buildExpandedSeekCandidatesMs(
+            600_000L,
+            3,
+            setOf(18_000L, 42_000L),
+        )
+        assertTrue(expanded.isNotEmpty())
+        for (candidate in expanded) {
+            assertEquals(
+                false,
+                VideoThumbnailSeekProbe.matchesAnyUsedSourceMs(candidate, setOf(18_000L, 42_000L)),
+            )
+        }
     }
 }

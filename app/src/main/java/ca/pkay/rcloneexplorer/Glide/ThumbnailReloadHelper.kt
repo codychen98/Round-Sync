@@ -121,6 +121,14 @@ object ThumbnailReloadHelper {
                             success = false
                             detail = "thumbnailServerNotReady"
                         } else {
+                            val usedCount = ThumbnailReloadEpoch.getUsedSourcePositionsMs(stablePath).size
+                            if (usedCount >= 12) {
+                                ThumbnailReloadEpoch.clearUsedSourcePositionsMs(stablePath)
+                                log(
+                                    appContext,
+                                    "reloadUsedSourceRecycled path=$path previousCount=$usedCount",
+                                )
+                            }
                             val previousEpoch = ThumbnailReloadEpoch.get(stablePath)
                             videoEpoch = ThumbnailReloadEpoch.increment(stablePath)
                             ThumbnailReloadResultCache.remove(stablePath)

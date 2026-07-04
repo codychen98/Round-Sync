@@ -90,6 +90,13 @@ object ThumbnailReloadEpoch {
     fun getLastSourcePositionForVideoUrl(url: String): Long =
         getLastSourcePositionMs(ThumbnailStablePath.canonicalFromServeUrl(url))
 
+    /** Clears used source positions so a new reload cycle can start after the probe pool is exhausted. */
+    @JvmStatic
+    fun clearUsedSourcePositionsMs(stablePath: String) {
+        usedSourcePositionsMs.remove(key(stablePath))
+        lastSourcePositionsMs.remove(key(stablePath))
+    }
+
     /** All source positions already used for this file's thumbnail during reload. */
     @JvmStatic
     fun getUsedSourcePositionsMs(stablePath: String): Set<Long> {

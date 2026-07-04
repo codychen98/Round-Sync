@@ -601,6 +601,9 @@ final class VideoThumbnailExoFallback {
                 if (cancellation.isCancelled()) {
                     break;
                 }
+                if (VideoThumbnailSeekProbe.matchesAnyUsedSourceMs(seekMs, usedSourceMs)) {
+                    continue;
+                }
                 Bitmap bitmap = captureFrameAtSeekMs(
                         appContext, base, exoH, playerRef, readerRef, session, cancellation, seekMs);
                 if (bitmap != null) {

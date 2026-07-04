@@ -159,6 +159,9 @@ final class VideoThumbnailDirectExtract {
                 ? buildReloadTimesUs(durationMs, durationUs, reloadEpoch, usedSourceMs)
                 : buildDefaultTimesUs(durationMs, durationUs);
         for (long ts : timestamps) {
+            if (VideoThumbnailSeekProbe.matchesAnyUsedSourceMs(ts / 1_000L, usedSourceMs)) {
+                continue;
+            }
             Bitmap frame = mmr.getFrameAtTime(ts, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
             if (frame != null) {
                 ThumbnailReloadEpoch.recordSourcePositionMs(normalizedPath, ts / 1_000L);
@@ -173,28 +176,8 @@ final class VideoThumbnailDirectExtract {
             long durationUs,
             int reloadEpoch,
             java.util.Collection<Long> usedSourcePositionsMs) {
-        long[] fractionsUs;
-        if (durationMs > 0) {
-            fractionsUs = new long[] {
-                    0L,
-                    durationUs / 10,
-                    durationUs / 4,
-                    durationUs / 2,
-            };
-        } else {
-            fractionsUs = new long[] {
-                    0L,
-                    1_000_000L,
-                    2_500_000L,
-                    5_000_000L,
-            };
-        }
-        int start = reloadEpoch % fractionsUs.length;
-        long[] ordered = new long[fractionsUs.length];
-        for (int i = 0; i < fractionsUs.length; i++) {
-            ordered[i] = clampTimeUs(fractionsUs[(start + i) % fractionsUs.length], durationUs);
-        }
-        return VideoThumbnailSeekProbe.deprioritizeUsedSourceUs(ordered, usedSourcePositionsMs);
+        return VideoThumbnailSeekProbe.mmrReloadProbeTimesUs(
+                durationMs, durationUs, reloadEpoch, usedSourcePositionsMs);
     }
 
     private static long[] buildDefaultTimesUs(long durationMs, long durationUs) {
