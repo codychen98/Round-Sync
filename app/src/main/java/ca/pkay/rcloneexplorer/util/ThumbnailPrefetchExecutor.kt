@@ -59,6 +59,7 @@ object ThumbnailPrefetchExecutor {
         ThumbnailDiskCacheEvictor.withOpenCache(context) { cache ->
             for (item in targets) {
                 val label = ThumbnailCacheIdentity.prefetchDiskCacheKeyLabel(
+                    cache,
                     item.remote.name,
                     item.path,
                     item.mimeType,

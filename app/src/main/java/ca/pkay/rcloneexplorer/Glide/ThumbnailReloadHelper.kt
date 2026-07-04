@@ -196,20 +196,16 @@ object ThumbnailReloadHelper {
                 )
                 if (jpeg != null) {
                     ThumbnailReloadResultCache.put(stablePath, jpeg)
-                    ThumbnailDiskCacheEvictor.store(
+                    ThumbnailDiskCacheEvictor.storeVideoReloadJpeg(
                         appContext,
-                        ObjectKey(
-                            ThumbnailCacheIdentity.videoDiskCacheKeyLabel(
-                                remoteName,
-                                path,
-                                epochForVideo,
-                            ),
-                        ),
+                        remoteName,
+                        path,
+                        epochForVideo,
                         jpeg,
                     )
                     log(
                         appContext,
-                        "reloadDirectCacheStore path=$path epoch=$epochForVideo bytes=${jpeg.size}",
+                        "reloadDirectCacheStore path=$path epoch=$epochForVideo bytes=${jpeg.size} dualKey=true",
                     )
                 }
                 mainHandler.post {

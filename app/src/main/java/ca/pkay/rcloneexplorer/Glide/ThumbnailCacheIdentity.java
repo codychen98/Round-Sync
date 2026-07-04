@@ -8,6 +8,8 @@ import androidx.annotation.Nullable;
 
 import ca.pkay.rcloneexplorer.Items.FileItem;
 
+import com.bumptech.glide.disklrucache.DiskLruCache;
+
 public final class ThumbnailCacheIdentity {
 
     private static final String FILE_NAMESPACE = "thumbFile";
@@ -15,6 +17,9 @@ public final class ThumbnailCacheIdentity {
     private static final String VIDEO_RELOAD_NAMESPACE = "thumbVideoReload";
     private static final String VIDEO_VERSION_TOKEN = "|thumbV2";
     private static final String CACHE_PROBE_URL_PREFIX = "http://127.0.0.1/cacheProbe";
+
+    /** Upper bound when scanning reload-epoch disk keys after a cold start. */
+    static final int MAX_RELOAD_EPOCH_DISK_PROBE = 64;
 
     private ThumbnailCacheIdentity() {
     }
@@ -58,7 +63,10 @@ public final class ThumbnailCacheIdentity {
 
     public static boolean isPrefetchThumbnailCached(@NonNull Context context, @NonNull FileItem item) {
         String label = prefetchDiskCacheKeyLabel(
-                item.getRemote().getName(), item.getPath(), item.getMimeType());
+                context,
+                item.getRemote().getName(),
+                item.getPath(),
+                item.getMimeType());
         if (label == null) {
             return false;
         }
@@ -68,6 +76,48 @@ public final class ThumbnailCacheIdentity {
     /**
      * Readable disk-cache label aligned with Glide HTTP-serve / video thumbnail keys.
      * Returns null when the file is not a prefetch thumbnail target (unsupported mime).
+     */
+    @Nullable
+    public static String prefetchDiskCacheKeyLabel(
+            @NonNull Context context,
+            @NonNull String remoteName,
+            @NonNull String remoteFilePath,
+            @Nullable String mimeType) {
+        if (mimeType == null) {
+            return null;
+        }
+        if (mimeType.startsWith("image/")) {
+            return fileDataCacheKey(remoteName, remoteFilePath);
+        }
+        if (mimeType.startsWith("video/")) {
+            return resolveVideoDiskCacheKeyLabel(context, remoteName, remoteFilePath);
+        }
+        return null;
+    }
+
+    /**
+     * Batch disk probe variant — uses an already-open {@link DiskLruCache} (explorer seed / prefetch).
+     */
+    @Nullable
+    public static String prefetchDiskCacheKeyLabel(
+            @NonNull DiskLruCache cache,
+            @NonNull String remoteName,
+            @NonNull String remoteFilePath,
+            @Nullable String mimeType) {
+        if (mimeType == null) {
+            return null;
+        }
+        if (mimeType.startsWith("image/")) {
+            return fileDataCacheKey(remoteName, remoteFilePath);
+        }
+        if (mimeType.startsWith("video/")) {
+            return resolveVideoDiskCacheKeyIn(cache, remoteName, remoteFilePath);
+        }
+        return null;
+    }
+
+    /**
+     * Legacy label without disk probe — uses in-memory reload epoch only (tests / stable key naming).
      */
     @Nullable
     public static String prefetchDiskCacheKeyLabel(
@@ -85,6 +135,115 @@ public final class ThumbnailCacheIdentity {
             return videoDiskCacheKeyLabel(remoteName, remoteFilePath, reloadEpoch);
         }
         return null;
+    }
+
+    /**
+     * Resolves the disk-cache label Glide should load for a video after cold start. Reload JPEGs
+     * may live under {@code thumbVideoReload|reloadN} while in-memory epoch resets to 0.
+     */
+    @NonNull
+    public static String resolveVideoDiskCacheKeyLabel(
+            @NonNull Context context,
+            @NonNull String remoteName,
+            @NonNull String remoteFilePath) {
+        final String[] resolved = new String[] {
+                videoDiskCacheKeyLabel(remoteName, remoteFilePath, 0),
+        };
+        ThumbnailDiskCacheEvictor.withOpenCache(context, cache -> {
+            resolved[0] = resolveVideoDiskCacheKeyIn(cache, remoteName, remoteFilePath);
+        });
+        return resolved[0];
+    }
+
+    /**
+     * Same as {@link #resolveVideoDiskCacheKeyLabel} but uses an open cache (batch folder probe).
+     */
+    @NonNull
+    public static String resolveVideoDiskCacheKeyIn(
+            @NonNull DiskLruCache cache,
+            @NonNull String remoteName,
+            @NonNull String remoteFilePath) {
+        String stableNormalized = ThumbnailStablePath.normalize(
+                stableServePath(remoteName, remoteFilePath));
+        int reloadEpoch = ThumbnailReloadEpoch.get(stableNormalized);
+        if (reloadEpoch > 0) {
+            String reloadKey = videoDiskCacheKeyLabel(remoteName, remoteFilePath, reloadEpoch);
+            if (ThumbnailDiskCacheEvictor.isCachedIn(cache, reloadKey)) {
+                return reloadKey;
+            }
+        }
+        String canonicalKey = videoDiskCacheKeyLabel(remoteName, remoteFilePath, 0);
+        if (ThumbnailDiskCacheEvictor.isCachedIn(cache, canonicalKey)) {
+            return canonicalKey;
+        }
+        for (int epoch = MAX_RELOAD_EPOCH_DISK_PROBE; epoch >= 1; epoch--) {
+            String reloadKey = videoDiskCacheKeyLabel(remoteName, remoteFilePath, epoch);
+            if (ThumbnailDiskCacheEvictor.isCachedIn(cache, reloadKey)) {
+                return reloadKey;
+            }
+        }
+        return canonicalKey;
+    }
+
+    /**
+     * Resolves a video disk-cache label from a legacy encoded stable path (Glide model path).
+     */
+    @NonNull
+    public static String resolveVideoDiskCacheKeyLabelFromLegacyPath(
+            @NonNull Context context,
+            @NonNull String legacyStablePath) {
+        final String[] resolved = new String[] {
+                defaultVideoDiskCacheKeyLabelForLegacyPath(legacyStablePath),
+        };
+        ThumbnailDiskCacheEvictor.withOpenCache(context, cache -> {
+            resolved[0] = resolveVideoDiskCacheKeyFromLegacyPathIn(cache, legacyStablePath);
+        });
+        return resolved[0];
+    }
+
+    @NonNull
+    static String resolveVideoDiskCacheKeyFromLegacyPathIn(
+            @NonNull DiskLruCache cache,
+            @NonNull String legacyStablePath) {
+        String normalized = ThumbnailStablePath.normalize(legacyStablePath);
+        int reloadEpoch = ThumbnailReloadEpoch.get(normalized);
+        if (reloadEpoch > 0) {
+            String reloadKey = ReadableCacheKey.fromStablePath(
+                    legacyStablePath + "|reload" + reloadEpoch,
+                    VIDEO_RELOAD_NAMESPACE);
+            if (ThumbnailDiskCacheEvictor.isCachedIn(cache, reloadKey)) {
+                return reloadKey;
+            }
+        }
+        String canonicalKey = ReadableCacheKey.fromStablePath(
+                legacyStablePath + VIDEO_VERSION_TOKEN,
+                VIDEO_NAMESPACE);
+        if (ThumbnailDiskCacheEvictor.isCachedIn(cache, canonicalKey)) {
+            return canonicalKey;
+        }
+        for (int epoch = MAX_RELOAD_EPOCH_DISK_PROBE; epoch >= 1; epoch--) {
+            String reloadKey = ReadableCacheKey.fromStablePath(
+                    legacyStablePath + "|reload" + epoch,
+                    VIDEO_RELOAD_NAMESPACE);
+            if (ThumbnailDiskCacheEvictor.isCachedIn(cache, reloadKey)) {
+                return reloadKey;
+            }
+        }
+        return defaultVideoDiskCacheKeyLabelForLegacyPath(legacyStablePath);
+    }
+
+    @NonNull
+    private static String defaultVideoDiskCacheKeyLabelForLegacyPath(@NonNull String legacyStablePath) {
+        int reloadEpoch = ThumbnailReloadEpoch.get(
+                ThumbnailStablePath.normalize(legacyStablePath));
+        if (reloadEpoch > 0) {
+            return ReadableCacheKey.fromStablePath(
+                    legacyStablePath + "|reload" + reloadEpoch,
+                    VIDEO_RELOAD_NAMESPACE);
+        }
+        return ReadableCacheKey.fromStablePath(
+                legacyStablePath + VIDEO_VERSION_TOKEN,
+                VIDEO_NAMESPACE);
     }
 
     @Nullable

@@ -28,6 +28,51 @@ object ThumbnailDiskCacheEvictor {
         if (jpegBytes.isEmpty()) {
             return
         }
+        storeInternal(context, key, jpegBytes)
+    }
+
+    /**
+     * Persists a user-reload JPEG under both the reload-epoch key and the canonical epoch-0 key so
+     * cold folder opens after app restart still hit disk cache (in-memory epoch resets to 0).
+     */
+    @JvmStatic
+    fun storeVideoReloadJpeg(
+        context: Context,
+        remoteName: String,
+        remoteFilePath: String,
+        reloadEpoch: Int,
+        jpegBytes: ByteArray,
+    ) {
+        if (jpegBytes.isEmpty()) {
+            return
+        }
+        storeInternal(
+            context,
+            ObjectKey(
+                ThumbnailCacheIdentity.videoDiskCacheKeyLabel(
+                    remoteName,
+                    remoteFilePath,
+                    reloadEpoch,
+                ),
+            ),
+            jpegBytes,
+        )
+        if (reloadEpoch > 0) {
+            storeInternal(
+                context,
+                ObjectKey(
+                    ThumbnailCacheIdentity.videoDiskCacheKeyLabel(
+                        remoteName,
+                        remoteFilePath,
+                        0,
+                    ),
+                ),
+                jpegBytes,
+            )
+        }
+    }
+
+    private fun storeInternal(context: Context, key: Key, jpegBytes: ByteArray) {
         val cacheDir = CanonicalCachePathResolver.thumbnailsDirOrNull(context.applicationContext) ?: return
         val safeKey = SafeKeyGenerator().getSafeKey(key)
         var cache: DiskLruCache? = null

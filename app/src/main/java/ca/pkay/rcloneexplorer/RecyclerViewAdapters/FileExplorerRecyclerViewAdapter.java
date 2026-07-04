@@ -1287,7 +1287,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                     continue;
                 }
                 String label = ThumbnailCacheIdentity.prefetchDiskCacheKeyLabel(
-                        item.getRemote().getName(), item.getPath(), item.getMimeType());
+                        cache, item.getRemote().getName(), item.getPath(), item.getMimeType());
                 if (label == null || !ThumbnailDiskCacheEvictor.isCachedIn(cache, label)) {
                     continue;
                 }
