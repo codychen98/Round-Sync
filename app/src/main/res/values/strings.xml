@@ -615,6 +615,17 @@
     <string name="exportSettingsDescription">Back up remotes, tasks, triggers, preferences, and cached thumbnails</string>
     <string name="export_config_success">Configuration exported</string>
     <string name="export_config_success_including_cache">Configuration exported (including thumbnails)</string>
+    <string name="config_broadcast_notification_channel_name">Config backup</string>
+    <string name="config_broadcast_notification_channel_description">Notifications for automated config import and export</string>
+    <string name="config_import_broadcast_success_title">Restore completed</string>
+    <string name="config_import_broadcast_success_message">Round Sync configuration was restored from your backup.</string>
+    <string name="config_import_broadcast_success_encrypted_message">Restore completed. Open Round Sync to enter your config password.</string>
+    <string name="config_import_broadcast_failure_title">Restore failed</string>
+    <string name="config_import_broadcast_failure_storage">Restore failed. Grant All files access to Round Sync first.</string>
+    <string name="config_import_broadcast_failure_source">Restore failed. Backup file was not found or could not be read.</string>
+    <string name="config_import_broadcast_failure_invalid_conf">Restore failed. The backup does not contain a valid rclone.conf.</string>
+    <string name="config_import_broadcast_failure_missing_conf">Restore failed. The backup zip does not contain rclone.conf.</string>
+    <string name="config_import_broadcast_failure_generic">Restore failed. Check that the backup file exists and is valid.</string>
     <string name="import_settings_icon_content_description">Import Icon</string>
     <string name="export_settings_icon_content_description">Export Icon</string>
     <string name="intro_battery_optimizations_title">Battery Optimizations</string>
