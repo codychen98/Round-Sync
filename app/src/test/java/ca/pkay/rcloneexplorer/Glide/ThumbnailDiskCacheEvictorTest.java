@@ -9,8 +9,8 @@ import com.bumptech.glide.signature.ObjectKey;
 
 import org.junit.Test;
 
-import java.io.ByteArrayInputStream;
 import java.io.File;
+import java.io.OutputStream;
 
 public class ThumbnailDiskCacheEvictorTest {
 
@@ -30,7 +30,9 @@ public class ThumbnailDiskCacheEvictorTest {
                 DISK_CACHE_SIZE_BYTES);
         try {
             DiskLruCache.Editor editor = cache.edit(safeKey);
-            editor.set(0, new ByteArrayInputStream(new byte[] {9}));
+            try (OutputStream out = editor.newOutputStream(0)) {
+                out.write(new byte[] {9});
+            }
             editor.commit();
             assertTrue(ThumbnailDiskCacheEvictor.isCachedIn(cache, label));
             assertFalse(ThumbnailDiskCacheEvictor.isCachedIn(cache, "missing-key"));

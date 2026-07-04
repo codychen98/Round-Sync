@@ -7,7 +7,6 @@ import com.bumptech.glide.disklrucache.DiskLruCache
 import com.bumptech.glide.load.Key
 import com.bumptech.glide.load.engine.cache.SafeKeyGenerator
 import com.bumptech.glide.signature.ObjectKey
-import java.io.ByteArrayInputStream
 
 /**
  * Removes a single Glide disk-cache entry from the canonical thumbnails directory.
@@ -39,8 +38,8 @@ object ThumbnailDiskCacheEvictor {
                 DISK_CACHE_SIZE_BYTES,
             )
             val editor = cache.edit(safeKey) ?: return
-            ByteArrayInputStream(jpegBytes).use { input ->
-                editor.set(0, input)
+            editor.newOutputStream(0).use { out ->
+                out.write(jpegBytes)
             }
             editor.commit()
         } catch (t: Throwable) {
