@@ -1,22 +1,12 @@
 package ca.pkay.rcloneexplorer.Glide;
 
 import android.content.Context;
-import android.graphics.drawable.Drawable;
 import android.net.Uri;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import com.bumptech.glide.Glide;
-import com.bumptech.glide.load.engine.DiskCacheStrategy;
-import com.bumptech.glide.request.FutureTarget;
-import com.bumptech.glide.request.RequestOptions;
-
 import ca.pkay.rcloneexplorer.Items.FileItem;
-
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 public final class ThumbnailCacheIdentity {
 
@@ -25,7 +15,6 @@ public final class ThumbnailCacheIdentity {
     private static final String VIDEO_RELOAD_NAMESPACE = "thumbVideoReload";
     private static final String VIDEO_VERSION_TOKEN = "|thumbV2";
     private static final String CACHE_PROBE_URL_PREFIX = "http://127.0.0.1/cacheProbe";
-    private static final long CACHE_PROBE_TIMEOUT_MS = 1500L;
 
     private ThumbnailCacheIdentity() {
     }
@@ -68,29 +57,34 @@ public final class ThumbnailCacheIdentity {
     }
 
     public static boolean isPrefetchThumbnailCached(@NonNull Context context, @NonNull FileItem item) {
-        Object model = buildCacheProbeModel(item.getRemote().getName(), item.getPath(), item.getMimeType());
-        if (model == null) {
+        String label = prefetchDiskCacheKeyLabel(
+                item.getRemote().getName(), item.getPath(), item.getMimeType());
+        if (label == null) {
             return false;
         }
-        Context appContext = context.getApplicationContext();
-        FutureTarget<Drawable> target = Glide.with(appContext)
-                .asDrawable()
-                .load(model)
-                .apply(new RequestOptions()
-                        .diskCacheStrategy(DiskCacheStrategy.DATA)
-                        .onlyRetrieveFromCache(true)
-                        .skipMemoryCache(true))
-                .submit();
-        try {
-            return target.get(CACHE_PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS) != null;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return false;
-        } catch (ExecutionException | TimeoutException e) {
-            return false;
-        } finally {
-            Glide.with(appContext).clear(target);
+        return ThumbnailDiskCacheEvictor.isCachedByLabel(context, label);
+    }
+
+    /**
+     * Readable disk-cache label aligned with Glide HTTP-serve / video thumbnail keys.
+     * Returns null when the file is not a prefetch thumbnail target (unsupported mime).
+     */
+    @Nullable
+    public static String prefetchDiskCacheKeyLabel(
+            @NonNull String remoteName,
+            @NonNull String remoteFilePath,
+            @Nullable String mimeType) {
+        Object model = buildCacheProbeModel(remoteName, remoteFilePath, mimeType);
+        if (model instanceof HttpServeThumbnailGlideUrl) {
+            return ((HttpServeThumbnailGlideUrl) model).getCacheKey();
         }
+        if (model instanceof VideoThumbnailUrl) {
+            VideoThumbnailUrl video = (VideoThumbnailUrl) model;
+            int reloadEpoch = ThumbnailReloadEpoch.get(
+                    ThumbnailStablePath.normalize(video.getStablePath()));
+            return videoDiskCacheKeyLabel(remoteName, remoteFilePath, reloadEpoch);
+        }
+        return null;
     }
 
     @Nullable

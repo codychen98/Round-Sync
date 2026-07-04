@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Base64
 import ca.pkay.rcloneexplorer.Glide.HttpServeThumbnailGlideUrl
 import ca.pkay.rcloneexplorer.Glide.ThumbnailCacheIdentity
+import ca.pkay.rcloneexplorer.Glide.ThumbnailDiskCacheEvictor
 import ca.pkay.rcloneexplorer.Glide.ThumbnailReloadPriority
 import ca.pkay.rcloneexplorer.Glide.VideoThumbnailUrl
 import ca.pkay.rcloneexplorer.Items.FileItem
@@ -55,11 +56,18 @@ object ThumbnailPrefetchExecutor {
     ): Pair<Int, List<FileItem>> {
         var cachedCount = 0
         val fetchTargets = ArrayList<FileItem>(targets.size)
-        for (item in targets) {
-            if (ThumbnailCacheIdentity.isPrefetchThumbnailCached(context, item)) {
-                cachedCount++
-            } else {
-                fetchTargets.add(item)
+        ThumbnailDiskCacheEvictor.withOpenCache(context) { cache ->
+            for (item in targets) {
+                val label = ThumbnailCacheIdentity.prefetchDiskCacheKeyLabel(
+                    item.remote.name,
+                    item.path,
+                    item.mimeType,
+                )
+                if (label != null && ThumbnailDiskCacheEvictor.isCachedIn(cache, label)) {
+                    cachedCount++
+                } else {
+                    fetchTargets.add(item)
+                }
             }
         }
         return cachedCount to fetchTargets
@@ -83,6 +91,14 @@ object ThumbnailPrefetchExecutor {
             "event=prefetchCacheProbe cached=$cachedCount misses=${fetchTargets.size} " +
                 "total=${targets.size} path=$directoryPath",
         )
+        if (fetchTargets.isEmpty()) {
+            SyncLog.info(
+                app,
+                "MediaPrepDbg",
+                "event=prefetchAllCached skipServer path=$directoryPath loaded=$cachedCount total=${targets.size}",
+            )
+            return FolderPrefetchOutcome(loaded = cachedCount, total = targets.size, stoppedEarly = false)
+        }
 
         var prefetchRefIncremented = false
         var serveLeaseId = 0

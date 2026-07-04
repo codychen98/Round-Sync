@@ -95,6 +95,19 @@ public class ThumbnailCacheIdentityTest {
     }
 
     @Test
+    public void prefetchDiskCacheKeyLabel_matchesImageAndVideoModels() {
+        assertEquals(
+                ThumbnailCacheIdentity.fileDataCacheKey("drive", "/Pictures/cover.jpg"),
+                ThumbnailCacheIdentity.prefetchDiskCacheKeyLabel(
+                        "drive", "/Pictures/cover.jpg", "image/jpeg"));
+        assertEquals(
+                ThumbnailCacheIdentity.videoDiskCacheKeyLabel("pCloudLock", "Video Archive/clip.mkv", 0),
+                ThumbnailCacheIdentity.prefetchDiskCacheKeyLabel(
+                        "pCloudLock", "Video Archive/clip.mkv", "video/x-matroska"));
+        assertNull(ThumbnailCacheIdentity.prefetchDiskCacheKeyLabel("drive", "/Docs/readme.txt", "text/plain"));
+    }
+
+    @Test
     public void videoReloadDataCacheKey_usesReloadNamespace() {
         String key = ThumbnailCacheIdentity.videoReloadDataCacheKey("drive", "/Videos/clip.mp4", 2);
         assertEquals(

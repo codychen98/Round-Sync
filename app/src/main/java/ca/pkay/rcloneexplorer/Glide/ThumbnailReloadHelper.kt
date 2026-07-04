@@ -8,6 +8,7 @@ import ca.pkay.rcloneexplorer.RecyclerViewAdapters.FileExplorerRecyclerViewAdapt
 import ca.pkay.rcloneexplorer.Services.ExplorerThumbnailServeCoordinator
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager
 import ca.pkay.rcloneexplorer.util.SyncLog
+import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.load.engine.executor.GlideExecutor
 import com.bumptech.glide.signature.ObjectKey
 import java.util.concurrent.ExecutorService
@@ -154,6 +155,17 @@ object ThumbnailReloadHelper {
                 )
                 if (jpeg != null) {
                     ThumbnailReloadResultCache.put(stablePath, jpeg)
+                    ThumbnailDiskCacheEvictor.store(
+                        appContext,
+                        ObjectKey(
+                            ThumbnailCacheIdentity.videoDiskCacheKeyLabel(
+                                remoteName,
+                                path,
+                                epochForVideo,
+                            ),
+                        ),
+                        jpeg,
+                    )
                     log(
                         appContext,
                         "reloadDirectCacheStore path=$path epoch=$epochForVideo bytes=${jpeg.size}",
@@ -188,31 +200,37 @@ object ThumbnailReloadHelper {
         jpegBytes: ByteArray?,
     ) {
         val stablePath = ThumbnailCacheIdentity.stableServePath(fileItem.remote.name, fileItem.path)
+        var excludeFromVisibleRefresh = RecyclerView.NO_POSITION
         try {
-        log(
-            context,
-            "reloadMainThread path=$path success=$success detail=$detail position=$position",
-        )
-        if (success && jpegBytes != null) {
-            val applied = adapter.applyReloadedVideoThumbnail(position, fileItem, jpegBytes)
-            log(context, "reloadDirectApply path=$path applied=$applied position=$position")
-            if (!applied) {
+            log(
+                context,
+                "reloadMainThread path=$path success=$success detail=$detail position=$position",
+            )
+            if (success && jpegBytes != null) {
+                val applied = adapter.applyReloadedVideoThumbnail(position, fileItem, jpegBytes)
+                log(context, "reloadDirectApply path=$path applied=$applied position=$position")
+                if (applied) {
+                    excludeFromVisibleRefresh = position
+                } else {
+                    adapter.reloadThumbnailAt(position)
+                }
+            } else if (success) {
                 adapter.reloadThumbnailAt(position)
+                log(context, "reloadAdapterNotified path=$path position=$position")
+            } else {
+                ThumbnailReloadEpoch.markPreferExoDecode(stablePath)
+                ThumbnailReloadEpoch.markPendingUserReload(stablePath)
+                adapter.reloadThumbnailAt(position)
+                log(context, "reloadGlideFallback path=$path position=$position detail=$detail")
             }
-        } else if (success) {
-            adapter.reloadThumbnailAt(position)
-            log(context, "reloadAdapterNotified path=$path position=$position")
-        } else {
-            ThumbnailReloadEpoch.markPreferExoDecode(stablePath)
-            ThumbnailReloadEpoch.markPendingUserReload(stablePath)
-            adapter.reloadThumbnailAt(position)
-            log(context, "reloadGlideFallback path=$path position=$position detail=$detail")
-        }
-        onComplete.onComplete(success)
+            onComplete.onComplete(success)
         } finally {
             ThumbnailReloadPriority.endExclusive(context, stablePath)
-            adapter.notifyThumbnailRefreshForVisibleRange()
-            log(context, "reloadVisibleRangeRefresh path=$path")
+            adapter.notifyThumbnailRefreshForVisibleRange(excludeFromVisibleRefresh)
+            log(
+                context,
+                "reloadVisibleRangeRefresh path=$path excludePosition=$excludeFromVisibleRefresh",
+            )
         }
     }
 

@@ -41,6 +41,7 @@ import ca.pkay.rcloneexplorer.Glide.RetryRequestListener;
 import ca.pkay.rcloneexplorer.Glide.FolderThumbnailGlideUrl;
 import ca.pkay.rcloneexplorer.Glide.HttpServeThumbnailGlideUrl;
 import ca.pkay.rcloneexplorer.Glide.ThumbnailCacheIdentity;
+import ca.pkay.rcloneexplorer.Glide.ThumbnailDiskCacheEvictor;
 import ca.pkay.rcloneexplorer.Glide.ThumbnailReloadEpoch;
 import ca.pkay.rcloneexplorer.Glide.ThumbnailReloadPriority;
 import ca.pkay.rcloneexplorer.Glide.VideoThumbnailUrl;
@@ -540,11 +541,15 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 if (userReload) {
                     maybeLogThumbPipelineDbg(item, "videoUserReload", true);
                 }
-                final RequestOptions glideOption = userReload
-                        ? baseVideoGlideOption
-                                .priority(Priority.IMMEDIATE)
-                                .skipMemoryCache(true)
-                        : baseVideoGlideOption;
+                int reloadEpoch = ThumbnailReloadEpoch.get(stablePath);
+                final RequestOptions glideOption;
+                if (userReload || reloadEpoch > 0) {
+                    glideOption = baseVideoGlideOption
+                            .priority(userReload ? Priority.IMMEDIATE : Priority.NORMAL)
+                            .skipMemoryCache(true);
+                } else {
+                    glideOption = baseVideoGlideOption;
+                }
                 if (serverReady) {
                     if (!isHttpThumbnailPolicyAllowedForNetworkThumbnail(item)) {
                         startupBranch = "videoPolicySkip";
@@ -981,6 +986,16 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
      * so list scroll position is preserved when the thumbnail server restarts.
      */
     public void notifyThumbnailRefreshForVisibleRange() {
+        notifyThumbnailRefreshForVisibleRange(RecyclerView.NO_POSITION);
+    }
+
+    /**
+     * Refreshes thumbnails for currently visible rows without a full {@code notifyDataSetChanged()},
+     * so list scroll position is preserved when the thumbnail server restarts.
+     *
+     * @param excludePosition adapter position to skip (e.g. reload target after direct JPEG apply)
+     */
+    public void notifyThumbnailRefreshForVisibleRange(int excludePosition) {
         if (ThumbnailReloadPriority.isExclusiveActive()) {
             return;
         }
@@ -998,17 +1013,24 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         if (first == RecyclerView.NO_POSITION || last == RecyclerView.NO_POSITION) {
             return;
         }
-        int count = last - first + 1;
-        if (count > 0) {
-            if (context != null) {
-                SyncLog.info(
-                        context.getApplicationContext(),
-                        "ThumbReloadDbg",
-                        "event=visibleRangeThumbnailRefresh first=" + first
-                                + " count=" + count);
-            }
-            notifyItemRangeChanged(first, count, THUMBNAIL_PAYLOAD);
+        if (context != null) {
+            SyncLog.info(
+                    context.getApplicationContext(),
+                    "ThumbReloadDbg",
+                    "event=visibleRangeThumbnailRefresh first=" + first
+                            + " count=" + (last - first + 1)
+                            + " excludePosition=" + excludePosition);
         }
+        if (excludePosition >= first && excludePosition <= last) {
+            if (excludePosition > first) {
+                notifyItemRangeChanged(first, excludePosition - first, THUMBNAIL_PAYLOAD);
+            }
+            if (excludePosition < last) {
+                notifyItemRangeChanged(excludePosition + 1, last - excludePosition, THUMBNAIL_PAYLOAD);
+            }
+            return;
+        }
+        notifyItemRangeChanged(first, last - first + 1, THUMBNAIL_PAYLOAD);
     }
 
     /**
@@ -1179,7 +1201,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 .apply(new RequestOptions()
                         .centerCrop()
                         .dontAnimate()
-                        .skipMemoryCache(false))
+                        .skipMemoryCache(true))
                 .into(viewHolder.fileIcon);
         SyncLog.info(
                 context.getApplicationContext(),
@@ -1254,14 +1276,57 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         thumbnailCountedPaths.clear();
     }
 
+    private void resetAndSeedThumbnailProgress(@NonNull List<FileItem> data) {
+        resetThumbnailProgressAccounting();
+        if (!showThumbnails || thumbnailTotal == 0 || context == null) {
+            return;
+        }
+        ThumbnailDiskCacheEvictor.withOpenCache(context, cache -> {
+            for (FileItem item : data) {
+                if (!isThumbnailProgressTarget(item)) {
+                    continue;
+                }
+                String label = ThumbnailCacheIdentity.prefetchDiskCacheKeyLabel(
+                        item.getRemote().getName(), item.getPath(), item.getMimeType());
+                if (label == null || !ThumbnailDiskCacheEvictor.isCachedIn(cache, label)) {
+                    continue;
+                }
+                if (thumbnailCountedPaths.add(item.getPath())) {
+                    thumbnailLoaded.incrementAndGet();
+                }
+            }
+        });
+        int loaded = thumbnailLoaded.get();
+        if (loaded > 0) {
+            SyncLog.info(context, "MediaPrepDbg", "event=adapterSeedDiskCache loaded=" + loaded
+                    + " total=" + thumbnailTotal + " listSize=" + data.size());
+        }
+        emitInitialThumbnailProgress(loaded);
+    }
+
+    private void emitInitialThumbnailProgress(int loaded) {
+        if (progressListener == null || thumbnailTotal == 0) {
+            return;
+        }
+        if (loaded >= thumbnailTotal) {
+            SyncLog.info(context, "MediaPrepDbg", "event=adapterAllCached skipNotification loaded="
+                    + loaded + " total=" + thumbnailTotal);
+            progressListener.onThumbnailLoadingComplete();
+            return;
+        }
+        if (loaded > 0) {
+            progressListener.onThumbnailProgress(loaded, thumbnailTotal);
+        }
+    }
+
     public void newData(List<FileItem> data) {
         invalidateThumbPolicyCache();
         thumbnailTotal = countThumbnailTargets(data);
-        resetThumbnailProgressAccounting();
+        resetAndSeedThumbnailProgress(data);
         long gen = thumbnailDataGeneration.incrementAndGet();
         if (context != null) {
-            SyncLog.info(context, "MediaPrepDbg", "event=adapterNewData gen=" + gen + " loaded=0 total="
-                    + thumbnailTotal + " listSize=" + data.size());
+            SyncLog.info(context, "MediaPrepDbg", "event=adapterNewData gen=" + gen + " loaded="
+                    + thumbnailLoaded.get() + " total=" + thumbnailTotal + " listSize=" + data.size());
         }
         this.clear();
         files = new ArrayList<>(data);
@@ -1301,7 +1366,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         syncSelectedItemsWithUpdatedData(newData);
         files = newData;
         thumbnailTotal = countThumbnailTargets(files);
-        resetThumbnailProgressAccounting();
+        resetAndSeedThumbnailProgress(files);
         diffResult.dispatchUpdatesTo(this);
         notifyThumbnailIdleIfNoTargets();
     }
@@ -1355,11 +1420,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             notifyItemRangeInserted(0, files.size());
         }
         thumbnailTotal = countThumbnailTargets(files);
-        resetThumbnailProgressAccounting();
+        resetAndSeedThumbnailProgress(files);
         long gen = thumbnailDataGeneration.incrementAndGet();
         if (context != null) {
-            SyncLog.info(context, "MediaPrepDbg", "event=adapterUpdateSortedData gen=" + gen + " loaded=0 total="
-                    + thumbnailTotal + " listSize=" + files.size());
+            SyncLog.info(context, "MediaPrepDbg", "event=adapterUpdateSortedData gen=" + gen + " loaded="
+                    + thumbnailLoaded.get() + " total=" + thumbnailTotal + " listSize=" + files.size());
         }
         clearRecycledViewPoolIfAttached();
         notifyThumbnailIdleIfNoTargets();
@@ -1519,28 +1584,29 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             return 0;
         }
         for (FileItem item : items) {
-            if (item.getRemote() == null) {
-                continue;
-            }
-            boolean localLoad = item.getRemote().getType() == RemoteItem.SAFW;
-            if (localLoad) {
-                continue;
-            }
-            if (item.isDir()) {
-                if (isNetworkFolderThumbnailCandidate(item)) {
-                    total++;
-                }
-                continue;
-            }
-            String mime = item.getMimeType();
-            if ((mime.startsWith("image/") && item.getSize() <= sizeLimit)
-                    || mime.startsWith("video/")) {
-                if (isHttpThumbnailPolicyAllowedForNetworkThumbnail(item)) {
-                    total++;
-                }
+            if (isThumbnailProgressTarget(item)) {
+                total++;
             }
         }
         return total;
+    }
+
+    private boolean isThumbnailProgressTarget(@NonNull FileItem item) {
+        if (item.getRemote() == null) {
+            return false;
+        }
+        if (item.getRemote().getType() == RemoteItem.SAFW) {
+            return false;
+        }
+        if (item.isDir()) {
+            return isNetworkFolderThumbnailCandidate(item);
+        }
+        String mime = item.getMimeType();
+        if ((mime.startsWith("image/") && item.getSize() <= sizeLimit)
+                || mime.startsWith("video/")) {
+            return isHttpThumbnailPolicyAllowedForNetworkThumbnail(item);
+        }
+        return false;
     }
 
     private boolean isNetworkFolderThumbnailCandidate(@NonNull FileItem item) {
