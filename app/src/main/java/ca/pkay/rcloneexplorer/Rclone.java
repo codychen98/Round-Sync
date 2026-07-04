@@ -1428,14 +1428,39 @@ public class Rclone {
     }
 
     public void exportConfigFile(Uri uri) throws IOException {
+        OutputStream outputStream = context.getContentResolver().openOutputStream(uri);
+        if (outputStream == null) {
+            return;
+        }
+        try {
+            writeConfigZip(outputStream);
+        } finally {
+            outputStream.flush();
+            outputStream.close();
+        }
+    }
+
+    public void exportConfigFile(File outputFile) throws IOException {
+        File parent = outputFile.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            throw new IOException("Could not create export directory: " + parent);
+        }
+        if (outputFile.exists() && !outputFile.delete()) {
+            throw new IOException("Could not replace existing export file: " + outputFile);
+        }
+        try (FileOutputStream outputStream = new FileOutputStream(outputFile)) {
+            writeConfigZip(outputStream);
+        }
+    }
+
+    private void writeConfigZip(OutputStream outputStream) throws IOException {
         File configFile = new File(rcloneConf);
         Uri config = Uri.fromFile(configFile);
         InputStream inputStream = context.getContentResolver().openInputStream(config);
-        OutputStream outputStream = context.getContentResolver().openOutputStream(uri);
-
-        if (inputStream == null || outputStream == null) {
-            return;
+        if (inputStream == null) {
+            throw new IOException("Could not read config file");
         }
+
         char[] buffer = new char[4096];
         StringBuilder out = new StringBuilder();
         Reader in = new InputStreamReader(inputStream, StandardCharsets.UTF_8);
@@ -1458,15 +1483,11 @@ public class Rclone {
             zos.write(out.toString().getBytes());
             zos.closeEntry();
             CacheArchiveExporter.appendCacheEntries(context, zos);
-        }
-        catch (Exception e) {
-            // unable to write zip
-        }
-        finally {
+        } catch (Exception e) {
+            throw new IOException("Unable to write config export zip", e);
+        } finally {
             zos.close();
             inputStream.close();
-            outputStream.flush();
-            outputStream.close();
         }
     }
 

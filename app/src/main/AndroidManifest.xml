@@ -118,6 +118,13 @@
         <receiver
             android:name=".BroadcastReceivers.SyncRestartAction"
             android:exported="true" />
+        <receiver
+            android:name=".BroadcastReceivers.ConfigExportBroadcastReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="${applicationId}.EXPORT_CONFIG" />
+            </intent-filter>
+        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"
