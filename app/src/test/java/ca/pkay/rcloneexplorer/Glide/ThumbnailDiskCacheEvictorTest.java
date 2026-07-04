@@ -10,6 +10,7 @@ import com.bumptech.glide.signature.ObjectKey;
 import org.junit.Test;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.OutputStream;
 
 public class ThumbnailDiskCacheEvictorTest {
@@ -30,7 +31,7 @@ public class ThumbnailDiskCacheEvictorTest {
                 DISK_CACHE_SIZE_BYTES);
         try {
             DiskLruCache.Editor editor = cache.edit(safeKey);
-            try (OutputStream out = editor.newOutputStream(0)) {
+            try (OutputStream out = new FileOutputStream(editor.getFile(0))) {
                 out.write(new byte[] {9});
             }
             editor.commit();
