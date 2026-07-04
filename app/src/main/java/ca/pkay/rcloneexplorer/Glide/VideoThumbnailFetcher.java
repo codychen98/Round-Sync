@@ -400,9 +400,9 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
         }
         long durationUs = durationMs > 0 ? durationMs * 1000L : 0L;
         int reloadEpoch = ThumbnailReloadEpoch.getEpochForVideoUrl(url);
-        long lastSourceMs = ThumbnailReloadEpoch.getLastSourcePositionForVideoUrl(url);
+        java.util.Set<Long> usedSourceMs = ThumbnailReloadEpoch.getUsedSourcePositionsForVideoUrl(url);
         long[] timestamps = reloadEpoch > 0
-                ? buildReloadThumbnailProbeTimesUs(durationMs, durationUs, reloadEpoch, lastSourceMs)
+                ? buildReloadThumbnailProbeTimesUs(durationMs, durationUs, reloadEpoch, usedSourceMs)
                 : buildThumbnailProbeTimesUs(durationMs, durationUs);
         BestFrameSoFar best = new BestFrameSoFar();
 
@@ -506,7 +506,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
             long durationMs,
             long durationUs,
             int reloadEpoch,
-            long lastSourcePositionMs) {
+            java.util.Collection<Long> usedSourcePositionsMs) {
         long[] fractionsUs;
         if (durationMs > 0) {
             fractionsUs = new long[] {
@@ -528,8 +528,8 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
         for (int i = 0; i < fractionsUs.length; i++) {
             ordered.add(clampTimeUs(fractionsUs[(start + i) % fractionsUs.length], durationUs));
         }
-        return VideoThumbnailSeekProbe.deprioritizeLastSourceUs(
-                longSetToArray(ordered), lastSourcePositionMs);
+        return VideoThumbnailSeekProbe.deprioritizeUsedSourceUs(
+                longSetToArray(ordered), usedSourcePositionsMs);
     }
 
     private static long clampTimeUs(long timeUs, long durationUs) {

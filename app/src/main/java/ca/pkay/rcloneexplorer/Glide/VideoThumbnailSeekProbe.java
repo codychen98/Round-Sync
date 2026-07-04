@@ -1,5 +1,8 @@
 package ca.pkay.rcloneexplorer.Glide;
 
+import java.util.Collection;
+import java.util.Collections;
+
 /**
  * Seek positions for video thumbnail extraction when streaming over HTTP or from a local prefix file.
  */
@@ -21,7 +24,7 @@ final class VideoThumbnailSeekProbe {
      */
     static long[] exoSeekAttemptsMs(long effectiveDurationMs, int reloadEpoch) {
         return exoSeekAttemptsMs(
-                effectiveDurationMs, reloadEpoch, ThumbnailReloadEpoch.NO_SOURCE_POSITION);
+                effectiveDurationMs, reloadEpoch, Collections.<Long>emptySet());
     }
 
     /**
@@ -31,6 +34,21 @@ final class VideoThumbnailSeekProbe {
      */
     static long[] exoSeekAttemptsMs(
             long effectiveDurationMs, int reloadEpoch, long lastSourcePositionMs) {
+        if (lastSourcePositionMs < 0L) {
+            return exoSeekAttemptsMs(effectiveDurationMs, reloadEpoch, Collections.<Long>emptySet());
+        }
+        return exoSeekAttemptsMs(
+                effectiveDurationMs, reloadEpoch, Collections.singleton(lastSourcePositionMs));
+    }
+
+    /**
+     * On reload deprioritizes positions near any entry in {@code usedSourcePositionsMs} so repeated
+     * reload taps cycle through fresh frames before revisiting a prior one (Step 15G).
+     */
+    static long[] exoSeekAttemptsMs(
+            long effectiveDurationMs,
+            int reloadEpoch,
+            Collection<Long> usedSourcePositionsMs) {
         long tenthMs = effectiveDurationMs > 0
                 ? Math.max(1L, effectiveDurationMs / 10)
                 : 10_000L;
@@ -53,7 +71,7 @@ final class VideoThumbnailSeekProbe {
         for (int i = 0; i < base.length; i++) {
             rotated[i] = base[(start + i) % base.length];
         }
-        return deprioritizeLastSourceMs(rotated, lastSourcePositionMs);
+        return deprioritizeUsedSourceMs(rotated, usedSourcePositionsMs);
     }
 
     /**
@@ -62,13 +80,37 @@ final class VideoThumbnailSeekProbe {
      * still succeeds when the last-used position is the only one that works.
      */
     static long[] deprioritizeLastSourceMs(long[] attemptsMs, long lastSourcePositionMs) {
-        if (lastSourcePositionMs < 0L || attemptsMs.length <= 1) {
+        if (lastSourcePositionMs < 0L) {
+            return attemptsMs;
+        }
+        return deprioritizeUsedSourceMs(attemptsMs, Collections.singleton(lastSourcePositionMs));
+    }
+
+    /**
+     * Moves entries within tolerance of any used source position to the end. When every attempt
+     * matches a used position, returns the original order so extraction can still succeed.
+     */
+    static long[] deprioritizeUsedSourceMs(
+            long[] attemptsMs,
+            Collection<Long> usedSourcePositionsMs) {
+        if (usedSourcePositionsMs == null
+                || usedSourcePositionsMs.isEmpty()
+                || attemptsMs.length <= 1) {
+            return attemptsMs;
+        }
+        int freshCount = 0;
+        for (long attempt : attemptsMs) {
+            if (!matchesAnyUsedSourceMs(attempt, usedSourcePositionsMs)) {
+                freshCount++;
+            }
+        }
+        if (freshCount == 0) {
             return attemptsMs;
         }
         long[] out = new long[attemptsMs.length];
         int head = 0;
         for (long attempt : attemptsMs) {
-            if (!isSameFrameMs(attempt, lastSourcePositionMs)) {
+            if (!matchesAnyUsedSourceMs(attempt, usedSourcePositionsMs)) {
                 out[head++] = attempt;
             }
         }
@@ -77,7 +119,7 @@ final class VideoThumbnailSeekProbe {
         }
         int tail = head;
         for (long attempt : attemptsMs) {
-            if (isSameFrameMs(attempt, lastSourcePositionMs)) {
+            if (matchesAnyUsedSourceMs(attempt, usedSourcePositionsMs)) {
                 out[tail++] = attempt;
             }
         }
@@ -86,14 +128,25 @@ final class VideoThumbnailSeekProbe {
 
     /** Microsecond variant for MediaMetadataRetriever probe lists. */
     static long[] deprioritizeLastSourceUs(long[] attemptsUs, long lastSourcePositionMs) {
-        if (lastSourcePositionMs < 0L || attemptsUs.length <= 1) {
+        if (lastSourcePositionMs < 0L) {
+            return attemptsUs;
+        }
+        return deprioritizeUsedSourceUs(attemptsUs, Collections.singleton(lastSourcePositionMs));
+    }
+
+    static long[] deprioritizeUsedSourceUs(
+            long[] attemptsUs,
+            Collection<Long> usedSourcePositionsMs) {
+        if (usedSourcePositionsMs == null
+                || usedSourcePositionsMs.isEmpty()
+                || attemptsUs.length <= 1) {
             return attemptsUs;
         }
         long[] attemptsMs = new long[attemptsUs.length];
         for (int i = 0; i < attemptsUs.length; i++) {
             attemptsMs[i] = attemptsUs[i] / 1_000L;
         }
-        long[] reorderedMs = deprioritizeLastSourceMs(attemptsMs, lastSourcePositionMs);
+        long[] reorderedMs = deprioritizeUsedSourceMs(attemptsMs, usedSourcePositionsMs);
         if (reorderedMs == attemptsMs) {
             return attemptsUs;
         }
@@ -114,5 +167,14 @@ final class VideoThumbnailSeekProbe {
     static boolean isSameFrameMs(long candidateMs, long lastSourcePositionMs) {
         return lastSourcePositionMs >= 0L
                 && Math.abs(candidateMs - lastSourcePositionMs) <= SAME_FRAME_TOLERANCE_MS;
+    }
+
+    static boolean matchesAnyUsedSourceMs(long candidateMs, Collection<Long> usedSourcePositionsMs) {
+        for (Long used : usedSourcePositionsMs) {
+            if (used != null && isSameFrameMs(candidateMs, used)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

@@ -11,6 +11,7 @@ import ca.pkay.rcloneexplorer.util.SyncLog
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.load.engine.executor.GlideExecutor
 import com.bumptech.glide.signature.ObjectKey
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -23,6 +24,16 @@ object ThumbnailReloadHelper {
     private const val LOG_TAG = "ThumbReloadDbg"
     private const val SERVER_RESTART_WAIT_MS = 45_000L
     private val userReloadExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val inFlightReloadPaths = ConcurrentHashMap.newKeySet<String>()
+    private val pendingReloadRequests = ConcurrentHashMap<String, ReloadRequest>()
+
+    private data class ReloadRequest(
+        val context: Context,
+        val fileItem: FileItem,
+        val adapter: FileExplorerRecyclerViewAdapter,
+        val position: Int,
+        val onComplete: OnCompleteListener,
+    )
 
     fun interface OnCompleteListener {
         fun onComplete(success: Boolean)
@@ -37,6 +48,26 @@ object ThumbnailReloadHelper {
         onComplete: OnCompleteListener,
     ) {
         val appContext = context.applicationContext
+        val stablePath = ThumbnailCacheIdentity.stableServePath(fileItem.remote.name, fileItem.path)
+        val request = ReloadRequest(context, fileItem, adapter, position, onComplete)
+        if (!inFlightReloadPaths.add(stablePath)) {
+            pendingReloadRequests[stablePath] = request
+            log(
+                appContext,
+                "reloadCoalesced path=${fileItem.path} stablePath=$stablePath position=$position",
+            )
+            return
+        }
+        runReload(request)
+    }
+
+    private fun runReload(request: ReloadRequest) {
+        val context = request.context
+        val fileItem = request.fileItem
+        val adapter = request.adapter
+        val position = request.position
+        val onComplete = request.onComplete
+        val appContext = context.applicationContext
         val mimeType = fileItem.mimeType
         val remoteName = fileItem.remote.name
         val path = fileItem.path
@@ -50,7 +81,7 @@ object ThumbnailReloadHelper {
 
         if (mimeType.isNullOrEmpty()) {
             log(appContext, "reloadAbort reason=emptyMimeType path=$path")
-            onComplete.onComplete(false)
+            completeReloadChain(stablePath, onComplete, false)
             return
         }
 
@@ -118,6 +149,7 @@ object ThumbnailReloadHelper {
                 mainHandler.post {
                     finishReload(
                         appContext,
+                        stablePath,
                         adapter,
                         fileItem,
                         position,
@@ -135,6 +167,7 @@ object ThumbnailReloadHelper {
                 mainHandler.post {
                     finishReload(
                         appContext,
+                        stablePath,
                         adapter,
                         fileItem,
                         position,
@@ -174,6 +207,7 @@ object ThumbnailReloadHelper {
                 mainHandler.post {
                     finishReload(
                         appContext,
+                        stablePath,
                         adapter,
                         fileItem,
                         position,
@@ -190,6 +224,7 @@ object ThumbnailReloadHelper {
 
     private fun finishReload(
         context: Context,
+        stablePath: String,
         adapter: FileExplorerRecyclerViewAdapter,
         fileItem: FileItem,
         position: Int,
@@ -199,7 +234,6 @@ object ThumbnailReloadHelper {
         onComplete: OnCompleteListener,
         jpegBytes: ByteArray?,
     ) {
-        val stablePath = ThumbnailCacheIdentity.stableServePath(fileItem.remote.name, fileItem.path)
         var excludeFromVisibleRefresh = RecyclerView.NO_POSITION
         try {
             log(
@@ -223,7 +257,6 @@ object ThumbnailReloadHelper {
                 adapter.reloadThumbnailAt(position)
                 log(context, "reloadGlideFallback path=$path position=$position detail=$detail")
             }
-            onComplete.onComplete(success)
         } finally {
             ThumbnailReloadPriority.endExclusive(context, stablePath)
             adapter.notifyThumbnailRefreshForVisibleRange(excludeFromVisibleRefresh)
@@ -231,7 +264,29 @@ object ThumbnailReloadHelper {
                 context,
                 "reloadVisibleRangeRefresh path=$path excludePosition=$excludeFromVisibleRefresh",
             )
+            completeReloadChain(stablePath, onComplete, success)
         }
+    }
+
+    private fun completeReloadChain(
+        stablePath: String,
+        onComplete: OnCompleteListener,
+        success: Boolean,
+    ) {
+        inFlightReloadPaths.remove(stablePath)
+        val pending = pendingReloadRequests.remove(stablePath)
+        if (pending != null) {
+            if (inFlightReloadPaths.add(stablePath)) {
+                log(
+                    pending.context.applicationContext,
+                    "reloadCoalescedRun path=${pending.fileItem.path} stablePath=$stablePath",
+                )
+                runReload(pending)
+                return
+            }
+            pendingReloadRequests[stablePath] = pending
+        }
+        onComplete.onComplete(success)
     }
 
     private fun evictVideoDiskKeys(

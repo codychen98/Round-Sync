@@ -25,6 +25,10 @@ class ThumbnailReloadEpochTest {
         sourceField.isAccessible = true
         @Suppress("UNCHECKED_CAST")
         (sourceField.get(null) as MutableMap<String, Long>).clear()
+        val usedField = ThumbnailReloadEpoch::class.java.getDeclaredField("usedSourcePositionsMs")
+        usedField.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        (usedField.get(null) as MutableMap<String, MutableSet<Long>>).clear()
     }
 
     @Test
@@ -79,9 +83,12 @@ class ThumbnailReloadEpochTest {
     fun recordSourcePositionMs_tracksPerStablePath() {
         val path = "/pCloudLock/Video Archive/Anime/ep.mkv"
         assertEquals(ThumbnailReloadEpoch.NO_SOURCE_POSITION, ThumbnailReloadEpoch.getLastSourcePositionMs(path))
+        assertEquals(emptySet<Long>(), ThumbnailReloadEpoch.getUsedSourcePositionsMs(path))
         ThumbnailReloadEpoch.recordSourcePositionMs(path, 2_000L)
         assertEquals(2_000L, ThumbnailReloadEpoch.getLastSourcePositionMs(path))
+        assertEquals(setOf(2_000L), ThumbnailReloadEpoch.getUsedSourcePositionsMs(path))
         ThumbnailReloadEpoch.recordSourcePositionMs(path, 25_000L)
         assertEquals(25_000L, ThumbnailReloadEpoch.getLastSourcePositionMs(path))
+        assertEquals(setOf(2_000L, 25_000L), ThumbnailReloadEpoch.getUsedSourcePositionsMs(path))
     }
 }

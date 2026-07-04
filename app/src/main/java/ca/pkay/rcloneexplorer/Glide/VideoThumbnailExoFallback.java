@@ -593,9 +593,10 @@ final class VideoThumbnailExoFallback {
                     ? ThumbnailStablePath.normalize(reloadEpochStablePath)
                     : ThumbnailStablePath.canonicalFromServeUrl(url);
             int reloadEpoch = ThumbnailReloadEpoch.get(recordStablePath);
-            long lastSourceMs = ThumbnailReloadEpoch.getLastSourcePositionMs(recordStablePath);
+            java.util.Set<Long> usedSourceMs =
+                    ThumbnailReloadEpoch.getUsedSourcePositionsMs(recordStablePath);
             long[] seekAttemptsMs = VideoThumbnailSeekProbe.exoSeekAttemptsMs(
-                    effectiveDurationMs, reloadEpoch, lastSourceMs);
+                    effectiveDurationMs, reloadEpoch, usedSourceMs);
             for (long seekMs : seekAttemptsMs) {
                 if (cancellation.isCancelled()) {
                     break;
@@ -606,8 +607,8 @@ final class VideoThumbnailExoFallback {
                     ThumbnailReloadEpoch.recordSourcePositionMs(recordStablePath, seekMs);
                     VideoThumbnailFetcher.logThumbPipe(appContext, "exoSeekOk",
                             "basename=" + base + " seekMs=" + seekMs + " epoch=" + reloadEpoch
-                                    + (VideoThumbnailSeekProbe.isSameFrameMs(seekMs, lastSourceMs)
-                                            ? " sameAsLastSource=true" : ""));
+                                    + (VideoThumbnailSeekProbe.matchesAnyUsedSourceMs(seekMs, usedSourceMs)
+                                            ? " sameAsUsedSource=true" : ""));
                     return bitmap;
                 }
             }

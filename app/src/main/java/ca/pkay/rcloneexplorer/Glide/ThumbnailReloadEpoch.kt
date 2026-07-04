@@ -1,5 +1,6 @@
 package ca.pkay.rcloneexplorer.Glide
 
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -15,10 +16,13 @@ object ThumbnailReloadEpoch {
     private val preferExoDecode = ConcurrentHashMap.newKeySet<String>()
 
     /**
-     * Media-time position (ms) that produced the currently displayed thumbnail. Reload probe
-     * ordering deprioritizes this position so a reload does not re-capture the identical frame
-     * (Step 15B: epoch 0 and epoch 1 both succeeded at seekMs=2000).
+     * Media-time positions (ms) that already produced a thumbnail for this file during reload.
+     * Reload probe ordering deprioritizes all of these so cycling reloads do not revisit frames
+     * the user already saw (Step 15B only tracked the last position; Step 15G tracks the full set).
      */
+    private val usedSourcePositionsMs = ConcurrentHashMap<String, MutableSet<Long>>()
+
+    /** Most recent successful source position — used for logging and backward-compatible callers. */
     private val lastSourcePositionsMs = ConcurrentHashMap<String, Long>()
 
     const val NO_SOURCE_POSITION = -1L
@@ -61,9 +65,15 @@ object ThumbnailReloadEpoch {
     /** Records the media position whose frame was delivered as this file's thumbnail. */
     @JvmStatic
     fun recordSourcePositionMs(stablePath: String, positionMs: Long) {
-        if (positionMs >= 0L) {
-            lastSourcePositionsMs[key(stablePath)] = positionMs
+        if (positionMs < 0L) {
+            return
         }
+        val normalized = key(stablePath)
+        lastSourcePositionsMs[normalized] = positionMs
+        val used = usedSourcePositionsMs.computeIfAbsent(normalized) {
+            ConcurrentHashMap.newKeySet()
+        }
+        used.add(positionMs)
     }
 
     @JvmStatic
@@ -79,4 +89,15 @@ object ThumbnailReloadEpoch {
     @JvmStatic
     fun getLastSourcePositionForVideoUrl(url: String): Long =
         getLastSourcePositionMs(ThumbnailStablePath.canonicalFromServeUrl(url))
+
+    /** All source positions already used for this file's thumbnail during reload. */
+    @JvmStatic
+    fun getUsedSourcePositionsMs(stablePath: String): Set<Long> {
+        val used = usedSourcePositionsMs[key(stablePath)] ?: return emptySet()
+        return Collections.unmodifiableSet(HashSet(used))
+    }
+
+    @JvmStatic
+    fun getUsedSourcePositionsForVideoUrl(url: String): Set<Long> =
+        getUsedSourcePositionsMs(ThumbnailStablePath.canonicalFromServeUrl(url))
 }

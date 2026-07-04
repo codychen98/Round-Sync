@@ -45,4 +45,26 @@ class VideoThumbnailSeekProbeTest {
         assertEquals(true, VideoThumbnailSeekProbe.isSameFrameMs(2_000L, 2_500L))
         assertEquals(false, VideoThumbnailSeekProbe.isSameFrameMs(2_000L, 4_000L))
     }
+
+    @Test
+    fun deprioritizeUsedSourceMs_movesAllNearDuplicatesToEnd() {
+        val input = longArrayOf(2_000L, 5_000L, 10_000L, 2_500L)
+        val out = VideoThumbnailSeekProbe.deprioritizeUsedSourceMs(input, setOf(2_000L, 5_000L))
+        assertArrayEquals(longArrayOf(10_000L, 2_500L, 2_000L, 5_000L), out)
+    }
+
+    @Test
+    fun deprioritizeUsedSourceMs_whenAllUsed_returnsOriginalOrder() {
+        val input = longArrayOf(2_000L, 5_000L)
+        val out = VideoThumbnailSeekProbe.deprioritizeUsedSourceMs(input, setOf(2_000L, 5_000L))
+        assertArrayEquals(input, out)
+    }
+
+    @Test
+    fun exoSeekAttemptsMs_reloadEpoch_deprioritizesAllUsedSourcePositions() {
+        val seeks = VideoThumbnailSeekProbe.exoSeekAttemptsMs(100_000L, 1, setOf(2_000L, 5_000L))
+        assertEquals(10_000L, seeks[0])
+        assertEquals(2_000L, seeks[seeks.size - 2])
+        assertEquals(5_000L, seeks[seeks.size - 1])
+    }
 }
