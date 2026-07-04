@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
 import android.net.wifi.WifiManager
+import android.os.SystemClock
 import androidx.annotation.StringRes
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import androidx.preference.PreferenceManager
@@ -25,6 +26,7 @@ import ca.pkay.rcloneexplorer.notifications.SyncServiceNotifications
 import ca.pkay.rcloneexplorer.notifications.SyncServiceNotifications.Companion.GROUP_ID
 import ca.pkay.rcloneexplorer.notifications.support.StatusObject
 import ca.pkay.rcloneexplorer.util.FLog
+import ca.pkay.rcloneexplorer.util.NotificationUtils
 import ca.pkay.rcloneexplorer.util.SyncLog
 import ca.pkay.rcloneexplorer.util.WifiConnectivitiyUtil
 import kotlinx.serialization.json.Json
@@ -51,6 +53,17 @@ class SyncWorker (private var mContext: Context, workerParams: WorkerParameters)
 
         // Todo: Allow SyncWorker to run in silent mode, or remove this!
         const val EXTRA_TASK_SILENT = "notification"
+
+        /** Min interval between ongoing-notification updates; rclone with -vvv can emit hundreds of lines/s. */
+        private const val PROGRESS_UPDATE_INTERVAL_MS = 1000L
+
+        /**
+         * Stable per-task id so a replaced (ExistingWorkPolicy.REPLACE) or crashed run's ongoing
+         * notification is overwritten by the next run instead of orphaned forever.
+         */
+        fun ongoingNotificationIdForTask(taskId: Long): Int {
+            return "sync_ongoing_$taskId".hashCode()
+        }
     }
 
 
@@ -79,7 +92,9 @@ class SyncWorker (private var mContext: Context, workerParams: WorkerParameters)
     private var failureReason = FAILURE_REASON.NO_FAILURE
     private var endNotificationAlreadyPosted = false
     private var silentRun = false
-    private val ongoingNotificationID = Random().nextInt()
+    private var ongoingNotificationID = Random().nextInt()
+    private var foregroundStarted = false
+    private var lastProgressUpdateMs = 0L
 
 
     // Task
@@ -92,15 +107,6 @@ class SyncWorker (private var mContext: Context, workerParams: WorkerParameters)
 
         prepareNotifications()
         registerBroadcastReceivers()
-
-        updateForegroundNotification(mNotificationManager.updateSyncNotification(
-            mTitle,
-            mTitle,
-            ArrayList(),
-            0,
-            ongoingNotificationID
-        ))
-
 
         var ephemeralTask: Task? = null
 
@@ -120,17 +126,40 @@ class SyncWorker (private var mContext: Context, workerParams: WorkerParameters)
             }
         }
 
-        if (ephemeralTask != null) {
-            mTask = ephemeralTask
-            handleTask()
-            postSync()
-        } else {
-            postSync()
-            return Result.failure()
-        }
+        try {
+            if (ephemeralTask != null) {
+                mTask = ephemeralTask
+                ongoingNotificationID = ongoingNotificationIdForTask(mTask.id)
+                updateForegroundNotification(mNotificationManager.updateSyncNotification(
+                    mTitle,
+                    mTitle,
+                    ArrayList(),
+                    0,
+                    ongoingNotificationID
+                ))
+                handleTask()
+                postSync()
+            } else {
+                failureReason = FAILURE_REASON.NO_TASK
+                postSync()
+                return Result.failure()
+            }
 
-        // Indicate whether the work finished successfully with the Result
-        return Result.success()
+            // Indicate whether the work finished successfully with the Result
+            return Result.success()
+        } finally {
+            cleanUp()
+        }
+    }
+
+    /** Runs on every exit path so no ongoing notification or receiver outlives the worker. */
+    private fun cleanUp() {
+        mNotificationManager.cancelSyncNotification(ongoingNotificationID)
+        try {
+            mContext.unregisterReceiver(connectivityChangeBroadcastReceiver)
+        } catch (e: IllegalArgumentException) {
+            // Already unregistered by finishWork() on the stop path.
+        }
     }
 
     override fun onStopped() {
@@ -143,7 +172,12 @@ class SyncWorker (private var mContext: Context, workerParams: WorkerParameters)
 
     private fun finishWork() {
         sRcloneProcess?.destroy()
-        mContext.unregisterReceiver(connectivityChangeBroadcastReceiver)
+        mNotificationManager.cancelSyncNotification(ongoingNotificationID)
+        try {
+            mContext.unregisterReceiver(connectivityChangeBroadcastReceiver)
+        } catch (e: IllegalArgumentException) {
+            // Already unregistered by cleanUp().
+        }
         postSync()
     }
 
@@ -190,13 +224,20 @@ class SyncWorker (private var mContext: Context, workerParams: WorkerParameters)
                         }
                         statusObject.parseLoglineToStatusObject(logline)
 
-                        updateForegroundNotification(mNotificationManager.updateSyncNotification(
-                            title,
-                            statusObject.notificationContent,
-                            statusObject.notificationBigText,
-                            statusObject.notificationPercent,
-                            ongoingNotificationID
-                        ))
+                        // Throttled: with -vvv rclone can emit hundreds of lines per second;
+                        // building a notification (2 PendingIntents) + foreground dispatch per
+                        // line floods the main thread (ANR) and burns CPU on large syncs.
+                        val now = SystemClock.elapsedRealtime()
+                        if (now - lastProgressUpdateMs >= PROGRESS_UPDATE_INTERVAL_MS) {
+                            lastProgressUpdateMs = now
+                            updateForegroundNotification(mNotificationManager.updateSyncNotification(
+                                title,
+                                statusObject.notificationContent,
+                                statusObject.notificationBigText,
+                                statusObject.notificationPercent,
+                                ongoingNotificationID
+                            ))
+                        }
                     } catch (e: JSONException) {
                         FLog.e(TAG, "SyncService-Error: the offending line: $line")
                         //FLog.e(TAG, "onHandleIntent: error reading json", e)
@@ -257,8 +298,11 @@ class SyncWorker (private var mContext: Context, workerParams: WorkerParameters)
                 content = mContext.getString(R.string.operation_failed_unknown_rclone_error, mTitle)
             }
         }
-        runOnFailureCommand()
-        followupTask(mTask.onFailFollowup)
+        // mTask is never initialized on the NO_TASK path (task deleted / unknown id).
+        if (this::mTask.isInitialized) {
+            runOnFailureCommand()
+            followupTask(mTask.onFailFollowup)
+        }
         showFailNotification(notificationId, content)
         endNotificationAlreadyPosted = true
         finishWork()
@@ -269,7 +313,7 @@ class SyncWorker (private var mContext: Context, workerParams: WorkerParameters)
         mNotificationManager.showCancelledNotificationOrReport(
             mTitle,
             notificationId,
-            mTask.id
+            if (this::mTask.isInitialized) mTask.id else -1L
         )
     }
 
@@ -341,7 +385,7 @@ class SyncWorker (private var mContext: Context, workerParams: WorkerParameters)
             mTitle,
             text,
             notificationId,
-            mTask.id
+            if (this::mTask.isInitialized) mTask.id else -1L
         )
     }
 
@@ -399,11 +443,20 @@ class SyncWorker (private var mContext: Context, workerParams: WorkerParameters)
         LocalBroadcastManager.getInstance(mContext).sendBroadcast(intent)
     }
 
-    // Creates an instance of ForegroundInfo which can be used to update the
-    // ongoing notification.
+    /**
+     * First call promotes the worker to foreground; later calls update the same notification via
+     * plain notify(). Repeated setForegroundAsync() per update dispatches startService()/
+     * startForeground() on the main thread and its async completion can re-post the notification
+     * after completion cancel, orphaning a stale "in progress" card.
+     */
     private fun updateForegroundNotification(notification: Notification?) {
         notification?.let {
-            setForegroundAsync(ForegroundInfo(ongoingNotificationID, it, FOREGROUND_SERVICE_TYPE_DATA_SYNC))
+            if (!foregroundStarted) {
+                foregroundStarted = true
+                setForegroundAsync(ForegroundInfo(ongoingNotificationID, it, FOREGROUND_SERVICE_TYPE_DATA_SYNC))
+            } else {
+                NotificationUtils.createNotification(mContext, ongoingNotificationID, it)
+            }
         }
     }
 

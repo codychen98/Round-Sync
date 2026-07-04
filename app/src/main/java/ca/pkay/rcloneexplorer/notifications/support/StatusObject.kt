@@ -106,6 +106,13 @@ class StatusObject(var mContext: Context){
             if(checks != null) {
                 var filename = checks.getString(0)
                 if(!filename.equals("")) {
+                    // Non-blank content keeps the ongoing notification updating during long
+                    // check phases (updateSyncNotification drops blank-content updates).
+                    notificationContent = String.format(
+                        mContext.getString(R.string.sync_notification_file_checking),
+                        filename
+                    )
+
                     notificationBigText.add(
                         String.format(
                             mContext.getString(R.string.sync_notification_elapsed),
