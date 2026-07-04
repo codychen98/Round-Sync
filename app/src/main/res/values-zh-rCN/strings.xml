@@ -491,7 +491,7 @@
     <string name="importSettingsDescription">用备份替换您当前的配置（包括远端、任务、触发器、偏好设置，以及备份中的缓存缩略图）</string>
     <string name="exportSettingsDescription">备份远端、任务、触发器、偏好设置和缓存的缩略图</string>
     <string name="export_config_success">配置已导出</string>
-    <string name="export_config_success_including_cache">配置已导出（包含缩略图和缓存）</string>
+    <string name="export_config_success_including_cache">配置已导出（包含缩略图）</string>
     <string name="import_settings_icon_content_description">导入图标</string>
     <string name="export_settings_icon_content_description">导出图标</string>
     <string name="intro_battery_optimizations_title">电池优化</string>

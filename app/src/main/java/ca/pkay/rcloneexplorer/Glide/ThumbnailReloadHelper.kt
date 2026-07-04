@@ -205,7 +205,7 @@ object ThumbnailReloadHelper {
                     )
                     log(
                         appContext,
-                        "reloadDirectCacheStore path=$path epoch=$epochForVideo bytes=${jpeg.size} dualKey=true",
+                        "reloadDirectCacheStore path=$path epoch=$epochForVideo bytes=${jpeg.size} singleKey=true",
                     )
                 }
                 mainHandler.post {

@@ -88,4 +88,16 @@ class CacheArchiveExporterTest {
         File(thumbnailsDir, "probe.dat").writeText("x")
         assertTrue(CacheArchiveExporter.hasCacheEntriesToExport(context))
     }
+
+    @Test
+    fun hasCacheEntriesToExport_falseWhenOnlyMediaCachePresent() {
+        val context = RuntimeEnvironment.getApplication()
+        val mediaCacheDir = CanonicalCachePathResolver.mediaCacheDirOrNull(context)
+        requireNotNull(mediaCacheDir)
+        File(mediaCacheDir, "exo_simple_cache/seg.v3.exo").also {
+            it.parentFile.mkdirs()
+            it.writeText("exo")
+        }
+        assertFalse(CacheArchiveExporter.hasCacheEntriesToExport(context))
+    }
 }

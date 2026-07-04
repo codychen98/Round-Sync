@@ -614,7 +614,7 @@
     <string name="importSettingsDescription">Replace your current config with a backup (remotes, tasks, triggers, preferences, and cached thumbnails when present)</string>
     <string name="exportSettingsDescription">Back up remotes, tasks, triggers, preferences, and cached thumbnails</string>
     <string name="export_config_success">Configuration exported</string>
-    <string name="export_config_success_including_cache">Configuration exported (including thumbnails and cache)</string>
+    <string name="export_config_success_including_cache">Configuration exported (including thumbnails)</string>
     <string name="import_settings_icon_content_description">Import Icon</string>
     <string name="export_settings_icon_content_description">Export Icon</string>
     <string name="intro_battery_optimizations_title">Battery Optimizations</string>

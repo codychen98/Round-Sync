@@ -32,8 +32,9 @@ object ThumbnailDiskCacheEvictor {
     }
 
     /**
-     * Persists a user-reload JPEG under both the reload-epoch key and the canonical epoch-0 key so
-     * cold folder opens after app restart still hit disk cache (in-memory epoch resets to 0).
+     * Persists a reload (or direct-extract) JPEG under the single canonical epoch-0 disk key.
+     * Reload frame variety is tracked in memory ([ThumbnailReloadEpoch]); stale
+     * {@code thumbVideoReload|reloadN} entries are removed so each file keeps one on-disk thumbnail.
      */
     @JvmStatic
     fun storeVideoReloadJpeg(
@@ -52,22 +53,25 @@ object ThumbnailDiskCacheEvictor {
                 ThumbnailCacheIdentity.videoDiskCacheKeyLabel(
                     remoteName,
                     remoteFilePath,
-                    reloadEpoch,
+                    0,
                 ),
             ),
             jpegBytes,
         )
-        if (reloadEpoch > 0) {
-            storeInternal(
+        evictVideoReloadEpochKeys(context, remoteName, remoteFilePath)
+    }
+
+    private fun evictVideoReloadEpochKeys(
+        context: Context,
+        remoteName: String,
+        remoteFilePath: String,
+    ) {
+        for (epoch in 1..ThumbnailCacheIdentity.MAX_RELOAD_EPOCH_DISK_PROBE) {
+            evict(
                 context,
                 ObjectKey(
-                    ThumbnailCacheIdentity.videoDiskCacheKeyLabel(
-                        remoteName,
-                        remoteFilePath,
-                        0,
-                    ),
+                    ThumbnailCacheIdentity.videoDiskCacheKeyLabel(remoteName, remoteFilePath, epoch),
                 ),
-                jpegBytes,
             )
         }
     }

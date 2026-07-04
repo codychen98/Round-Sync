@@ -477,5 +477,5 @@
     <string name="importSettingsDescription">Ersetze deine aktuelle Konfiguration durch ein Backup (Remotes, Aufgaben, Auslöser, Einstellungen und zwischengespeicherte Vorschaubilder, falls vorhanden)</string>
     <string name="exportSettingsDescription">Sichere Remotes, Aufgaben, Auslöser, Einstellungen und zwischengespeicherte Vorschaubilder</string>
     <string name="export_config_success">Konfiguration exportiert</string>
-    <string name="export_config_success_including_cache">Konfiguration exportiert (inkl. Vorschaubilder und Cache)</string>
+    <string name="export_config_success_including_cache">Konfiguration exportiert (inkl. Vorschaubilder)</string>
 </resources>

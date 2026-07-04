@@ -536,7 +536,7 @@
     <string name="importSettingsDescription">Substitueix la configuració actual per una còpia de seguretat (remots, tasques, disparadors, preferències i miniatures en memòria cau quan n\'hi hagi)</string>
     <string name="exportSettingsDescription">Còpia de seguretat de remots, tasques, disparadors, preferències i miniatures en memòria cau</string>
     <string name="export_config_success">Configuració exportada</string>
-    <string name="export_config_success_including_cache">Configuració exportada (inclou miniatures i memòria cau)</string>
+    <string name="export_config_success_including_cache">Configuració exportada (inclou miniatures)</string>
     <string name="import_settings_icon_content_description">Icona d\'importació</string>
     <string name="export_settings_icon_content_description">Icona d\'exportació</string>
     <string name="intro_battery_optimizations_title">Optimització de la bateria</string>

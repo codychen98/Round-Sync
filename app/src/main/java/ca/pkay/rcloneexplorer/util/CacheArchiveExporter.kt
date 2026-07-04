@@ -7,9 +7,11 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 /**
- * Appends thumbnail and media-cache blobs to a config export zip under `cache/`.
- * Legacy [SelectedFolderMediaCacheLayout] data is included when non-empty and mapped into
- * `cache/media_cache/` without duplicating paths already exported from the canonical layout.
+ * Appends Glide thumbnail disk-cache blobs to a config export zip under `cache/thumbnails/`.
+ *
+ * Streamed media cache ([CanonicalCachePathResolver.mediaCacheDirOrNull] and legacy
+ * [SelectedFolderMediaCacheLayout]) is intentionally excluded — it can be gigabytes and is
+ * device-local playback data, not portable preview images.
  */
 object CacheArchiveExporter {
 
@@ -22,35 +24,16 @@ object CacheArchiveExporter {
 
     @JvmStatic
     fun hasCacheEntriesToExport(context: Context): Boolean {
-        val app = context.applicationContext
-        val candidates = listOfNotNull(
-            CanonicalCachePathResolver.thumbnailsDirOrNull(app),
-            CanonicalCachePathResolver.mediaCacheDirOrNull(app),
-            SelectedFolderMediaCacheLayout.baseDir(app),
-        )
-        return candidates.any { isNonEmptyDirectory(it) }
+        val thumbnailsDir = CanonicalCachePathResolver.thumbnailsDirOrNull(context.applicationContext)
+        return thumbnailsDir != null && isNonEmptyDirectory(thumbnailsDir)
     }
 
     @JvmStatic
     fun appendCacheEntries(context: Context, zos: ZipOutputStream) {
         val exported = HashSet<String>()
-        val app = context.applicationContext
-
-        CanonicalCachePathResolver.thumbnailsDirOrNull(app)?.let { dir ->
-            if (isNonEmptyDirectory(dir)) {
-                exportDirectory(dir, ZIP_THUMBNAILS_PREFIX, zos, exported)
-            }
-        }
-
-        CanonicalCachePathResolver.mediaCacheDirOrNull(app)?.let { dir ->
-            if (isNonEmptyDirectory(dir)) {
-                exportDirectory(dir, ZIP_MEDIA_CACHE_PREFIX, zos, exported)
-            }
-        }
-
-        val legacyBase = SelectedFolderMediaCacheLayout.baseDir(app)
-        if (isNonEmptyDirectory(legacyBase)) {
-            exportLegacyMediaCache(legacyBase, zos, exported)
+        val thumbnailsDir = CanonicalCachePathResolver.thumbnailsDirOrNull(context.applicationContext)
+        if (thumbnailsDir != null && isNonEmptyDirectory(thumbnailsDir)) {
+            exportDirectory(thumbnailsDir, ZIP_THUMBNAILS_PREFIX, zos, exported)
         }
     }
 
@@ -87,24 +70,6 @@ object CacheArchiveExporter {
             .filter { it.isFile }
             .forEach { file ->
                 val entryName = zipEntryName(zipPrefix, relativePathWithinRoot(sourceRoot, file))
-                if (exported.add(entryName)) {
-                    writeZipEntry(zos, file, entryName)
-                }
-            }
-    }
-
-    private fun exportLegacyMediaCache(
-        legacyBase: File,
-        zos: ZipOutputStream,
-        exported: MutableSet<String>,
-    ) {
-        legacyBase.walkTopDown()
-            .filter { it.isFile }
-            .forEach { file ->
-                val entryName = zipEntryName(
-                    ZIP_MEDIA_CACHE_PREFIX,
-                    relativePathWithinRoot(legacyBase, file),
-                )
                 if (exported.add(entryName)) {
                     writeZipEntry(zos, file, entryName)
                 }
