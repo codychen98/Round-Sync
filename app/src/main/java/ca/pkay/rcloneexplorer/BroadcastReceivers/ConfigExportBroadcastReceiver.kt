@@ -5,7 +5,7 @@ import android.content.Context
 import android.content.Intent
 import ca.pkay.rcloneexplorer.Rclone
 import ca.pkay.rcloneexplorer.util.ConfigExportBroadcastContract
-import ca.pkay.rcloneexplorer.util.ConfigExportPathValidator
+import ca.pkay.rcloneexplorer.util.ConfigBackupPathValidator
 import ca.pkay.rcloneexplorer.util.FLog
 import ca.pkay.rcloneexplorer.util.PermissionManager
 import java.io.IOException
@@ -35,7 +35,7 @@ class ConfigExportBroadcastReceiver : BroadcastReceiver() {
             return
         }
 
-        val destinationResult = ConfigExportPathValidator.resolveExportDestination(
+        val destinationResult = ConfigBackupPathValidator.resolveExportDestination(
             exportPath = intent.getStringExtra(ConfigExportBroadcastContract.EXTRA_EXPORT_PATH),
             exportFilename = intent.getStringExtra(ConfigExportBroadcastContract.EXTRA_EXPORT_FILENAME),
             appPackageName = context.packageName,

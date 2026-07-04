@@ -11,11 +11,11 @@ import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
-class ConfigExportPathValidatorTest {
+class ConfigBackupPathValidatorTest {
 
     @Test
     fun resolveExportDestination_usesTimestampDefaultFilenameWhenMissing() {
-        val result = ConfigExportPathValidator.resolveExportDestination(
+        val result = ConfigBackupPathValidator.resolveExportDestination(
             exportPath = "/storage/emulated/0/Download/Backup",
             exportFilename = null,
             appPackageName = "de.felixnuesse.extract",
@@ -31,7 +31,7 @@ class ConfigExportPathValidatorTest {
 
     @Test
     fun resolveExportDestination_usesProvidedFilename() {
-        val result = ConfigExportPathValidator.resolveExportDestination(
+        val result = ConfigBackupPathValidator.resolveExportDestination(
             exportPath = "/storage/emulated/0/Download/Backup",
             exportFilename = "RoundSync-backup.zip",
             appPackageName = "de.felixnuesse.extract",
@@ -47,7 +47,7 @@ class ConfigExportPathValidatorTest {
 
     @Test
     fun resolveExportDestination_addsZipExtensionWhenMissing() {
-        val result = ConfigExportPathValidator.resolveExportDestination(
+        val result = ConfigBackupPathValidator.resolveExportDestination(
             exportPath = "/storage/emulated/0/Download/Backup",
             exportFilename = "RoundSync-backup",
             appPackageName = "de.felixnuesse.extract",
@@ -62,7 +62,7 @@ class ConfigExportPathValidatorTest {
 
     @Test
     fun resolveExportDestination_rejectsBlankPath() {
-        val result = ConfigExportPathValidator.resolveExportDestination(
+        val result = ConfigBackupPathValidator.resolveExportDestination(
             exportPath = "  ",
             exportFilename = "RoundSync-backup.zip",
             appPackageName = "de.felixnuesse.extract",
@@ -73,7 +73,7 @@ class ConfigExportPathValidatorTest {
 
     @Test
     fun resolveExportDestination_rejectsFilenameWithPathSeparators() {
-        val result = ConfigExportPathValidator.resolveExportDestination(
+        val result = ConfigBackupPathValidator.resolveExportDestination(
             exportPath = "/storage/emulated/0/Download/Backup",
             exportFilename = "../escape.zip",
             appPackageName = "de.felixnuesse.extract",
@@ -83,9 +83,48 @@ class ConfigExportPathValidatorTest {
     }
 
     @Test
-    fun isAllowedExportDirectory_allowsDownloadPath() {
+    fun resolveImportSource_requiresFilename() {
+        val result = ConfigBackupPathValidator.resolveImportSource(
+            importPath = "/storage/emulated/0/Download/Backup",
+            importFilename = null,
+            appPackageName = "de.felixnuesse.extract",
+        )
+
+        assertTrue(result.isFailure)
+    }
+
+    @Test
+    fun resolveImportSource_rejectsMissingFile() {
+        val result = ConfigBackupPathValidator.resolveImportSource(
+            importPath = "/storage/emulated/0/Download/Backup",
+            importFilename = "RoundSync-backup.zip",
+            appPackageName = "de.felixnuesse.extract",
+        )
+
+        assertTrue(result.isFailure)
+    }
+
+    @Test
+    fun resolveImportSource_acceptsExistingFile() {
+        val backupDir = File("/storage/emulated/0/Download/Backup")
+        val backupFile = File(backupDir, "RoundSync-backup.zip")
+        backupDir.mkdirs()
+        backupFile.writeText("placeholder")
+
+        val result = ConfigBackupPathValidator.resolveImportSource(
+            importPath = backupDir.absolutePath,
+            importFilename = "RoundSync-backup.zip",
+            appPackageName = "de.felixnuesse.extract",
+        )
+
+        assertTrue(result.isSuccess)
+        assertEquals(backupFile.absolutePath, result.getOrThrow().absolutePath)
+    }
+
+    @Test
+    fun isAllowedBackupDirectory_allowsDownloadPath() {
         assertTrue(
-            ConfigExportPathValidator.isAllowedExportDirectory(
+            ConfigBackupPathValidator.isAllowedBackupDirectory(
                 File("/storage/emulated/0/Download/Sync Folder/PCloud Sync/Backup"),
                 "de.felixnuesse.extract",
             ),
@@ -93,9 +132,9 @@ class ConfigExportPathValidatorTest {
     }
 
     @Test
-    fun isAllowedExportDirectory_blocksOtherAppPrivateData() {
+    fun isAllowedBackupDirectory_blocksOtherAppPrivateData() {
         assertFalse(
-            ConfigExportPathValidator.isAllowedExportDirectory(
+            ConfigBackupPathValidator.isAllowedBackupDirectory(
                 File("/storage/emulated/0/Android/data/com.example/files"),
                 "de.felixnuesse.extract",
             ),
@@ -103,9 +142,9 @@ class ConfigExportPathValidatorTest {
     }
 
     @Test
-    fun isAllowedExportDirectory_allowsOwnAppDataDirectory() {
+    fun isAllowedBackupDirectory_allowsOwnAppDataDirectory() {
         assertTrue(
-            ConfigExportPathValidator.isAllowedExportDirectory(
+            ConfigBackupPathValidator.isAllowedBackupDirectory(
                 File("/storage/emulated/0/Android/data/de.felixnuesse.extract/files"),
                 "de.felixnuesse.extract",
             ),

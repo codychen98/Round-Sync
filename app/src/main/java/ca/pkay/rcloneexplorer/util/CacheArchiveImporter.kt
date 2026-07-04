@@ -35,11 +35,28 @@ object CacheArchiveImporter {
 
     @JvmStatic
     fun extractFromZip(context: Context, uri: Uri): Result {
+        val inputStream = openUriInputStream(context.applicationContext, uri)
+            ?: return Result(0, 0, 0)
+        return extractFromZipStream(context, inputStream)
+    }
+
+    @JvmStatic
+    fun extractFromZipFile(context: Context, file: File): Result {
+        return try {
+            file.inputStream().use { inputStream ->
+                extractFromZipStream(context, inputStream)
+            }
+        } catch (t: IOException) {
+            FLog.w(TAG, "Could not open import file", t)
+            Result(0, 0, 0)
+        }
+    }
+
+    private fun extractFromZipStream(context: Context, inputStream: InputStream): Result {
         val app = context.applicationContext
         var extracted = 0
         var skipped = 0
         var failed = 0
-        val inputStream = openUriInputStream(app, uri) ?: return Result(0, 0, 0)
         try {
             ZipInputStream(BufferedInputStream(inputStream)).use { zis ->
                 var entry: ZipEntry? = zis.nextEntry

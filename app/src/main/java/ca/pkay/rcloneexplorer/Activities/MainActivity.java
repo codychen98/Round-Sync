@@ -56,8 +56,6 @@ import java.util.UUID;
 
 import ca.pkay.rcloneexplorer.AppShortcutsHelper;
 import ca.pkay.rcloneexplorer.BuildConfig;
-import ca.pkay.rcloneexplorer.Database.json.Importer;
-import ca.pkay.rcloneexplorer.Database.json.SharedPreferencesBackup;
 import ca.pkay.rcloneexplorer.Dialogs.Dialogs;
 import ca.pkay.rcloneexplorer.Dialogs.EditPinnedItemsDialogFragment;
 import ca.pkay.rcloneexplorer.Dialogs.InputDialog;
@@ -74,13 +72,12 @@ import ca.pkay.rcloneexplorer.Items.PinnedItemStore;
 import ca.pkay.rcloneexplorer.Items.RemoteItem;
 import ca.pkay.rcloneexplorer.R;
 import ca.pkay.rcloneexplorer.Rclone;
-import ca.pkay.rcloneexplorer.RemoteConfig.RemoteConfigHelper;
 import ca.pkay.rcloneexplorer.RuntimeConfiguration;
 import ca.pkay.rcloneexplorer.Services.StreamingService;
 import ca.pkay.rcloneexplorer.Services.TriggerService;
 import ca.pkay.rcloneexplorer.util.ActivityHelper;
 import ca.pkay.rcloneexplorer.util.CacheArchiveExporter;
-import ca.pkay.rcloneexplorer.util.CacheArchiveImporter;
+import ca.pkay.rcloneexplorer.util.ConfigImporter;
 import ca.pkay.rcloneexplorer.util.DrawerPinnedUi;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.PermissionManager;
@@ -819,52 +816,25 @@ public class MainActivity extends AppCompatActivity
 
         @Override
         protected Boolean doInBackground(Uri... uris) {
-
             ContentResolver resolver = context.getContentResolver();
             String mime = resolver.getType(uris[0]);
-
-            if(mime.equals("application/zip")) {
-                try {
-                    boolean validRclone = rclone.copyConfigFileFromZip(uris[0]);
-                    if(!validRclone) {
-                        statusCode = FAILURE_ZIP_INVALID_CONF;
-                        return false;
-                    }
-                    statusCode = SUCCESS_IMPORT;
-                } catch (Exception e) {
-                    statusCode = FAILURE_ZIP_MISSING_CONF;
-                    return false;
-                }
-
-                try {
-                    String json = rclone.readDatabaseJson(uris[0]);
-                    Importer.importJson(json, context);
-                } catch (Exception e) {
-                    // rcx.json missing or invalid - not fatal, old backups may not have it
-                }
-
-                try {
-                    String json = rclone.readSharedPrefs(uris[0]);
-                    SharedPreferencesBackup.importJson(json, context);
-                } catch (Exception e) {
-                    // rcx.prefs missing or invalid - not fatal, old backups may not have it
-                }
-
-                CacheArchiveImporter.extractFromZip(context, uris[0]);
-                return true;
-            }
-
-            try {
-                boolean validRclone = rclone.copyConfigFile(uris[0]);
-                if(validRclone) {
+            ConfigImporter.Result result = ConfigImporter.importFromUri(context, uris[0], mime);
+            switch (result.getStatus()) {
+                case SUCCESS:
                     statusCode = SUCCESS_IMPORT;
                     return true;
-                }
-                statusCode = FAILURE_RCLONE_CONF_NOT_VALID;
-                return false;
-            } catch (IOException e) {
-                statusCode = FAILURE_RCLONE_CONF_NOT_VALID;
-                return false;
+                case FAILURE_RCLONE_CONF_NOT_VALID:
+                    statusCode = FAILURE_RCLONE_CONF_NOT_VALID;
+                    return false;
+                case FAILURE_ZIP_INVALID_CONF:
+                    statusCode = FAILURE_ZIP_INVALID_CONF;
+                    return false;
+                case FAILURE_ZIP_MISSING_CONF:
+                    statusCode = FAILURE_ZIP_MISSING_CONF;
+                    return false;
+                default:
+                    statusCode = FAILURE_UNSPECIFIED;
+                    return false;
             }
         }
 
@@ -892,29 +862,13 @@ public class MainActivity extends AppCompatActivity
                 return;
             }
 
-            SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
-            if(sharedPreferences.getBoolean(getString(R.string.pref_key_enable_saf), false)){
-                RemoteConfigHelper.enableSaf(context);
-            }
-
-            SharedPreferences.Editor editor = sharedPreferences.edit();
-            editor.remove(getString(R.string.shared_preferences_pinned_remotes));
-            editor.remove(getString(R.string.shared_preferences_drawer_pinned_remotes));
-            editor.remove(getString(R.string.shared_preferences_hidden_remotes));
-            editor.remove(getString(R.string.pref_key_accessible_storage_locations));
-            editor.apply();
-
             if (rclone.isConfigEncrypted()) {
                 pinRemotesToDrawer(); // this will clear any previous pinned remotes
                 askForConfigPassword();
             } else {
-                AppShortcutsHelper.removeAllAppShortcuts(context);
-                AppShortcutsHelper.populateAppShortcuts(context, rclone.getRemotes());
                 pinRemotesToDrawer();
                 startRemotesFragment();
             }
-
-            MediaFolderPolicyThumbnailPrefetchWorker.enqueueAfterImport(context);
         }
     }
 

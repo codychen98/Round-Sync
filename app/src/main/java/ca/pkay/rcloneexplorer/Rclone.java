@@ -1291,16 +1291,27 @@ public class Rclone {
     }
 
     public File getFileFromZip(Uri uri, String target, File targetfile) throws IOException {
-
-        // The exact cause of the NPE is unknown, but the effect is the same
-        // - the copy process has failed, therefore bubble an IOException
-        // for handling at the appropriate layers.
         InputStream inputStream;
         try {
             inputStream = context.getContentResolver().openInputStream(uri);
         } catch(NullPointerException e) {
             throw new IOException(e);
         }
+        if (inputStream == null) {
+            throw new IOException("Could not open zip file");
+        }
+        try (InputStream in = inputStream) {
+            return getFileFromZip(in, target, targetfile);
+        }
+    }
+
+    public File getFileFromZip(File zipFile, String target, File targetfile) throws IOException {
+        try (InputStream inputStream = new FileInputStream(zipFile)) {
+            return getFileFromZip(inputStream, target, targetfile);
+        }
+    }
+
+    private File getFileFromZip(InputStream inputStream, String target, File targetfile) throws IOException {
         ZipInputStream zipInputStream = new ZipInputStream(new BufferedInputStream(inputStream));
 
         ZipEntry zipEntry;
@@ -1329,14 +1340,31 @@ public class Rclone {
         return readTextfileFromZip(uri, "rcx.json-tmp", "rcx.json");
     }
 
+    public String readDatabaseJson(File zipFile) throws Exception {
+        return readTextfileFromZip(zipFile, "rcx.json-tmp", "rcx.json");
+    }
+
     public String readSharedPrefs(Uri uri) throws Exception {
         return readTextfileFromZip(uri, "rcx.prefs-tmp", "rcx.prefs");
+    }
+
+    public String readSharedPrefs(File zipFile) throws Exception {
+        return readTextfileFromZip(zipFile, "rcx.prefs-tmp", "rcx.prefs");
     }
 
     public String readTextfileFromZip(Uri uri, String tempfile, String targetfile) throws Exception {
         File temp = new File(context.getFilesDir().getPath(), tempfile);
         temp = getFileFromZip(uri, targetfile, temp);
+        return readExtractedTextFile(temp);
+    }
 
+    public String readTextfileFromZip(File zipFile, String tempfile, String targetfile) throws Exception {
+        File temp = new File(context.getFilesDir().getPath(), tempfile);
+        temp = getFileFromZip(zipFile, targetfile, temp);
+        return readExtractedTextFile(temp);
+    }
+
+    private String readExtractedTextFile(File temp) throws IOException {
         char[] buffer = new char[4096];
         StringBuilder json = new StringBuilder();
         InputStream inputStream = new FileInputStream(temp);
@@ -1344,15 +1372,27 @@ public class Rclone {
         for (int numRead; (numRead = in.read(buffer, 0, buffer.length)) > 0; ) {
             json.append(buffer, 0, numRead);
         }
+        inputStream.close();
         return json.toString();
     }
 
     public boolean copyConfigFileFromZip(Uri uri) throws Exception {
-        String appsFileDir = context.getFilesDir().getPath();
+        return copyConfigFileFromZipInternal(getFileFromZip(uri, "rclone.conf",
+                new File(context.getFilesDir().getPath(), "rclone.conf-tmp")));
+    }
 
-        File tempFile = new File(appsFileDir, "rclone.conf-tmp");
+    public boolean copyConfigFileFromZip(File zipFile) throws Exception {
+        return copyConfigFileFromZipInternal(getFileFromZip(zipFile, "rclone.conf",
+                new File(context.getFilesDir().getPath(), "rclone.conf-tmp")));
+    }
+
+    private boolean copyConfigFileFromZipInternal(File tempFile) throws IOException {
+        String appsFileDir = context.getFilesDir().getPath();
         File configFile = new File(appsFileDir, "rclone.conf");
-        tempFile = getFileFromZip(uri, "rclone.conf", tempFile);
+
+        if (tempFile == null) {
+            throw new IOException("Zip does not contain rclone.conf");
+        }
 
         if (isValidConfig(tempFile.getAbsolutePath())) {
             if (!(tempFile.renameTo(configFile) && !tempFile.delete())) {
@@ -1373,16 +1413,28 @@ public class Rclone {
      * @throws IOException
      */
     public boolean copyConfigFile(Uri uri) throws IOException {
-        String appsFileDir = context.getFilesDir().getPath();
         InputStream inputStream;
-        // The exact cause of the NPE is unknown, but the effect is the same
-        // - the copy process has failed, therefore bubble an IOException
-        // for handling at the appropriate layers.
         try {
             inputStream = context.getContentResolver().openInputStream(uri);
         } catch(NullPointerException e) {
             throw new IOException(e);
         }
+        if (inputStream == null) {
+            throw new IOException("Could not open config file");
+        }
+        try (InputStream in = inputStream) {
+            return copyConfigFile(in);
+        }
+    }
+
+    public boolean copyConfigFile(File configSource) throws IOException {
+        try (InputStream inputStream = new FileInputStream(configSource)) {
+            return copyConfigFile(inputStream);
+        }
+    }
+
+    private boolean copyConfigFile(InputStream inputStream) throws IOException {
+        String appsFileDir = context.getFilesDir().getPath();
         File tempFile = new File(appsFileDir, "rclone.conf-tmp");
         File configFile = new File(appsFileDir, "rclone.conf");
         FileOutputStream fileOutputStream = new FileOutputStream(tempFile);
@@ -1392,7 +1444,6 @@ public class Rclone {
         while ((offset = inputStream.read(buffer)) > 0) {
             fileOutputStream.write(buffer, 0, offset);
         }
-        inputStream.close();
         fileOutputStream.flush();
         fileOutputStream.close();
 

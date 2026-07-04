@@ -2,12 +2,14 @@ package ca.pkay.rcloneexplorer.util
 
 import android.os.Environment
 import java.io.File
+import java.io.FileNotFoundException
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
 import java.util.regex.Pattern
 
-object ConfigExportPathValidator {
+object ConfigBackupPathValidator {
 
     private val SAFE_FILENAME = Pattern.compile("^[A-Za-z0-9._-]+$")
     private val OTHER_APP_ANDROID_DATA = Pattern.compile(
@@ -39,12 +41,12 @@ object ConfigExportPathValidator {
             return Result.failure(IllegalArgumentException("export_path is invalid", e))
         }
 
-        if (!isAllowedExportDirectory(canonicalDirectory, appPackageName)) {
+        if (!isAllowedBackupDirectory(canonicalDirectory, appPackageName)) {
             return Result.failure(SecurityException("export_path is not allowed"))
         }
 
         val filename = sanitizeFilename(exportFilename)
-            ?: defaultFilename()
+            ?: defaultExportFilename()
 
         val outputFile = File(canonicalDirectory, filename)
         val canonicalOutput = try {
@@ -62,8 +64,66 @@ object ConfigExportPathValidator {
     }
 
     @JvmStatic
-    fun sanitizeFilename(exportFilename: String?): String? {
-        val trimmed = exportFilename?.trim().orEmpty()
+    fun resolveImportSource(
+        importPath: String?,
+        importFilename: String?,
+        appPackageName: String,
+    ): Result<File> {
+        if (importPath.isNullOrBlank()) {
+            return Result.failure(IllegalArgumentException("import_path is required"))
+        }
+        if (importPath.contains('\u0000')) {
+            return Result.failure(IllegalArgumentException("import_path is invalid"))
+        }
+        if (importFilename.isNullOrBlank()) {
+            return Result.failure(IllegalArgumentException("import_filename is required"))
+        }
+
+        val directory = File(importPath.trim())
+        val canonicalDirectory = try {
+            directory.canonicalFile
+        } catch (e: Exception) {
+            return Result.failure(IllegalArgumentException("import_path is invalid", e))
+        }
+
+        if (!isAllowedBackupDirectory(canonicalDirectory, appPackageName)) {
+            return Result.failure(SecurityException("import_path is not allowed"))
+        }
+
+        val filename = sanitizeFilename(importFilename)
+            ?: return Result.failure(IllegalArgumentException("import_filename is invalid"))
+
+        val importFile = File(canonicalDirectory, filename)
+        val canonicalImportFile = try {
+            importFile.canonicalFile
+        } catch (e: Exception) {
+            return Result.failure(IllegalArgumentException("import_filename is invalid", e))
+        }
+
+        val importParent = canonicalImportFile.parentFile?.canonicalFile
+        if (importParent == null || importParent != canonicalDirectory) {
+            return Result.failure(SecurityException("import_filename escapes import_path"))
+        }
+
+        if (!canonicalImportFile.isFile) {
+            return Result.failure(
+                FileNotFoundException(
+                    "import file does not exist: ${canonicalImportFile.absolutePath}",
+                ),
+            )
+        }
+        if (!canonicalImportFile.canRead()) {
+            return Result.failure(
+                IOException("import file is not readable: ${canonicalImportFile.absolutePath}"),
+            )
+        }
+
+        return Result.success(canonicalImportFile)
+    }
+
+    @JvmStatic
+    fun sanitizeFilename(filename: String?): String? {
+        val trimmed = filename?.trim().orEmpty()
         if (trimmed.isEmpty()) {
             return null
         }
@@ -81,14 +141,14 @@ object ConfigExportPathValidator {
     }
 
     @JvmStatic
-    fun defaultFilename(): String {
+    fun defaultExportFilename(): String {
         val timestamp = SimpleDateFormat("yyyy-MM-dd_HHmmss", Locale.US)
             .format(Calendar.getInstance().time)
         return "RoundSync-backup-$timestamp.zip"
     }
 
     @JvmStatic
-    fun isAllowedExportDirectory(directory: File, appPackageName: String): Boolean {
+    fun isAllowedBackupDirectory(directory: File, appPackageName: String): Boolean {
         if (!directory.isAbsolute) {
             return false
         }

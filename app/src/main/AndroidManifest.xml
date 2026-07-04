@@ -125,6 +125,13 @@
                 <action android:name="${applicationId}.EXPORT_CONFIG" />
             </intent-filter>
         </receiver>
+        <receiver
+            android:name=".BroadcastReceivers.ConfigImportBroadcastReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="${applicationId}.IMPORT_CONFIG" />
+            </intent-filter>
+        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"
