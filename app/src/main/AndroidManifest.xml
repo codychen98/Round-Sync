@@ -64,6 +64,19 @@
             android:noHistory="true"
             android:taskAffinity=""
             android:theme="@style/HiddenWindowShortcutSyncStartTheme" />
+        <activity
+            android:name=".Activities.ConfigBroadcastActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/HiddenWindowShortcutSyncStartTheme">
+            <intent-filter>
+                <action android:name="${applicationId}.EXPORT_CONFIG" />
+                <action android:name="${applicationId}.IMPORT_CONFIG" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
 
         <provider
             android:name=".VirtualContentProvider"

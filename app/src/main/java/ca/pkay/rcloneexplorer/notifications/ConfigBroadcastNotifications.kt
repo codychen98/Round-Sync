@@ -11,9 +11,11 @@ import ca.pkay.rcloneexplorer.util.NotificationUtils
 
 object ConfigBroadcastNotifications {
 
-    private const val CHANNEL_ID = "config_broadcast"
+    const val CHANNEL_ID = "config_broadcast"
     private const val IMPORT_SUCCESS_NOTIFICATION_ID = 9101
     private const val IMPORT_FAILURE_NOTIFICATION_ID = 9102
+    private const val EXPORT_SUCCESS_NOTIFICATION_ID = 9103
+    private const val EXPORT_FAILURE_NOTIFICATION_ID = 9104
 
     fun showImportSuccess(context: Context, encryptedConfig: Boolean) {
         val appContext = context.applicationContext
@@ -26,34 +28,71 @@ object ConfigBroadcastNotifications {
             appContext.getString(R.string.config_import_broadcast_success_message)
         }
 
-        val notification = NotificationCompat.Builder(appContext, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_import)
-            .setContentTitle(title)
-            .setContentText(message)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
-            .setContentIntent(openAppPendingIntent(appContext))
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .build()
-
-        NotificationUtils.createNotification(appContext, IMPORT_SUCCESS_NOTIFICATION_ID, notification)
+        postNotification(
+            appContext,
+            IMPORT_SUCCESS_NOTIFICATION_ID,
+            title,
+            message,
+            R.drawable.ic_import,
+        )
     }
 
     fun showImportFailure(context: Context, message: String) {
-        val appContext = context.applicationContext
-        ensureChannel(appContext)
+        postNotification(
+            context.applicationContext,
+            IMPORT_FAILURE_NOTIFICATION_ID,
+            context.getString(R.string.config_import_broadcast_failure_title),
+            message,
+            R.drawable.ic_import,
+        )
+    }
 
-        val notification = NotificationCompat.Builder(appContext, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_import)
-            .setContentTitle(appContext.getString(R.string.config_import_broadcast_failure_title))
+    fun showExportSuccess(context: Context, includingCache: Boolean) {
+        val appContext = context.applicationContext
+        val message = if (includingCache) {
+            appContext.getString(R.string.config_export_broadcast_success_message_including_cache)
+        } else {
+            appContext.getString(R.string.config_export_broadcast_success_message)
+        }
+        postNotification(
+            appContext,
+            EXPORT_SUCCESS_NOTIFICATION_ID,
+            appContext.getString(R.string.config_export_broadcast_success_title),
+            message,
+            R.drawable.ic_export,
+        )
+    }
+
+    fun showExportFailure(context: Context, message: String) {
+        postNotification(
+            context.applicationContext,
+            EXPORT_FAILURE_NOTIFICATION_ID,
+            context.getString(R.string.config_export_broadcast_failure_title),
+            message,
+            R.drawable.ic_export,
+        )
+    }
+
+    private fun postNotification(
+        context: Context,
+        notificationId: Int,
+        title: String,
+        message: String,
+        iconResId: Int,
+    ) {
+        ensureChannel(context)
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(iconResId)
+            .setContentTitle(title)
             .setContentText(message)
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))
-            .setContentIntent(openAppPendingIntent(appContext))
+            .setContentIntent(openAppPendingIntent(context))
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
 
-        NotificationUtils.createNotification(appContext, IMPORT_FAILURE_NOTIFICATION_ID, notification)
+        NotificationUtils.createNotification(context, notificationId, notification)
     }
 
     private fun ensureChannel(context: Context) {
