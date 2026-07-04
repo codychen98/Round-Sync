@@ -44,13 +44,18 @@ object MediaFolderPolicyPrefetchFolders {
         return out
     }
 
+    /**
+     * Path passed to [ca.pkay.rcloneexplorer.Rclone.getDirectoryContent]: root uses
+     * {@code //remoteName}; nested folders use plain relative paths (e.g. {@code Video Archive/Anime}),
+     * matching [ca.pkay.rcloneexplorer.Fragments.FileExplorerFragment] navigation.
+     */
     @JvmStatic
     fun policyFolderToExplorerPath(remoteName: String, policyRelativePath: String): String {
         val normalized = MediaFolderPolicy.normalizeFolder(policyRelativePath)
         return if (normalized == "/" || normalized.isEmpty()) {
             "//$remoteName"
         } else {
-            "//$remoteName$normalized"
+            normalized.removePrefix("/")
         }
     }
 }

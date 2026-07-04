@@ -198,6 +198,14 @@ public class ThumbnailServerManager {
     }
 
     /**
+     * Whether [leaseId] is still registered after a preempt or normal release.
+     * Used by the file explorer to detect stale leases when prefetch finishes.
+     */
+    public synchronized boolean isServeLeaseActive(int leaseId) {
+        return leaseId > 0 && activeServeLeases.contains(leaseId);
+    }
+
+    /**
      * Releases a lease from {@link #acquireServeLease}. When the last lease is released, the serve
      * process is stopped. Ids cleared by premption are ignored (no-op).
      */

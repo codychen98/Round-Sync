@@ -12,12 +12,16 @@ class MediaFolderPolicyPrefetchFoldersTest {
     fun policyFolderToExplorerPath_rootAndNested() {
         assertEquals("//myremote", MediaFolderPolicyPrefetchFolders.policyFolderToExplorerPath("myremote", "/"))
         assertEquals(
-            "//myremote/Photos",
+            "Photos",
             MediaFolderPolicyPrefetchFolders.policyFolderToExplorerPath("myremote", "/Photos"),
         )
         assertEquals(
-            "//myremote/Photos/Family",
+            "Photos/Family",
             MediaFolderPolicyPrefetchFolders.policyFolderToExplorerPath("myremote", "Photos/Family"),
+        )
+        assertEquals(
+            "Video Archive/Anime",
+            MediaFolderPolicyPrefetchFolders.policyFolderToExplorerPath("myremote", "/Video Archive/Anime"),
         )
     }
 
@@ -49,7 +53,7 @@ class MediaFolderPolicyPrefetchFoldersTest {
 
         assertEquals(1, folders.size)
         assertEquals("s3remote", folders[0].remoteName)
-        assertEquals("//s3remote/Photos", folders[0].explorerDirectoryPath)
+        assertEquals("Photos", folders[0].explorerDirectoryPath)
         assertEquals("/Photos", folders[0].policyRelativePath)
     }
 

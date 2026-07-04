@@ -17,6 +17,7 @@ import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.util.Base64;
@@ -95,10 +96,12 @@ import ca.pkay.rcloneexplorer.R;
 import ca.pkay.rcloneexplorer.Rclone;
 import ca.pkay.rcloneexplorer.Glide.ThumbnailReloadHelper;
 import ca.pkay.rcloneexplorer.RecyclerViewAdapters.FileExplorerRecyclerViewAdapter;
+import ca.pkay.rcloneexplorer.Services.ExplorerThumbnailServeCoordinator;
 import ca.pkay.rcloneexplorer.Services.StreamingService;
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerService;
 import ca.pkay.rcloneexplorer.util.ActivityHelper;
+import ca.pkay.rcloneexplorer.util.BackgroundMediaPrepWorkTracker;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.LastFolderSnapshotStore;
 import ca.pkay.rcloneexplorer.util.MediaFolderPolicy;
@@ -207,6 +210,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     /** Bumped when thumbnail HTTP params or observed serve generation changes; invalidates retries. */
     private int thumbnailUrlEpoch;
     private int lastThumbnailServeGenAtReady = Integer.MIN_VALUE;
+    private long lastExplorerRestartAfterStopElapsedMs;
     private boolean wrapFilenames;
     private SharedPreferences.OnSharedPreferenceChangeListener prefChangeListener;
 
@@ -438,6 +442,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         registerReceivers();
 
         if (showThumbnails) {
+            ExplorerThumbnailServeCoordinator.setServerDesired(true);
+            ExplorerThumbnailServeCoordinator.registerRestartAction(this::ensureThumbnailServerLease);
             if (context != null) {
                 SyncLog.info(context, "ThumbnailServer",
                     "Fragment onStart: showThumbnails=true, starting server. Port=" + thumbnailServerPort);
@@ -833,14 +839,31 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     }
 
     private void startThumbnailServer() {
-        if (context == null || remote == null) {
+        ensureThumbnailServerLease();
+    }
+
+    private void ensureThumbnailServerLease() {
+        if (context == null || remote == null || !showThumbnails) {
             return;
         }
-        thumbnailServeLeaseId = ThumbnailServerManager.getInstance().acquireServeLease(
+        ThumbnailServerManager mgr = ThumbnailServerManager.getInstance();
+        if (thumbnailServeLeaseId != 0) {
+            if (mgr.isServeLeaseActive(thumbnailServeLeaseId)) {
+                return;
+            }
+            BackgroundMediaPrepWorkTracker.decrementExplorerForegroundServeLease();
+            if (context != null) {
+                SyncLog.info(context, "ThumbnailServer",
+                        "event=explorerLeaseStale clearing id=" + thumbnailServeLeaseId);
+            }
+            thumbnailServeLeaseId = 0;
+        }
+        thumbnailServeLeaseId = mgr.acquireServeLease(
                 context, remote, thumbnailServerPort, thumbnailServerAuth);
         if (thumbnailServeLeaseId == 0) {
             return;
         }
+        BackgroundMediaPrepWorkTracker.incrementExplorerForegroundServeLease();
         ThumbnailServerService.startServing(context, remote, thumbnailServerPort, thumbnailServerAuth,
                 directoryObject.getCurrentPath(), true);
     }
@@ -849,8 +872,35 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         int id = thumbnailServeLeaseId;
         thumbnailServeLeaseId = 0;
         if (id != 0) {
-            ThumbnailServerManager.getInstance().releaseServeLease(id);
+            ThumbnailServerManager mgr = ThumbnailServerManager.getInstance();
+            boolean wasActive = mgr.isServeLeaseActive(id);
+            mgr.releaseServeLease(id);
+            if (wasActive) {
+                BackgroundMediaPrepWorkTracker.decrementExplorerForegroundServeLease();
+            }
         }
+    }
+
+    private void maybeRestartThumbnailServerAfterStop() {
+        if (!showThumbnails || !ExplorerThumbnailServeCoordinator.isServerDesired()) {
+            return;
+        }
+        ThumbnailServerManager mgr = ThumbnailServerManager.getInstance();
+        if (mgr.getSyncState() != ThumbnailServerManager.ServerState.STOPPED) {
+            return;
+        }
+        if (thumbnailServeLeaseId != 0 && mgr.isServeLeaseActive(thumbnailServeLeaseId)) {
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastExplorerRestartAfterStopElapsedMs < 1000L) {
+            return;
+        }
+        lastExplorerRestartAfterStopElapsedMs = now;
+        if (context != null) {
+            SyncLog.info(context, "ThumbnailServer", "event=explorerRestartAfterPrefetchStop");
+        }
+        ensureThumbnailServerLease();
     }
 
     private void observeThumbnailServerState() {
@@ -891,6 +941,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                 if (recyclerViewAdapter != null) {
                     recyclerViewAdapter.setThumbnailServerReady(false);
                 }
+                maybeRestartThumbnailServerAfterStop();
             }
         });
     }
@@ -1509,6 +1560,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         if (context != null) {
             SyncLog.info(context, "ThumbnailServer", "Fragment onStop: releasing thumbnail serve lease");
         }
+        ExplorerThumbnailServeCoordinator.setServerDesired(false);
+        ExplorerThumbnailServeCoordinator.unregister();
         if (context != null) {
             ThumbnailServerService.clearProgress(context);
         }

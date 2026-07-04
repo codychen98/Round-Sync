@@ -2,6 +2,7 @@ package ca.pkay.rcloneexplorer.Glide;
 
 import android.content.Context;
 import android.graphics.drawable.Drawable;
+import android.net.Uri;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -130,8 +131,39 @@ public final class ThumbnailCacheIdentity {
         return ThumbnailStablePath.normalize(stable);
     }
 
+    /**
+     * Probe URL whose legacy path (after the dummy first segment) matches real HTTP-serve URLs:
+     * path segments are percent-encoded via {@link Uri.Builder#appendPath(String)}.
+     */
     @NonNull
     static String buildCacheProbeUrl(@NonNull String remoteName, @NonNull String remoteFilePath) {
-        return CACHE_PROBE_URL_PREFIX + stableServePath(remoteName, remoteFilePath);
+        Uri.Builder builder = Uri.parse(CACHE_PROBE_URL_PREFIX).buildUpon();
+        for (String segment : stableServePath(remoteName, remoteFilePath).split("/")) {
+            if (!segment.isEmpty()) {
+                builder.appendPath(segment);
+            }
+        }
+        return builder.build().toString();
+    }
+
+    /** Legacy percent-encoded stable path aligned with [VideoThumbnailUrl] / [HttpServeThumbnailGlideUrl] disk keys. */
+    @NonNull
+    public static String legacyEncodedServePath(@NonNull String remoteName, @NonNull String remoteFilePath) {
+        return ThumbnailStablePath.legacyPathFromServeUrl(buildCacheProbeUrl(remoteName, remoteFilePath));
+    }
+
+    /** Disk-cache label for video thumbnail eviction (matches [VideoThumbnailLoader] ObjectKey). */
+    @NonNull
+    public static String videoDiskCacheKeyLabel(
+            @NonNull String remoteName,
+            @NonNull String remoteFilePath,
+            int reloadEpoch) {
+        String legacy = legacyEncodedServePath(remoteName, remoteFilePath);
+        if (reloadEpoch > 0) {
+            return ReadableCacheKey.fromStablePath(
+                    legacy + "|reload" + reloadEpoch,
+                    VIDEO_RELOAD_NAMESPACE);
+        }
+        return ReadableCacheKey.fromStablePath(legacy + VIDEO_VERSION_TOKEN, VIDEO_NAMESPACE);
     }
 }

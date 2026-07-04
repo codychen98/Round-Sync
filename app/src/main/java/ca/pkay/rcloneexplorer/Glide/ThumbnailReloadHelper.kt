@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import ca.pkay.rcloneexplorer.Items.FileItem
 import ca.pkay.rcloneexplorer.RecyclerViewAdapters.FileExplorerRecyclerViewAdapter
+import ca.pkay.rcloneexplorer.Services.ExplorerThumbnailServeCoordinator
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager
 import ca.pkay.rcloneexplorer.util.SyncLog
 import com.bumptech.glide.load.engine.executor.GlideExecutor
@@ -19,6 +20,7 @@ import java.util.concurrent.Executors
 object ThumbnailReloadHelper {
 
     private const val LOG_TAG = "ThumbReloadDbg"
+    private const val SERVER_RESTART_WAIT_MS = 45_000L
     private val userReloadExecutor: ExecutorService = Executors.newSingleThreadExecutor()
 
     fun interface OnCompleteListener {
@@ -67,11 +69,22 @@ object ThumbnailReloadHelper {
                     }
                     mimeType.startsWith("video/") -> {
                         val mgr = ThumbnailServerManager.getInstance()
-                        val serverReady = mgr.getSyncState().name == "READY"
+                        var serverReady = mgr.getSyncState().name == "READY"
                         log(
                             appContext,
                             "reloadVideoPrepare path=$path mgrState=${mgr.getSyncState()} serveGen=${mgr.getServeGeneration()} serverReady=$serverReady",
                         )
+                        if (!serverReady) {
+                            log(appContext, "reloadVideoAwaitServer path=$path waitMs=$SERVER_RESTART_WAIT_MS")
+                            serverReady = ExplorerThumbnailServeCoordinator.requestRestartAndAwait(
+                                appContext,
+                                SERVER_RESTART_WAIT_MS,
+                            )
+                            log(
+                                appContext,
+                                "reloadVideoServerReady path=$path ready=$serverReady state=${mgr.getSyncState().name}",
+                            )
+                        }
                         if (!serverReady) {
                             success = false
                             detail = "thumbnailServerNotReady"
@@ -212,13 +225,13 @@ object ThumbnailReloadHelper {
     ) {
         ThumbnailDiskCacheEvictor.evict(
             context,
-            ObjectKey(ThumbnailCacheIdentity.videoDataCacheKey(remoteName, path)),
+            ObjectKey(ThumbnailCacheIdentity.videoDiskCacheKeyLabel(remoteName, path, 0)),
         )
         val lastEpoch = maxOf(previousEpoch, newEpoch)
         for (epoch in 1..lastEpoch) {
             ThumbnailDiskCacheEvictor.evict(
                 context,
-                ObjectKey(ThumbnailCacheIdentity.videoReloadDataCacheKey(remoteName, path, epoch)),
+                ObjectKey(ThumbnailCacheIdentity.videoDiskCacheKeyLabel(remoteName, path, epoch)),
             )
         }
     }

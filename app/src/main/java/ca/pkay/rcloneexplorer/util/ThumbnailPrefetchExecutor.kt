@@ -32,6 +32,7 @@ object ThumbnailPrefetchExecutor {
     private const val SERVER_READY_TIMEOUT_MS = 45_000L
     private const val EXCLUSIVE_RELOAD_WAIT_MS = 180_000L
     private const val EXCLUSIVE_RELOAD_POLL_MS = 250L
+    private const val EXPLORER_SERVE_LEASE_WAIT_MS = 300_000L
     private const val POLL_MS = 100L
     const val PREFETCH_ITEM_TIMEOUT_S = 45L
 
@@ -94,6 +95,11 @@ object ThumbnailPrefetchExecutor {
             BackgroundMediaPrepWorkTracker.incrementThumbnailPrefetchWork()
             prefetchRefIncremented = true
             waitWhileExclusiveUserReload(app, isStopped)
+            if (isStopped()) {
+                stoppedEarly = true
+                return FolderPrefetchOutcome(loaded = loaded, total = targets.size, stoppedEarly = true)
+            }
+            waitWhileExplorerForegroundServeLease(app, isStopped)
             if (isStopped()) {
                 stoppedEarly = true
                 return FolderPrefetchOutcome(loaded = loaded, total = targets.size, stoppedEarly = true)
@@ -183,6 +189,40 @@ object ThumbnailPrefetchExecutor {
             if (serveLeaseId != 0) {
                 ThumbnailServerManager.getInstance().releaseServeLease(serveLeaseId)
             }
+        }
+    }
+
+    private suspend fun waitWhileExplorerForegroundServeLease(
+        app: Context,
+        isStopped: () -> Boolean,
+    ) {
+        if (!BackgroundMediaPrepWorkTracker.hasExplorerForegroundServeLease()) {
+            return
+        }
+        SyncLog.info(
+            app,
+            "MediaPrepDbg",
+            "event=prefetchWaitExplorerServeLease",
+        )
+        val deadline = System.currentTimeMillis() + EXPLORER_SERVE_LEASE_WAIT_MS
+        while (BackgroundMediaPrepWorkTracker.hasExplorerForegroundServeLease()
+            && !isStopped()
+            && System.currentTimeMillis() < deadline
+        ) {
+            delay(EXCLUSIVE_RELOAD_POLL_MS)
+        }
+        if (BackgroundMediaPrepWorkTracker.hasExplorerForegroundServeLease()) {
+            SyncLog.info(
+                app,
+                "MediaPrepDbg",
+                "event=prefetchExplorerServeLeaseTimeout",
+            )
+        } else {
+            SyncLog.info(
+                app,
+                "MediaPrepDbg",
+                "event=prefetchExplorerServeLeaseEnded",
+            )
         }
     }
 

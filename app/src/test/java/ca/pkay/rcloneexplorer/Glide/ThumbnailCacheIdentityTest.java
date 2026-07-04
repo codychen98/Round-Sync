@@ -56,8 +56,37 @@ public class ThumbnailCacheIdentityTest {
 
         assertTrue(model instanceof VideoThumbnailUrl);
         assertEquals(
-                ThumbnailCacheIdentity.stableServePath("drive", "/Videos/clip.mp4"),
+                ThumbnailCacheIdentity.legacyEncodedServePath("drive", "/Videos/clip.mp4"),
                 ((VideoThumbnailUrl) model).getStablePath());
+    }
+
+    @Test
+    public void buildCacheProbeUrl_percentEncodesPathSegments() {
+        String probeUrl = ThumbnailCacheIdentity.buildCacheProbeUrl(
+                "pCloudLock",
+                "Video Archive/Anime/clip.mkv");
+        assertEquals(
+                "/pCloudLock/Video%20Archive/Anime/clip.mkv",
+                ThumbnailCacheIdentity.legacyEncodedServePath("pCloudLock", "Video Archive/Anime/clip.mkv"));
+        assertEquals(
+                ThumbnailStablePath.legacyPathFromServeUrl(
+                        "http://127.0.0.1:29179/authToken/pCloudLock/Video%20Archive/Anime/clip.mkv"),
+                ThumbnailStablePath.legacyPathFromServeUrl(probeUrl));
+    }
+
+    @Test
+    public void videoDiskCacheKeyLabel_matchesLoaderKeyForEncodedPath() {
+        String legacy = ThumbnailCacheIdentity.legacyEncodedServePath(
+                "pCloudLock",
+                "Video Archive/Anime/clip.mkv");
+        String probeUrl = ThumbnailCacheIdentity.buildCacheProbeUrl(
+                "pCloudLock",
+                "Video Archive/Anime/clip.mkv");
+        VideoThumbnailUrl model = new VideoThumbnailUrl(probeUrl);
+        assertEquals(legacy, model.getStablePath());
+        assertEquals(
+                ReadableCacheKey.fromStablePath(legacy + "|thumbV2", "thumbVideo"),
+                ThumbnailCacheIdentity.videoDiskCacheKeyLabel("pCloudLock", "Video Archive/Anime/clip.mkv", 0));
     }
 
     @Test

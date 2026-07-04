@@ -47,4 +47,19 @@ public class BackgroundMediaPrepWorkTrackerTest {
         BackgroundMediaPrepWorkTracker.setCacheWorkInProgress(false);
         Assert.assertFalse(BackgroundMediaPrepWorkTracker.hasActiveWork());
     }
+
+    @Test
+    public void explorerForegroundServeLease_balanced() {
+        Assert.assertFalse(BackgroundMediaPrepWorkTracker.hasExplorerForegroundServeLease());
+        BackgroundMediaPrepWorkTracker.incrementExplorerForegroundServeLease();
+        Assert.assertTrue(BackgroundMediaPrepWorkTracker.hasExplorerForegroundServeLease());
+        BackgroundMediaPrepWorkTracker.decrementExplorerForegroundServeLease();
+        Assert.assertFalse(BackgroundMediaPrepWorkTracker.hasExplorerForegroundServeLease());
+    }
+
+    @Test
+    public void decrementExplorerServeLease_neverNegative() {
+        BackgroundMediaPrepWorkTracker.decrementExplorerForegroundServeLease();
+        Assert.assertFalse(BackgroundMediaPrepWorkTracker.hasExplorerForegroundServeLease());
+    }
 }

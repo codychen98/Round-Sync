@@ -118,7 +118,7 @@ final class VideoThumbnailDirectExtract {
             long durationMs = readDurationMs(mmr);
             String codecMime = VideoAv1ThumbnailHelper.readVideoCodecMime(mmr);
             int reloadEpoch = ThumbnailReloadEpoch.get(ThumbnailStablePath.normalize(stablePath));
-            Bitmap frame = extractFrameWithReloadOffsets(mmr, durationMs, reloadEpoch);
+            Bitmap frame = extractFrameWithReloadOffsets(mmr, durationMs, reloadEpoch, stablePath);
             return new MmrExtractResult(frame, durationMs, codecMime);
         } catch (Exception ignored) {
             return new MmrExtractResult(null, 0L, null);
@@ -150,21 +150,29 @@ final class VideoThumbnailDirectExtract {
     private static Bitmap extractFrameWithReloadOffsets(
             @NonNull MediaMetadataRetriever mmr,
             long durationMs,
-            int reloadEpoch) {
+            int reloadEpoch,
+            @NonNull String stablePath) {
         long durationUs = durationMs > 0 ? durationMs * 1000L : 0L;
+        String normalizedPath = ThumbnailStablePath.normalize(stablePath);
+        long lastSourceMs = ThumbnailReloadEpoch.getLastSourcePositionMs(normalizedPath);
         long[] timestamps = reloadEpoch > 0
-                ? buildReloadTimesUs(durationMs, durationUs, reloadEpoch)
+                ? buildReloadTimesUs(durationMs, durationUs, reloadEpoch, lastSourceMs)
                 : buildDefaultTimesUs(durationMs, durationUs);
         for (long ts : timestamps) {
             Bitmap frame = mmr.getFrameAtTime(ts, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
             if (frame != null) {
+                ThumbnailReloadEpoch.recordSourcePositionMs(normalizedPath, ts / 1_000L);
                 return frame;
             }
         }
         return null;
     }
 
-    private static long[] buildReloadTimesUs(long durationMs, long durationUs, int reloadEpoch) {
+    private static long[] buildReloadTimesUs(
+            long durationMs,
+            long durationUs,
+            int reloadEpoch,
+            long lastSourcePositionMs) {
         long[] fractionsUs;
         if (durationMs > 0) {
             fractionsUs = new long[] {
@@ -186,7 +194,7 @@ final class VideoThumbnailDirectExtract {
         for (int i = 0; i < fractionsUs.length; i++) {
             ordered[i] = clampTimeUs(fractionsUs[(start + i) % fractionsUs.length], durationUs);
         }
-        return ordered;
+        return VideoThumbnailSeekProbe.deprioritizeLastSourceUs(ordered, lastSourcePositionMs);
     }
 
     private static long[] buildDefaultTimesUs(long durationMs, long durationUs) {
@@ -232,7 +240,7 @@ final class VideoThumbnailDirectExtract {
                 mmr.setDataSource(temp.getAbsolutePath());
                 durationMs = readDurationMs(mmr);
                 int reloadEpoch = ThumbnailReloadEpoch.get(ThumbnailStablePath.normalize(stablePath));
-                Bitmap frame = extractFrameWithReloadOffsets(mmr, durationMs, reloadEpoch);
+                Bitmap frame = extractFrameWithReloadOffsets(mmr, durationMs, reloadEpoch, stablePath);
                 if (frame == null) {
                     frame = mmr.getFrameAtTime(2_000_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
                 }

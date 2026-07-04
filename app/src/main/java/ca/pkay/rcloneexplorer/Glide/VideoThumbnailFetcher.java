@@ -400,8 +400,9 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
         }
         long durationUs = durationMs > 0 ? durationMs * 1000L : 0L;
         int reloadEpoch = ThumbnailReloadEpoch.getEpochForVideoUrl(url);
+        long lastSourceMs = ThumbnailReloadEpoch.getLastSourcePositionForVideoUrl(url);
         long[] timestamps = reloadEpoch > 0
-                ? buildReloadThumbnailProbeTimesUs(durationMs, durationUs, reloadEpoch)
+                ? buildReloadThumbnailProbeTimesUs(durationMs, durationUs, reloadEpoch, lastSourceMs)
                 : buildThumbnailProbeTimesUs(durationMs, durationUs);
         BestFrameSoFar best = new BestFrameSoFar();
 
@@ -411,8 +412,9 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
             }
             Bitmap frame = retrieveFrameAtTime(mmr, ts, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
             if (frame != null) {
-                best.consider(frame);
+                best.consider(frame, ts);
                 if (best.hasStrongRepresentative()) {
+                    recordMmrSourcePosition(best);
                     return best.getFrame();
                 }
             }
@@ -427,14 +429,26 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
             }) {
                 Bitmap frame = retrieveFrameAtTime(mmr, ts, option);
                 if (frame != null) {
-                    best.consider(frame);
+                    best.consider(frame, ts);
                     if (best.hasStrongRepresentative()) {
+                        recordMmrSourcePosition(best);
                         return best.getFrame();
                     }
                 }
             }
         }
-        return best.getFrame();
+        Bitmap frame = best.getFrame();
+        if (frame != null) {
+            recordMmrSourcePosition(best);
+        }
+        return frame;
+    }
+
+    private void recordMmrSourcePosition(@NonNull BestFrameSoFar best) {
+        long timeUs = best.getWinningTimeUs();
+        if (timeUs >= 0L) {
+            ThumbnailReloadEpoch.recordSourcePositionForVideoUrl(url, timeUs / 1_000L);
+        }
     }
 
     /**
@@ -491,7 +505,8 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
     private static long[] buildReloadThumbnailProbeTimesUs(
             long durationMs,
             long durationUs,
-            int reloadEpoch) {
+            int reloadEpoch,
+            long lastSourcePositionMs) {
         long[] fractionsUs;
         if (durationMs > 0) {
             fractionsUs = new long[] {
@@ -513,7 +528,8 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
         for (int i = 0; i < fractionsUs.length; i++) {
             ordered.add(clampTimeUs(fractionsUs[(start + i) % fractionsUs.length], durationUs));
         }
-        return longSetToArray(ordered);
+        return VideoThumbnailSeekProbe.deprioritizeLastSourceUs(
+                longSetToArray(ordered), lastSourcePositionMs);
     }
 
     private static long clampTimeUs(long timeUs, long durationUs) {
@@ -558,8 +574,9 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
         private double informativeScore = -1;
         private boolean hasRepresentative;
         private boolean flatColorLike = true;
+        private long winningTimeUs = -1L;
 
-        void consider(@NonNull Bitmap candidate) {
+        void consider(@NonNull Bitmap candidate, long timeUs) {
             VideoFrameQualityScorer.FrameQuality quality = VideoFrameQualityScorer.score(candidate);
             boolean representativeCandidate = !quality.isPoorRepresentativeCandidate();
             if (representativeCandidate) {
@@ -571,7 +588,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
                         && flatColorLike
                         && !quality.isFlatColorLike())));
                 if (betterRepresentative) {
-                    replaceFrame(candidate, quality, true);
+                    replaceFrame(candidate, quality, true, timeUs);
                 } else {
                     candidate.recycle();
                 }
@@ -588,7 +605,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
                     && flatColorLike
                     && !quality.isFlatColorLike()));
             if (brighterFallback || sameBrightnessButMoreInformative) {
-                replaceFrame(candidate, quality, false);
+                replaceFrame(candidate, quality, false, timeUs);
             } else {
                 candidate.recycle();
             }
@@ -597,7 +614,8 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
         private void replaceFrame(
                 @NonNull Bitmap candidate,
                 @NonNull VideoFrameQualityScorer.FrameQuality quality,
-                boolean representative) {
+                boolean representative,
+                long timeUs) {
             if (frame != null) {
                 frame.recycle();
             }
@@ -606,6 +624,7 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
             informativeScore = quality.informativeScore();
             flatColorLike = quality.isFlatColorLike();
             hasRepresentative = representative;
+            winningTimeUs = timeUs;
         }
 
         boolean hasRepresentative() {
@@ -619,6 +638,10 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
         @Nullable
         Bitmap getFrame() {
             return frame;
+        }
+
+        long getWinningTimeUs() {
+            return winningTimeUs;
         }
     }
 

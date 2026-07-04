@@ -48,8 +48,16 @@ import ca.pkay.rcloneexplorer.util.Media3ExtensionRenderers;
 final class VideoThumbnailExoFallback {
 
     private static final String TAG = "VideoThumbExoFb";
+    /** Prepare-phase surface size; upgraded to the video's own size once the format is known. */
     private static final int OUT_W = 320;
     private static final int OUT_H = 180;
+    /**
+     * Capture cap / fallback. MMR-extracted thumbnails are full video resolution; capturing the Exo
+     * frame at 320x180 produced visibly blurrier grid thumbnails than neighbors (Step 15A).
+     */
+    private static final int MAX_CAPTURE_DIM = 1280;
+    private static final int CAPTURE_FALLBACK_W = 1280;
+    private static final int CAPTURE_FALLBACK_H = 720;
     private static final long PREPARE_TIMEOUT_MS = 20_000L;
     private static final long USER_RELOAD_PREPARE_TIMEOUT_MS = 60_000L;
     /** AV1 user reload: cold software decode + large MKV demux can exceed 60s on low-end devices. */
@@ -570,6 +578,8 @@ final class VideoThumbnailExoFallback {
                 return null;
             }
 
+            upgradeCaptureSurfaceForVideoFormat(appContext, base, exoH, playerRef, readerRef);
+
             long effectiveDurationMs = durationMs;
             if (effectiveDurationMs <= 0) {
                 Long playerDur = readFromExo(exoH, playerRef, ExoPlayer::getDuration);
@@ -579,11 +589,13 @@ final class VideoThumbnailExoFallback {
                     effectiveDurationMs = 60_000L;
                 }
             }
-            int reloadEpoch = reloadEpochStablePath != null
-                    ? ThumbnailReloadEpoch.get(ThumbnailStablePath.normalize(reloadEpochStablePath))
-                    : ThumbnailReloadEpoch.getEpochForVideoUrl(url);
+            String recordStablePath = reloadEpochStablePath != null
+                    ? ThumbnailStablePath.normalize(reloadEpochStablePath)
+                    : ThumbnailStablePath.canonicalFromServeUrl(url);
+            int reloadEpoch = ThumbnailReloadEpoch.get(recordStablePath);
+            long lastSourceMs = ThumbnailReloadEpoch.getLastSourcePositionMs(recordStablePath);
             long[] seekAttemptsMs = VideoThumbnailSeekProbe.exoSeekAttemptsMs(
-                    effectiveDurationMs, reloadEpoch);
+                    effectiveDurationMs, reloadEpoch, lastSourceMs);
             for (long seekMs : seekAttemptsMs) {
                 if (cancellation.isCancelled()) {
                     break;
@@ -591,8 +603,11 @@ final class VideoThumbnailExoFallback {
                 Bitmap bitmap = captureFrameAtSeekMs(
                         appContext, base, exoH, playerRef, readerRef, session, cancellation, seekMs);
                 if (bitmap != null) {
+                    ThumbnailReloadEpoch.recordSourcePositionMs(recordStablePath, seekMs);
                     VideoThumbnailFetcher.logThumbPipe(appContext, "exoSeekOk",
-                            "basename=" + base + " seekMs=" + seekMs + " epoch=" + reloadEpoch);
+                            "basename=" + base + " seekMs=" + seekMs + " epoch=" + reloadEpoch
+                                    + (VideoThumbnailSeekProbe.isSameFrameMs(seekMs, lastSourceMs)
+                                            ? " sameAsLastSource=true" : ""));
                     return bitmap;
                 }
             }
@@ -617,6 +632,86 @@ final class VideoThumbnailExoFallback {
                     }
                 }
             });
+        }
+    }
+
+    /**
+     * Replaces the small prepare-phase {@link ImageReader} with one sized to the decoded video
+     * (aspect-correct, longest edge capped at {@link #MAX_CAPTURE_DIM}) so the captured frame is
+     * not a 320x180 upscale. Falls back to 1280x720 when the format is unavailable. The swap and
+     * the old reader's close run on the player looper so the surface change is ordered with
+     * subsequent {@code seekTo} render requests.
+     */
+    private static void upgradeCaptureSurfaceForVideoFormat(
+            @NonNull Context appContext,
+            @NonNull String base,
+            @NonNull Handler exoH,
+            @NonNull AtomicReference<ExoPlayer> playerRef,
+            @NonNull AtomicReference<ImageReader> readerRef) {
+        androidx.media3.common.Format format = readFromExo(exoH, playerRef, ExoPlayer::getVideoFormat);
+        int targetW;
+        int targetH;
+        if (format != null && format.width > 0 && format.height > 0) {
+            boolean swapDims = format.rotationDegrees == 90 || format.rotationDegrees == 270;
+            int srcW = swapDims ? format.height : format.width;
+            int srcH = swapDims ? format.width : format.height;
+            float scale = Math.min(1f, (float) MAX_CAPTURE_DIM / Math.max(srcW, srcH));
+            targetW = Math.max(2, Math.round(srcW * scale));
+            targetH = Math.max(2, Math.round(srcH * scale));
+        } else {
+            targetW = CAPTURE_FALLBACK_W;
+            targetH = CAPTURE_FALLBACK_H;
+        }
+        ImageReader current = readerRef.get();
+        if (current != null && current.getWidth() == targetW && current.getHeight() == targetH) {
+            return;
+        }
+        final ImageReader upgraded;
+        try {
+            upgraded = ImageReader.newInstance(targetW, targetH, PixelFormat.RGBA_8888, 2);
+        } catch (Exception e) {
+            VideoThumbnailFetcher.logThumbPipe(appContext, "exoCaptureSizeFail",
+                    "basename=" + base + " w=" + targetW + " h=" + targetH
+                            + " msg=" + scrubExoMsg(e.getMessage()));
+            return;
+        }
+        CountDownLatch swapped = new CountDownLatch(1);
+        AtomicReference<Boolean> applied = new AtomicReference<>(false);
+        exoH.post(() -> {
+            try {
+                ExoPlayer p = playerRef.get();
+                if (p == null) {
+                    upgraded.close();
+                    return;
+                }
+                ImageReader old = readerRef.getAndSet(upgraded);
+                p.setVideoSurface(upgraded.getSurface());
+                applied.set(true);
+                if (old != null) {
+                    try {
+                        old.close();
+                    } catch (Exception ignore) {
+                    }
+                }
+            } finally {
+                swapped.countDown();
+            }
+        });
+        try {
+            if (!swapped.await(EXO_READ_WAIT_MS, TimeUnit.MILLISECONDS)) {
+                VideoThumbnailFetcher.logThumbPipe(appContext, "exoCaptureSizeFail",
+                        "basename=" + base + " reason=swapTimeout w=" + targetW + " h=" + targetH);
+                return;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return;
+        }
+        if (Boolean.TRUE.equals(applied.get())) {
+            VideoThumbnailFetcher.logThumbPipe(appContext, "exoCaptureSize",
+                    "basename=" + base + " w=" + targetW + " h=" + targetH
+                            + " fmt=" + (format != null ? format.width + "x" + format.height
+                                    + " rot=" + format.rotationDegrees : "unknown"));
         }
     }
 
@@ -653,7 +748,8 @@ final class VideoThumbnailExoFallback {
         if (reader == null) {
             return null;
         }
-        Bitmap bitmap = Bitmap.createBitmap(OUT_W, OUT_H, Bitmap.Config.ARGB_8888);
+        Bitmap bitmap = Bitmap.createBitmap(
+                reader.getWidth(), reader.getHeight(), Bitmap.Config.ARGB_8888);
         CountDownLatch copied = new CountDownLatch(1);
         AtomicReference<Integer> copyResult = new AtomicReference<>(PixelCopy.ERROR_UNKNOWN);
         Handler main = new Handler(Looper.getMainLooper());

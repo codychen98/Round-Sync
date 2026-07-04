@@ -12,6 +12,7 @@ public final class BackgroundMediaPrepWorkTracker {
     private static final Object LOCK = new Object();
 
     private static boolean explorerThumbnailBatchInProgress;
+    private static int explorerForegroundServeLeaseRefCount;
     private static int thumbnailPrefetchWorkRefCount;
     private static boolean cacheWorkInProgress;
 
@@ -20,6 +21,27 @@ public final class BackgroundMediaPrepWorkTracker {
     public static void setExplorerThumbnailBatchInProgress(boolean inProgress) {
         synchronized (LOCK) {
             explorerThumbnailBatchInProgress = inProgress;
+        }
+    }
+
+  /** Explorer holds an active foreground serve lease (user is browsing a folder). */
+    public static void incrementExplorerForegroundServeLease() {
+        synchronized (LOCK) {
+            explorerForegroundServeLeaseRefCount++;
+        }
+    }
+
+    public static void decrementExplorerForegroundServeLease() {
+        synchronized (LOCK) {
+            if (explorerForegroundServeLeaseRefCount > 0) {
+                explorerForegroundServeLeaseRefCount--;
+            }
+        }
+    }
+
+    public static boolean hasExplorerForegroundServeLease() {
+        synchronized (LOCK) {
+            return explorerForegroundServeLeaseRefCount > 0;
         }
     }
 
@@ -55,6 +77,7 @@ public final class BackgroundMediaPrepWorkTracker {
     public static void resetForTests() {
         synchronized (LOCK) {
             explorerThumbnailBatchInProgress = false;
+            explorerForegroundServeLeaseRefCount = 0;
             thumbnailPrefetchWorkRefCount = 0;
             cacheWorkInProgress = false;
         }

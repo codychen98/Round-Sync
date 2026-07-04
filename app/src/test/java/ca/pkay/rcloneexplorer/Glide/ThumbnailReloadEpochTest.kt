@@ -21,6 +21,10 @@ class ThumbnailReloadEpochTest {
         preferField.isAccessible = true
         @Suppress("UNCHECKED_CAST")
         (preferField.get(null) as MutableSet<String>).clear()
+        val sourceField = ThumbnailReloadEpoch::class.java.getDeclaredField("lastSourcePositionsMs")
+        sourceField.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        (sourceField.get(null) as MutableMap<String, Long>).clear()
     }
 
     @Test
@@ -69,5 +73,15 @@ class ThumbnailReloadEpochTest {
         assertEquals(false, ThumbnailReloadEpoch.consumePendingUserReload(stable))
         assertEquals(true, ThumbnailReloadEpoch.consumePreferExoDecode(stable))
         assertEquals(false, ThumbnailReloadEpoch.consumePreferExoDecode(stable))
+    }
+
+    @Test
+    fun recordSourcePositionMs_tracksPerStablePath() {
+        val path = "/pCloudLock/Video Archive/Anime/ep.mkv"
+        assertEquals(ThumbnailReloadEpoch.NO_SOURCE_POSITION, ThumbnailReloadEpoch.getLastSourcePositionMs(path))
+        ThumbnailReloadEpoch.recordSourcePositionMs(path, 2_000L)
+        assertEquals(2_000L, ThumbnailReloadEpoch.getLastSourcePositionMs(path))
+        ThumbnailReloadEpoch.recordSourcePositionMs(path, 25_000L)
+        assertEquals(25_000L, ThumbnailReloadEpoch.getLastSourcePositionMs(path))
     }
 }
