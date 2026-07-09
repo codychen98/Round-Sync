@@ -17,7 +17,7 @@ public class FileComparators {
                     return 1;
                 }
 
-                return t1.getName().toLowerCase().compareTo(fileItem.getName().toLowerCase());
+                return -naturalCompare(fileItem.getName(), t1.getName());
             }
         }
 
@@ -31,7 +31,7 @@ public class FileComparators {
                     return 1;
                 }
 
-                return fileItem.getName().toLowerCase().compareTo(t1.getName().toLowerCase());
+                return naturalCompare(fileItem.getName(), t1.getName());
             }
         }
 
@@ -110,7 +110,7 @@ public class FileComparators {
                 return 1;
             }
 
-            return t1.getName().toLowerCase().compareTo(file.getName().toLowerCase());
+            return -naturalCompare(file.getName(), t1.getName());
         }
     }
 
@@ -124,7 +124,7 @@ public class FileComparators {
                 return 1;
             }
 
-            return o1.getName().toLowerCase().compareTo(o2.getName().toLowerCase());
+            return naturalCompare(o1.getName(), o2.getName());
         }
     }
 
@@ -190,5 +190,43 @@ public class FileComparators {
 
             return Long.compare(o1.lastModified(), o2.lastModified());
         }
+    }
+
+    /**
+     * Natural (numeric-aware) string comparison.
+     * Splits strings into numeric and non-numeric tokens, comparing numbers numerically
+     * and text lexicographically. Case-insensitive.
+     * Returns: negative if s1 < s2, zero if equal, positive if s1 > s2
+     */
+    private static int naturalCompare(String s1, String s2) {
+        if (s1 == null || s2 == null) {
+            return s1 == null ? (s2 == null ? 0 : -1) : 1;
+        }
+        s1 = s1.toLowerCase();
+        s2 = s2.toLowerCase();
+        int len1 = s1.length();
+        int len2 = s2.length();
+        int i1 = 0, i2 = 0;
+        while (i1 < len1 && i2 < len2) {
+            char c1 = s1.charAt(i1);
+            char c2 = s2.charAt(i2);
+            if (Character.isDigit(c1) && Character.isDigit(c2)) {
+                long num1 = 0, num2 = 0;
+                while (i1 < len1 && Character.isDigit(s1.charAt(i1))) {
+                    num1 = num1 * 10 + (s1.charAt(i1) - '0');
+                    i1++;
+                }
+                while (i2 < len2 && Character.isDigit(s2.charAt(i2))) {
+                    num2 = num2 * 10 + (s2.charAt(i2) - '0');
+                    i2++;
+                }
+                if (num1 != num2) return Long.compare(num1, num2);
+            } else {
+                if (c1 != c2) return Character.compare(c1, c2);
+                i1++;
+                i2++;
+            }
+        }
+        return Integer.compare(len1, len2);
     }
 }
