@@ -102,6 +102,7 @@ object ThumbnailDiskCacheEvictor {
         }
     }
 
+    @JvmStatic
     fun evict(context: Context, key: Key) {
         val cacheDir = CanonicalCachePathResolver.thumbnailsDirOrNull(context.applicationContext) ?: return
         val safeKey = SafeKeyGenerator().getSafeKey(key)

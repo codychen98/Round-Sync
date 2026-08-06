@@ -9,6 +9,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.bumptech.glide.load.DataSource;
+import com.bumptech.glide.load.HttpException;
 import com.bumptech.glide.load.engine.GlideException;
 import com.bumptech.glide.request.RequestListener;
 import com.bumptech.glide.request.target.Target;
@@ -19,6 +20,8 @@ import ca.pkay.rcloneexplorer.util.SyncLog;
 import ca.pkay.rcloneexplorer.util.ThumbnailDiagLog;
 
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class RetryRequestListener implements RequestListener<Drawable> {
 
@@ -45,10 +48,23 @@ public class RetryRequestListener implements RequestListener<Drawable> {
         void load(RequestListener<Drawable> listener);
     }
 
+    /**
+     * Evicts this load's disk-cache DATA entry when a decode-stage failure is detected,
+     * so the already-scheduled retry refetches fresh bytes instead of replaying a corrupt
+     * cached entry. Always invoked off the main thread.
+     */
+    @FunctionalInterface
+    public interface DecodeFailureCacheEvictor {
+        void evict();
+    }
+
     private static final String TAG = "RetryRequestListener";
     private static final int MAX_RETRIES = 3;
     private static final long[] RETRY_DELAYS_MS = {500L, 1000L, 2000L};
     private static final Handler HANDLER = new Handler(Looper.getMainLooper());
+    // Shared executor for one-shot disk-cache evictions; DiskLruCache.open must not run on
+    // the main thread. The first retry delay (>=500ms) orders eviction before the retry.
+    private static final ExecutorService CACHE_EVICT_EXECUTOR = Executors.newSingleThreadExecutor();
 
     private final ThumbnailServerManager serverManager;
     private final RetryLoadCallback loadCallback;
@@ -61,8 +77,11 @@ public class RetryRequestListener implements RequestListener<Drawable> {
     private final boolean policyExtendedRetries;
     @Nullable
     private final ThumbnailExtendedRetryScheduleGate extendedScheduleGate;
+    @Nullable
+    private final DecodeFailureCacheEvictor decodeFailureCacheEvictor;
     private int retryCount = 0;
     private Runnable pendingRunnable = null;
+    private boolean cacheEvictedOnce = false;
 
     public RetryRequestListener(
             @NonNull ThumbnailServerManager serverManager,
@@ -71,7 +90,8 @@ public class RetryRequestListener implements RequestListener<Drawable> {
             @NonNull String debugLoadKey,
             @NonNull ThumbnailRetryEpochSource epochSource,
             boolean policyExtendedRetries,
-            @Nullable ThumbnailExtendedRetryScheduleGate extendedScheduleGate) {
+            @Nullable ThumbnailExtendedRetryScheduleGate extendedScheduleGate,
+            @Nullable DecodeFailureCacheEvictor decodeFailureCacheEvictor) {
         this.serverManager = serverManager;
         this.loadCallback = loadCallback;
         this.appContext = appContextForDiag != null ? appContextForDiag.getApplicationContext() : null;
@@ -79,6 +99,7 @@ public class RetryRequestListener implements RequestListener<Drawable> {
         this.epochSource = epochSource;
         this.policyExtendedRetries = policyExtendedRetries;
         this.extendedScheduleGate = extendedScheduleGate;
+        this.decodeFailureCacheEvictor = decodeFailureCacheEvictor;
     }
 
     @NonNull
@@ -129,6 +150,17 @@ public class RetryRequestListener implements RequestListener<Drawable> {
                             + " mgrState=" + serverManager.getSyncState()
                             + " serveGen=" + serverManager.getServeGeneration()
                             + " causes=" + formatGlideRootCauses(e));
+        }
+        if (decodeFailureCacheEvictor != null
+                && !cacheEvictedOnce
+                && debugLoadKey.endsWith("|img")
+                && isDecodeStageFailure(e)) {
+            cacheEvictedOnce = true;
+            ThumbnailDiagLog.info(
+                    appContext,
+                    "imageCacheEvictOnDecodeFail",
+                    "key=" + debugLoadKey);
+            CACHE_EVICT_EXECUTOR.execute(decodeFailureCacheEvictor::evict);
         }
         if (!policyExtendedRetries) {
             if (retryCount >= MAX_RETRIES) {
@@ -232,6 +264,28 @@ public class RetryRequestListener implements RequestListener<Drawable> {
             HANDLER.removeCallbacks(pendingRunnable);
             pendingRunnable = null;
         }
+    }
+
+    /**
+     * True when the failure happened at the decode stage: root causes are present and none is
+     * an {@link HttpException}. On a DATA-cache hit no fetch happens, so any failure is
+     * decode-stage; on a cache miss a network failure surfaces as HttpException and must not
+     * trigger an eviction of a nonexistent entry.
+     */
+    static boolean isDecodeStageFailure(@Nullable GlideException e) {
+        if (e == null) {
+            return false;
+        }
+        List<Throwable> roots = e.getRootCauses();
+        if (roots.isEmpty()) {
+            return false;
+        }
+        for (Throwable root : roots) {
+            if (root instanceof HttpException) {
+                return false;
+            }
+        }
+        return true;
     }
 
     static boolean isCancelledGlideFailure(@Nullable GlideException e) {

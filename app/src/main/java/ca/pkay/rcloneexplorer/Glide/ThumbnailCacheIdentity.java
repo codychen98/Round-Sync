@@ -289,7 +289,7 @@ public final class ThumbnailCacheIdentity {
      * path segments are percent-encoded via {@link Uri.Builder#appendPath(String)}.
      */
     @NonNull
-    static String buildCacheProbeUrl(@NonNull String remoteName, @NonNull String remoteFilePath) {
+    public static String buildCacheProbeUrl(@NonNull String remoteName, @NonNull String remoteFilePath) {
         Uri.Builder builder = Uri.parse(CACHE_PROBE_URL_PREFIX).buildUpon();
         for (String segment : stableServePath(remoteName, remoteFilePath).split("/")) {
             if (!segment.isEmpty()) {

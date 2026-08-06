@@ -425,7 +425,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         item.getPath() + "|folder",
                         () -> listener.getThumbnailUrlEpoch(),
                         extendedThumbRetry,
-                        extendedGate);
+                        extendedGate,
+                        null);
                 holder.activeRetryListener = retryListener;
                 Glide.with(context.getApplicationContext())
                         .load(new FolderThumbnailGlideUrl(buildThumbnailUrl(item)))
@@ -486,6 +487,17 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 extendedThumbRetry
                                         ? () -> thumbnailHostResumed && serverReady
                                         : null;
+                        // Same key construction as ThumbnailReloadHelper.runReload (image branch),
+                        // which is proven to evict the correct DATA disk-cache entry.
+                        final Context evictorAppContext = context.getApplicationContext();
+                        final String evictorRemoteName = item.getRemote().getName();
+                        final String evictorItemPath = item.getPath();
+                        RetryRequestListener.DecodeFailureCacheEvictor decodeFailureCacheEvictor =
+                                () -> ThumbnailDiskCacheEvictor.evict(
+                                        evictorAppContext,
+                                        new HttpServeThumbnailGlideUrl(
+                                                ThumbnailCacheIdentity.buildCacheProbeUrl(
+                                                        evictorRemoteName, evictorItemPath)));
                         RetryRequestListener retryListener = new ProgressTrackingRetryListener(
                                 holder,
                                 ThumbnailServerManager.getInstance(),
@@ -499,7 +511,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 item.getPath() + "|img",
                                 () -> listener.getThumbnailUrlEpoch(),
                                 extendedThumbRetry,
-                                extendedGate);
+                                extendedGate,
+                                decodeFailureCacheEvictor);
                         prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
                         holder.activeRetryListener = retryListener;
                         Glide.with(context.getApplicationContext())
@@ -583,7 +596,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 item.getPath() + "|vid",
                                 () -> listener.getThumbnailUrlEpoch(),
                                 extendedThumbRetry,
-                                extendedGate);
+                                extendedGate,
+                                null);
                         prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
                         holder.activeRetryListener = retryListener;
                         Glide.with(context.getApplicationContext())
@@ -1639,7 +1653,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 @NonNull String debugLoadKey,
                 @NonNull RetryRequestListener.ThumbnailRetryEpochSource epochSource,
                 boolean policyExtendedRetries,
-                @Nullable RetryRequestListener.ThumbnailExtendedRetryScheduleGate extendedScheduleGate) {
+                @Nullable RetryRequestListener.ThumbnailExtendedRetryScheduleGate extendedScheduleGate,
+                @Nullable RetryRequestListener.DecodeFailureCacheEvictor decodeFailureCacheEvictor) {
             super(
                     serverManager,
                     loadCallback,
@@ -1647,7 +1662,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                     debugLoadKey,
                     epochSource,
                     policyExtendedRetries,
-                    extendedScheduleGate);
+                    extendedScheduleGate,
+                    decodeFailureCacheEvictor);
             this.boundHolder = boundHolder;
         }
 
