@@ -18,6 +18,10 @@ object ImageServeBitmapLoader {
             loadSampledInternal(httpUrl, client, maxWidthPx, maxHeightPx)
         } catch (_: Exception) {
             null
+        } catch (_: OutOfMemoryError) {
+            // A failed decode must never take down the process; the caller shows a
+            // placeholder instead.
+            null
         }
     }
 
@@ -54,19 +58,28 @@ object ImageServeBitmapLoader {
         options: BitmapFactory.Options,
         reqWidth: Int,
         reqHeight: Int,
+    ): Int = calculateInSampleSize(options.outWidth, options.outHeight, reqWidth, reqHeight)
+
+    /**
+     * Power-of-two sample size that bounds the decoded dimensions at or below the requested
+     * bounds. The previous "keep both dimensions >= requested" variant decoded 26 MP camera
+     * originals at full resolution (~104 MB each) under the 4096 px high-fidelity bound,
+     * which OOM-crashed the viewer when the pager preloaded neighboring pages.
+     */
+    internal fun calculateInSampleSize(
+        width: Int,
+        height: Int,
+        reqWidth: Int,
+        reqHeight: Int,
     ): Int {
-        val height = options.outHeight
-        val width = options.outWidth
-        if (height <= 0 || width <= 0) {
+        if (width <= 0 || height <= 0) {
             return 1
         }
+        val boundW = reqWidth.coerceAtLeast(1)
+        val boundH = reqHeight.coerceAtLeast(1)
         var inSampleSize = 1
-        if (height > reqHeight || width > reqWidth) {
-            var halfHeight = height / 2
-            var halfWidth = width / 2
-            while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
-                inSampleSize *= 2
-            }
+        while (width / inSampleSize > boundW || height / inSampleSize > boundH) {
+            inSampleSize *= 2
         }
         return inSampleSize
     }
