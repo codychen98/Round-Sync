@@ -2,6 +2,7 @@ package ca.pkay.rcloneexplorer.util
 
 import android.content.Context
 import android.net.Uri
+import ca.pkay.rcloneexplorer.Glide.ThumbnailDiskCacheReconciler
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
@@ -15,6 +16,9 @@ import java.util.zip.ZipInputStream
 /**
  * Restores thumbnail and media-cache blobs from a config export zip `cache/` tree into
  * [CanonicalCachePathResolver] locations. Missing `cache/` entries are ignored (older exports).
+ *
+ * After thumbnail blobs are extracted, [ThumbnailDiskCacheReconciler] rebuilds the Glide
+ * DiskLruCache journal so policy prefetch treats restored files as cache hits.
  */
 object CacheArchiveImporter {
 
@@ -25,6 +29,7 @@ object CacheArchiveImporter {
         val extracted: Int,
         val skipped: Int,
         val failed: Int,
+        val reconciled: Int = 0,
     )
 
     private enum class Outcome {
@@ -47,14 +52,17 @@ object CacheArchiveImporter {
             }
         }
         val inputStream = openUriInputStream(app, uri) ?: return Result(0, 0, 0)
-        return extractFromZipStream(app, inputStream)
+        return finishExtract(app, extractFromZipStream(app, inputStream))
     }
 
     @JvmStatic
     fun extractFromZipFile(context: Context, file: File): Result {
         return try {
             ZipFile(file).use { zipFile ->
-                extractFromZipFileHandle(context.applicationContext, zipFile)
+                finishExtract(
+                    context.applicationContext,
+                    extractFromZipFileHandle(context.applicationContext, zipFile),
+                )
             }
         } catch (t: IOException) {
             FLog.w(TAG, "Could not open import file", t)
@@ -63,6 +71,20 @@ object CacheArchiveImporter {
             FLog.w(TAG, "Cache import interrupted", t)
             Result(0, 0, 0)
         }
+    }
+
+    private fun finishExtract(context: Context, partial: Result): Result {
+        if (partial.extracted == 0 && partial.skipped == 0) {
+            return partial
+        }
+        val reconcile = ThumbnailDiskCacheReconciler.reconcileAfterImport(context)
+        FLog.i(
+            TAG,
+            "Thumbnail cache reconcile after import: registered=%d skippedInvalid=%d",
+            reconcile.registered,
+            reconcile.skippedInvalid,
+        )
+        return partial.copy(reconciled = reconcile.registered)
     }
 
     private fun extractFromZipFileHandle(context: Context, zipFile: ZipFile): Result {
@@ -140,6 +162,10 @@ object CacheArchiveImporter {
             normalized.startsWith(CacheArchiveExporter.ZIP_THUMBNAILS_PREFIX) -> {
                 val relative = normalized.removePrefix(CacheArchiveExporter.ZIP_THUMBNAILS_PREFIX)
                 if (!isSafeRelativePath(relative)) {
+                    return null
+                }
+                // Journal is rebuilt after import from *.0 value files; do not restore a stale one.
+                if (isGlideJournalSidecar(relative)) {
                     return null
                 }
                 CanonicalCachePathResolver.thumbnailsDirOrNull(context)?.let { dir ->
@@ -272,5 +298,11 @@ object CacheArchiveImporter {
             return false
         }
         return path.split('/').none { segment -> segment.isEmpty() || segment == ".." }
+    }
+
+    private fun isGlideJournalSidecar(relativePath: String): Boolean {
+        return relativePath == "journal" ||
+            relativePath == "journal.tmp" ||
+            relativePath == "journal.bkp"
     }
 }

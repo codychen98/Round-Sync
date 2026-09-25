@@ -2,6 +2,7 @@ package ca.pkay.rcloneexplorer.util
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -10,6 +11,7 @@ import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import com.bumptech.glide.disklrucache.DiskLruCache
 import java.io.File
 import java.io.FileOutputStream
 import java.util.zip.ZipEntry
@@ -133,6 +135,14 @@ class CacheArchiveImporterTest {
     }
 
     @Test
+    fun targetFileForEntry_ignoresGlideJournalSidecars() {
+        val context = RuntimeEnvironment.getApplication()
+        assertNull(CacheArchiveImporter.targetFileForEntry(context, "cache/thumbnails/journal"))
+        assertNull(CacheArchiveImporter.targetFileForEntry(context, "cache/thumbnails/journal.tmp"))
+        assertNull(CacheArchiveImporter.targetFileForEntry(context, "cache/thumbnails/journal.bkp"))
+    }
+
+    @Test
     fun extractFromZipFile_skipsExistingEqualBlob() {
         val context = RuntimeEnvironment.getApplication()
         val thumbnailsDir = CanonicalCachePathResolver.thumbnailsDirOrNull(context)
@@ -157,6 +167,41 @@ class CacheArchiveImporterTest {
         assertEquals(0, result.extracted)
         assertEquals(1, result.skipped)
         assertEquals(0, result.failed)
+        assertTrue(result.reconciled >= 1)
         assertTrue(local.readBytes().contentEquals(byteArrayOf(1, 2, 3, 4)))
+    }
+
+    @Test
+    fun extractFromZipFile_reconcilesRestoredBlobsIntoJournal() {
+        val context = RuntimeEnvironment.getApplication()
+        val thumbnailsDir = CanonicalCachePathResolver.thumbnailsDirOrNull(context)
+        requireNotNull(thumbnailsDir)
+
+        val key = "c".repeat(64)
+        val zip = temp.newFile("backup-reconcile.zip")
+        ZipOutputStream(FileOutputStream(zip)).use { zos ->
+            val blob = ZipEntry("cache/thumbnails/$key.0")
+            blob.size = 3L
+            blob.time = 1_000L
+            zos.putNextEntry(blob)
+            zos.write(byteArrayOf(7, 8, 9))
+            zos.closeEntry()
+            // Stale journal must be ignored; reconciler rebuilds from the blob.
+            zos.putNextEntry(ZipEntry("cache/thumbnails/journal"))
+            zos.write("corrupt-journal".toByteArray())
+            zos.closeEntry()
+        }
+
+        val result = CacheArchiveImporter.extractFromZipFile(context, zip)
+        assertEquals(1, result.extracted)
+        assertTrue(result.reconciled >= 1)
+        DiskLruCache.open(
+            thumbnailsDir,
+            1,
+            1,
+            500L * 1024L * 1024L,
+        ).use { cache ->
+            assertNotNull(cache.get(key))
+        }
     }
 }
