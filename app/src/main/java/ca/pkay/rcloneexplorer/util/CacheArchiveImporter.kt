@@ -9,6 +9,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 
 /**
@@ -35,21 +36,62 @@ object CacheArchiveImporter {
 
     @JvmStatic
     fun extractFromZip(context: Context, uri: Uri): Result {
-        val inputStream = openUriInputStream(context.applicationContext, uri)
-            ?: return Result(0, 0, 0)
-        return extractFromZipStream(context, inputStream)
+        val app = context.applicationContext
+        // Prefer a real filesystem path when the URI resolves to one so ZipFile can read
+        // central-directory sizes for skip decisions. Otherwise stream with best-effort skip.
+        val localPath = uri.path
+        if (localPath != null && "file".equals(uri.scheme, ignoreCase = true)) {
+            val file = File(localPath)
+            if (file.isFile) {
+                return extractFromZipFile(app, file)
+            }
+        }
+        val inputStream = openUriInputStream(app, uri) ?: return Result(0, 0, 0)
+        return extractFromZipStream(app, inputStream)
     }
 
     @JvmStatic
     fun extractFromZipFile(context: Context, file: File): Result {
         return try {
-            file.inputStream().use { inputStream ->
-                extractFromZipStream(context, inputStream)
+            ZipFile(file).use { zipFile ->
+                extractFromZipFileHandle(context.applicationContext, zipFile)
             }
         } catch (t: IOException) {
             FLog.w(TAG, "Could not open import file", t)
             Result(0, 0, 0)
+        } catch (t: Throwable) {
+            FLog.w(TAG, "Cache import interrupted", t)
+            Result(0, 0, 0)
         }
+    }
+
+    private fun extractFromZipFileHandle(context: Context, zipFile: ZipFile): Result {
+        var extracted = 0
+        var skipped = 0
+        var failed = 0
+        val entries = zipFile.entries()
+        while (entries.hasMoreElements()) {
+            val entry = entries.nextElement()
+            if (entry.isDirectory) {
+                continue
+            }
+            when (
+                processEntry(
+                    context,
+                    entry.name,
+                    entry.size,
+                    entry.time,
+                    openStream = { zipFile.getInputStream(entry) },
+                    sharedZipInputStream = false,
+                )
+            ) {
+                Outcome.EXTRACTED -> extracted++
+                Outcome.SKIPPED -> skipped++
+                Outcome.FAILED -> failed++
+                Outcome.IGNORED -> {}
+            }
+        }
+        return Result(extracted, skipped, failed)
     }
 
     private fun extractFromZipStream(context: Context, inputStream: InputStream): Result {
@@ -62,7 +104,16 @@ object CacheArchiveImporter {
                 var entry: ZipEntry? = zis.nextEntry
                 while (entry != null) {
                     if (!entry.isDirectory) {
-                        when (processEntry(app, zis, entry)) {
+                        when (
+                            processEntry(
+                                app,
+                                entry.name,
+                                entry.size,
+                                entry.time,
+                                openStream = { zis },
+                                sharedZipInputStream = true,
+                            )
+                        ) {
                             Outcome.EXTRACTED -> extracted++
                             Outcome.SKIPPED -> skipped++
                             Outcome.FAILED -> failed++
@@ -108,64 +159,94 @@ object CacheArchiveImporter {
         }
     }
 
+    /**
+     * Skip when a usable local blob already exists and should not be replaced by the zip entry.
+     *
+     * [ZipInputStream] often reports [entrySize] as -1 (data descriptor). In that case, any
+     * non-empty local file that is at least as new as the zip entry is preserved.
+     */
     @JvmStatic
     fun shouldSkipExtraction(targetFile: File, entrySize: Long, entryTime: Long): Boolean {
-        if (entrySize < 0L) {
+        if (!targetFile.isFile || targetFile.length() <= 0L) {
             return false
         }
-        if (!targetFile.isFile) {
+        if (entrySize >= 0L && targetFile.length() != entrySize) {
             return false
         }
-        if (targetFile.length() != entrySize) {
+        if (entryTime > 0L && targetFile.lastModified() < entryTime) {
             return false
         }
-        return targetFile.lastModified() >= entryTime
+        return true
     }
 
-    private fun processEntry(context: Context, zis: ZipInputStream, entry: ZipEntry): Outcome {
-        val target = targetFileForEntry(context, entry.name) ?: run {
-            drainEntry(zis)
+    private fun processEntry(
+        context: Context,
+        entryName: String,
+        entrySize: Long,
+        entryTime: Long,
+        openStream: () -> InputStream,
+        /** True for ZipInputStream (shared); false for ZipFile entry streams (close after use). */
+        sharedZipInputStream: Boolean,
+    ): Outcome {
+        val target = targetFileForEntry(context, entryName) ?: run {
+            if (sharedZipInputStream) {
+                drainEntry(openStream())
+            }
             return Outcome.IGNORED
         }
-        if (shouldSkipExtraction(target, entry.size, entry.time)) {
-            drainEntry(zis)
+        if (shouldSkipExtraction(target, entrySize, entryTime)) {
+            if (sharedZipInputStream) {
+                drainEntry(openStream())
+            }
             return Outcome.SKIPPED
         }
         return try {
             val parent = target.parentFile
             if (parent != null && !parent.exists() && !parent.mkdirs()) {
                 FLog.w(TAG, "Failed to create cache parent dir: %s", parent.absolutePath)
-                drainEntry(zis)
+                if (sharedZipInputStream) {
+                    drainEntry(openStream())
+                }
                 return Outcome.FAILED
             }
-            FileOutputStream(target).use { fos ->
-                BufferedOutputStream(fos).use { out ->
-                    val buffer = ByteArray(COPY_BUFFER_BYTES)
-                    var read = zis.read(buffer)
-                    while (read >= 0) {
-                        if (read > 0) {
-                            out.write(buffer, 0, read)
+            val input = openStream()
+            try {
+                FileOutputStream(target).use { fos ->
+                    BufferedOutputStream(fos).use { out ->
+                        val buffer = ByteArray(COPY_BUFFER_BYTES)
+                        var read = input.read(buffer)
+                        while (read >= 0) {
+                            if (read > 0) {
+                                out.write(buffer, 0, read)
+                            }
+                            read = input.read(buffer)
                         }
-                        read = zis.read(buffer)
+                    }
+                }
+            } finally {
+                if (!sharedZipInputStream) {
+                    try {
+                        input.close()
+                    } catch (_: IOException) {
                     }
                 }
             }
-            if (entry.time > 0L) {
-                target.setLastModified(entry.time)
+            if (entryTime > 0L) {
+                target.setLastModified(entryTime)
             }
             Outcome.EXTRACTED
         } catch (t: IOException) {
-            FLog.w(TAG, "Failed to extract cache entry %s", entry.name, t)
+            FLog.w(TAG, "Failed to extract cache entry %s", entryName, t)
             Outcome.FAILED
         } catch (t: Throwable) {
-            FLog.w(TAG, "Failed to extract cache entry %s", entry.name, t)
+            FLog.w(TAG, "Failed to extract cache entry %s", entryName, t)
             Outcome.FAILED
         }
     }
 
-    private fun drainEntry(zis: ZipInputStream) {
+    private fun drainEntry(input: InputStream) {
         val buffer = ByteArray(COPY_BUFFER_BYTES)
-        while (zis.read(buffer) >= 0) {
+        while (input.read(buffer) >= 0) {
             // consume remainder of zip entry
         }
     }

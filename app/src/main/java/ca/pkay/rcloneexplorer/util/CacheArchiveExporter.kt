@@ -78,7 +78,18 @@ object CacheArchiveExporter {
 
     private fun writeZipEntry(zos: ZipOutputStream, file: File, entryName: String) {
         try {
-            zos.putNextEntry(ZipEntry(entryName))
+            val entry = ZipEntry(entryName)
+            // Record size/mtime so import can skip existing equal-or-newer local blobs.
+            // ZipFile reads these from the central directory; ZipInputStream may still report -1.
+            val length = file.length()
+            if (length >= 0L) {
+                entry.size = length
+            }
+            val modified = file.lastModified()
+            if (modified > 0L) {
+                entry.time = modified
+            }
+            zos.putNextEntry(entry)
             file.inputStream().use { input ->
                 val buffer = ByteArray(COPY_BUFFER_BYTES)
                 var read = input.read(buffer)
