@@ -27,6 +27,9 @@ jobs:
       id: go
     - name: Setup Android SDK/NDK
       uses: android-actions/setup-android@v3
+      with:
+        # Legacy `tools` is gone from the SDK repo; the action default still requests it and fails.
+        packages: 'platform-tools'
     - name: Install NDK from gradle.properties
       run: |
         NDK_VERSION="$(grep -E "^de\.felixnuesse\.extract\.ndkVersion=" gradle.properties | cut -d'=' -f2)"
