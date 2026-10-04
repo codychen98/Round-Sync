@@ -22,7 +22,19 @@ object ThumbnailDiskCacheEvictor {
     private const val TAG = "ThumbDiskEvictor"
     private const val DISK_CACHE_VERSION = 1
     private const val DISK_CACHE_VALUE_COUNT = 1
-    private const val DISK_CACHE_SIZE_BYTES = 500L * 1024L * 1024L
+
+    /**
+     * Opens the shared thumbnails cache with the same maxSize Glide uses
+     * ([ThumbnailDiskCacheSize.forDir]); a mismatched maxSize would make this instance trim
+     * entries Glide still expects to find.
+     */
+    private fun openCache(cacheDir: java.io.File): DiskLruCache =
+        DiskLruCache.open(
+            cacheDir,
+            DISK_CACHE_VERSION,
+            DISK_CACHE_VALUE_COUNT,
+            ThumbnailDiskCacheSize.forDir(cacheDir),
+        )
 
     fun store(context: Context, key: Key, jpegBytes: ByteArray) {
         if (jpegBytes.isEmpty()) {
@@ -81,12 +93,7 @@ object ThumbnailDiskCacheEvictor {
         val safeKey = SafeKeyGenerator().getSafeKey(key)
         var cache: DiskLruCache? = null
         try {
-            cache = DiskLruCache.open(
-                cacheDir,
-                DISK_CACHE_VERSION,
-                DISK_CACHE_VALUE_COUNT,
-                DISK_CACHE_SIZE_BYTES,
-            )
+            cache = openCache(cacheDir)
             val editor = cache.edit(safeKey) ?: return
             FileOutputStream(editor.getFile(0)).use { out ->
                 out.write(jpegBytes)
@@ -108,12 +115,7 @@ object ThumbnailDiskCacheEvictor {
         val safeKey = SafeKeyGenerator().getSafeKey(key)
         var cache: DiskLruCache? = null
         try {
-            cache = DiskLruCache.open(
-                cacheDir,
-                DISK_CACHE_VERSION,
-                DISK_CACHE_VALUE_COUNT,
-                DISK_CACHE_SIZE_BYTES,
-            )
+            cache = openCache(cacheDir)
             cache.remove(safeKey)
         } catch (t: Throwable) {
             FLog.w(TAG, "Failed to evict disk cache entry for key=%s", safeKey, t)
@@ -131,12 +133,7 @@ object ThumbnailDiskCacheEvictor {
         val cacheDir = CanonicalCachePathResolver.thumbnailsDirOrNull(context.applicationContext) ?: return false
         var cache: DiskLruCache? = null
         return try {
-            cache = DiskLruCache.open(
-                cacheDir,
-                DISK_CACHE_VERSION,
-                DISK_CACHE_VALUE_COUNT,
-                DISK_CACHE_SIZE_BYTES,
-            )
+            cache = openCache(cacheDir)
             isCachedIn(cache, cacheKeyLabel)
         } catch (t: Throwable) {
             FLog.w(TAG, "Failed to probe disk cache for key=%s", cacheKeyLabel, t)
@@ -165,12 +162,7 @@ object ThumbnailDiskCacheEvictor {
         val cacheDir = CanonicalCachePathResolver.thumbnailsDirOrNull(context.applicationContext) ?: return
         var cache: DiskLruCache? = null
         try {
-            cache = DiskLruCache.open(
-                cacheDir,
-                DISK_CACHE_VERSION,
-                DISK_CACHE_VALUE_COUNT,
-                DISK_CACHE_SIZE_BYTES,
-            )
+            cache = openCache(cacheDir)
             action.run(cache)
         } catch (t: Throwable) {
             FLog.w(TAG, "Failed to open disk cache for batch probe", t)

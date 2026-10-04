@@ -21,16 +21,18 @@ public class RoundSyncGlideModule extends AppGlideModule {
 
     @Override
     public void applyOptions(@NonNull Context context, @NonNull GlideBuilder builder) {
-        int diskCacheSizeBytes = 500 * 1024 * 1024;
         java.io.File thumbnailsDir =
                 CanonicalCachePathResolver.INSTANCE.thumbnailsDirOrNull(context.getApplicationContext());
         if (thumbnailsDir != null) {
+            // Must match ThumbnailDiskCacheEvictor's maxSize; both read the memoized value.
+            long diskCacheSizeBytes = ThumbnailDiskCacheSize.forDir(thumbnailsDir);
             builder.setDiskCache(new DiskLruCacheFactory(
                     () -> thumbnailsDir,
                     diskCacheSizeBytes
             ));
         } else {
-            builder.setDiskCache(new InternalCacheDiskCacheFactory(context, diskCacheSizeBytes));
+            builder.setDiskCache(new InternalCacheDiskCacheFactory(
+                    context, ThumbnailDiskCacheSize.FLOOR_BYTES));
         }
     }
 
