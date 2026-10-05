@@ -41,12 +41,14 @@ object ThumbnailPrefetchExecutor {
         val directoryPath: String,
         val loaded: Int,
         val total: Int,
+        val failed: Int = 0,
     )
 
     data class FolderPrefetchOutcome(
         val loaded: Int,
         val total: Int,
         val stoppedEarly: Boolean,
+        val failed: Int = 0,
     )
 
     @JvmStatic
@@ -106,7 +108,7 @@ object ThumbnailPrefetchExecutor {
         val auth = randomAuthToken()
         val port = allocatePort(THUMB_PORT_PREFERRED)
         val hidden = ThumbnailPrefetchTargets.hiddenServePath(auth, remote.name)
-        var loaded = cachedCount
+        var tally = PrefetchTally(loaded = cachedCount)
         var stoppedEarly = false
         try {
             BackgroundMediaPrepWorkTracker.incrementThumbnailPrefetchWork()
@@ -114,12 +116,12 @@ object ThumbnailPrefetchExecutor {
             waitWhileExclusiveUserReload(app, isStopped)
             if (isStopped()) {
                 stoppedEarly = true
-                return FolderPrefetchOutcome(loaded = loaded, total = targets.size, stoppedEarly = true)
+                return outcomeOf(tally, targets.size, stoppedEarly = true)
             }
             waitWhileExplorerForegroundServeLease(app, isStopped)
             if (isStopped()) {
                 stoppedEarly = true
-                return FolderPrefetchOutcome(loaded = loaded, total = targets.size, stoppedEarly = true)
+                return outcomeOf(tally, targets.size, stoppedEarly = true)
             }
             serveLeaseId = ThumbnailServerManager.getInstance().acquireServeLease(app, remote, port, auth)
             if (serveLeaseId == 0) {
@@ -128,7 +130,7 @@ object ThumbnailPrefetchExecutor {
                     "MediaPrepDbg",
                     "event=prefetchLeaseFailed path=$directoryPath port=$port",
                 )
-                return FolderPrefetchOutcome(loaded = loaded, total = targets.size, stoppedEarly = false)
+                return outcomeOf(tally, targets.size, stoppedEarly = false)
             }
             ThumbnailServerService.startServing(app, remote, port, auth, directoryPath, true)
             if (!waitForThumbnailServerReady()) {
@@ -138,17 +140,9 @@ object ThumbnailPrefetchExecutor {
                     "MediaPrepDbg",
                     "event=prefetchServerTimeout path=$directoryPath port=$port",
                 )
-                return FolderPrefetchOutcome(loaded = loaded, total = targets.size, stoppedEarly = false)
+                return outcomeOf(tally, targets.size, stoppedEarly = false)
             }
-            onProgress(FolderPrefetchProgress(directoryPath, loaded, targets.size))
-            ThumbnailServerService.updateProgress(
-                app,
-                directoryPath,
-                loaded,
-                targets.size,
-                0,
-                0,
-            )
+            publishProgress(app, directoryPath, tally, targets.size, onProgress)
 
             val imageOpts = RequestOptions()
                 .centerCrop()
@@ -163,40 +157,34 @@ object ThumbnailPrefetchExecutor {
                 val url = ThumbnailPrefetchTargets.buildThumbnailHttpUrl(hidden, port, item)
                 val mime = item.mimeType ?: ""
                 val isVideo = mime.startsWith("video/")
-                try {
+                tally = try {
                     val req = if (isVideo) {
                         Glide.with(app).asDrawable().load(VideoThumbnailUrl(url)).apply(imageOpts)
                     } else {
                         Glide.with(app).asDrawable().load(HttpServeThumbnailGlideUrl(url)).apply(imageOpts)
                     }
                     req.submit().get(PREFETCH_ITEM_TIMEOUT_S, TimeUnit.SECONDS)
+                    tally.plusSuccess()
                 } catch (_: TimeoutException) {
                     FLog.w(TAG, "Prefetch timeout: ${item.name}")
+                    tally.plusFailure()
                 } catch (_: ExecutionException) {
                     FLog.w(TAG, "Prefetch failed: ${item.name}")
+                    tally.plusFailure()
                 } catch (e: InterruptedException) {
                     Thread.currentThread().interrupt()
                     FLog.w(TAG, "Prefetch interrupted", e)
                     stoppedEarly = true
                     break
                 }
-                loaded++
-                onProgress(FolderPrefetchProgress(directoryPath, loaded, targets.size))
-                ThumbnailServerService.updateProgress(
-                    app,
-                    directoryPath,
-                    loaded,
-                    targets.size,
-                    0,
-                    0,
-                )
+                publishProgress(app, directoryPath, tally, targets.size, onProgress)
             }
-            val outcome = FolderPrefetchOutcome(loaded = loaded, total = targets.size, stoppedEarly = stoppedEarly)
+            val outcome = outcomeOf(tally, targets.size, stoppedEarly)
             SyncLog.info(
                 app,
                 "MediaPrepDbg",
                 "event=prefetchFolderDone path=$directoryPath loaded=${outcome.loaded}/${outcome.total} " +
-                    "stoppedEarly=${outcome.stoppedEarly}",
+                    "failed=${outcome.failed} stoppedEarly=${outcome.stoppedEarly}",
             )
             return outcome
         } finally {
@@ -207,6 +195,26 @@ object ThumbnailPrefetchExecutor {
                 ThumbnailServerManager.getInstance().releaseServeLease(serveLeaseId)
             }
         }
+    }
+
+    @JvmStatic
+    fun outcomeOf(tally: PrefetchTally, total: Int, stoppedEarly: Boolean): FolderPrefetchOutcome =
+        FolderPrefetchOutcome(
+            loaded = tally.loaded,
+            total = total,
+            stoppedEarly = stoppedEarly,
+            failed = tally.failed,
+        )
+
+    private suspend fun publishProgress(
+        app: Context,
+        directoryPath: String,
+        tally: PrefetchTally,
+        total: Int,
+        onProgress: suspend (FolderPrefetchProgress) -> Unit,
+    ) {
+        onProgress(FolderPrefetchProgress(directoryPath, tally.loaded, total, tally.failed))
+        ThumbnailServerService.updateProgress(app, directoryPath, tally.loaded, total, 0, 0)
     }
 
     private suspend fun waitWhileExplorerForegroundServeLease(

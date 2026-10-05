@@ -123,7 +123,7 @@ class MediaFolderPolicyThumbnailPrefetchWorker(
                 TAG,
                 "event=policyPrefetchFolderDone index=$folderIndex/${policyFolders.size} " +
                     "path=${folder.explorerDirectoryPath} loaded=${outcome.loaded}/${outcome.total} " +
-                    "stoppedEarly=${outcome.stoppedEarly}",
+                    "failed=${outcome.failed} stoppedEarly=${outcome.stoppedEarly}",
             )
         }
         if (folderJobsStarted == 0) {
