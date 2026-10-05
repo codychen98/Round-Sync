@@ -7,6 +7,7 @@ import androidx.annotation.Nullable;
 
 import com.bumptech.glide.Priority;
 import com.bumptech.glide.load.DataSource;
+import com.bumptech.glide.load.HttpException;
 import com.bumptech.glide.load.data.DataFetcher;
 
 import java.io.ByteArrayInputStream;
@@ -63,28 +64,36 @@ public class HttpServeThumbnailFetcher implements DataFetcher<InputStream> {
         }
         Call newCall = OkHttpMediaDataSource.getClient().newCall(builder.build());
         call = newCall;
+        // All failures below are fetch-stage and surface as HttpException, like Glide's own
+        // HttpUrlFetcher; RetryRequestListener treats any other root cause as a decode failure.
         try (Response response = newCall.execute()) {
             if (!response.isSuccessful()) {
-                callback.onLoadFailed(new IOException(
-                        "HTTP " + response.code() + " for thumbnail " + stablePath()));
+                callback.onLoadFailed(new HttpException(
+                        "HTTP " + response.code() + " for thumbnail " + stablePath(), response.code()));
                 return;
             }
             ResponseBody body = response.body();
             if (body == null) {
-                callback.onLoadFailed(new IOException("Empty body for thumbnail " + stablePath()));
+                callback.onLoadFailed(new HttpException(
+                        "Empty body for thumbnail " + stablePath(), HttpException.UNKNOWN));
                 return;
             }
             byte[] original = readFully(body);
             byte[] bounded = ThumbnailImageTranscoder.transcode(original);
             if (bounded == null) {
                 logRejectedOnce(response.header("Content-Type"), original);
-                callback.onLoadFailed(new IOException(
-                        "Unsupported image payload for thumbnail " + stablePath()));
+                callback.onLoadFailed(new HttpException(
+                        "Unsupported image payload for thumbnail " + stablePath(), HttpException.UNKNOWN));
                 return;
             }
             callback.onDataReady(new ByteArrayInputStream(bounded));
-        } catch (IOException e) {
+        } catch (HttpException e) {
             callback.onLoadFailed(e);
+        } catch (IOException e) {
+            // Keep the cause text (e.g. "Canceled") visible: GlideException only reports leaf messages.
+            callback.onLoadFailed(new HttpException(
+                    "Failed to fetch thumbnail " + stablePath() + ": " + e.getMessage(),
+                    HttpException.UNKNOWN, e));
         } finally {
             call = null;
         }
