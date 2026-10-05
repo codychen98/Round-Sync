@@ -8,7 +8,6 @@ import androidx.annotation.Nullable;
 
 import ca.pkay.rcloneexplorer.Items.FileItem;
 
-import com.bumptech.glide.disklrucache.DiskLruCache;
 
 public final class ThumbnailCacheIdentity {
 
@@ -96,11 +95,11 @@ public final class ThumbnailCacheIdentity {
     }
 
     /**
-     * Batch disk probe variant — uses an already-open {@link DiskLruCache} (explorer seed / prefetch).
+     * Batch disk probe variant — uses an already-open {@link ThumbnailDiskCache} (explorer seed / prefetch).
      */
     @Nullable
     public static String prefetchDiskCacheKeyLabel(
-            @NonNull DiskLruCache cache,
+            @NonNull ThumbnailDiskCache cache,
             @NonNull String remoteName,
             @NonNull String remoteFilePath,
             @Nullable String mimeType) {
@@ -160,7 +159,7 @@ public final class ThumbnailCacheIdentity {
      */
     @NonNull
     public static String resolveVideoDiskCacheKeyIn(
-            @NonNull DiskLruCache cache,
+            @NonNull ThumbnailDiskCache cache,
             @NonNull String remoteName,
             @NonNull String remoteFilePath) {
         String stableNormalized = ThumbnailStablePath.normalize(
@@ -203,7 +202,7 @@ public final class ThumbnailCacheIdentity {
 
     @NonNull
     static String resolveVideoDiskCacheKeyFromLegacyPathIn(
-            @NonNull DiskLruCache cache,
+            @NonNull ThumbnailDiskCache cache,
             @NonNull String legacyStablePath) {
         String normalized = ThumbnailStablePath.normalize(legacyStablePath);
         int reloadEpoch = ThumbnailReloadEpoch.get(normalized);

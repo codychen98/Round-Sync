@@ -62,8 +62,8 @@ public class RetryRequestListener implements RequestListener<Drawable> {
     private static final int MAX_RETRIES = 3;
     private static final long[] RETRY_DELAYS_MS = {500L, 1000L, 2000L};
     private static final Handler HANDLER = new Handler(Looper.getMainLooper());
-    // Shared executor for one-shot disk-cache evictions; DiskLruCache.open must not run on
-    // the main thread. The first retry delay (>=500ms) orders eviction before the retry.
+    // Shared executor for one-shot disk-cache evictions; the shared disk cache must not be
+    // touched on the main thread. The first retry delay (>=500ms) orders eviction before the retry.
     private static final ExecutorService CACHE_EVICT_EXECUTOR = Executors.newSingleThreadExecutor();
 
     private final ThumbnailServerManager serverManager;

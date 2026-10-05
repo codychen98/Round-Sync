@@ -2,6 +2,7 @@ package ca.pkay.rcloneexplorer.Glide
 
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -9,6 +10,11 @@ import org.robolectric.RuntimeEnvironment
 
 @RunWith(RobolectricTestRunner::class)
 class ThumbnailDiskCacheEvictorStoreTest {
+
+    @After
+    fun tearDown() {
+        GlideDiskCacheHolder.resetForTests()
+    }
 
     @Test
     fun storeVideoReloadJpeg_usesSingleCanonicalKey_notReloadEpochKey() {

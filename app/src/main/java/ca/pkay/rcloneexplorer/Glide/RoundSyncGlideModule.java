@@ -8,7 +8,6 @@ import com.bumptech.glide.Glide;
 import com.bumptech.glide.GlideBuilder;
 import com.bumptech.glide.Registry;
 import com.bumptech.glide.annotation.GlideModule;
-import com.bumptech.glide.load.engine.cache.DiskLruCacheFactory;
 import com.bumptech.glide.load.engine.cache.InternalCacheDiskCacheFactory;
 import com.bumptech.glide.load.model.GlideUrl;
 import com.bumptech.glide.module.AppGlideModule;
@@ -25,12 +24,8 @@ public class RoundSyncGlideModule extends AppGlideModule {
         java.io.File thumbnailsDir =
                 CanonicalCachePathResolver.INSTANCE.thumbnailsDirOrNull(context.getApplicationContext());
         if (thumbnailsDir != null) {
-            // Must match ThumbnailDiskCacheEvictor's maxSize; both read the memoized value.
-            long diskCacheSizeBytes = ThumbnailDiskCacheSize.forDir(thumbnailsDir);
-            builder.setDiskCache(new DiskLruCacheFactory(
-                    () -> thumbnailsDir,
-                    diskCacheSizeBytes
-            ));
+            // Single DiskLruCache instance shared with ThumbnailDiskCacheEvictor (see holder).
+            builder.setDiskCache(GlideDiskCacheHolder.factory(thumbnailsDir));
         } else {
             builder.setDiskCache(new InternalCacheDiskCacheFactory(
                     context, ThumbnailDiskCacheSize.FLOOR_BYTES));
