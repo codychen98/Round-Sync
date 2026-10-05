@@ -49,6 +49,7 @@ object ThumbnailPrefetchExecutor {
         val total: Int,
         val stoppedEarly: Boolean,
         val failed: Int = 0,
+        val misses: Int = 0,
     )
 
     @JvmStatic
@@ -116,12 +117,12 @@ object ThumbnailPrefetchExecutor {
             waitWhileExclusiveUserReload(app, isStopped)
             if (isStopped()) {
                 stoppedEarly = true
-                return outcomeOf(tally, targets.size, stoppedEarly = true)
+                return outcomeOf(tally, targets.size, stoppedEarly = true, misses = fetchTargets.size)
             }
             waitWhileExplorerForegroundServeLease(app, isStopped)
             if (isStopped()) {
                 stoppedEarly = true
-                return outcomeOf(tally, targets.size, stoppedEarly = true)
+                return outcomeOf(tally, targets.size, stoppedEarly = true, misses = fetchTargets.size)
             }
             serveLeaseId = ThumbnailServerManager.getInstance().acquireServeLease(app, remote, port, auth)
             if (serveLeaseId == 0) {
@@ -130,7 +131,7 @@ object ThumbnailPrefetchExecutor {
                     "MediaPrepDbg",
                     "event=prefetchLeaseFailed path=$directoryPath port=$port",
                 )
-                return outcomeOf(tally, targets.size, stoppedEarly = false)
+                return outcomeOf(tally, targets.size, stoppedEarly = false, misses = fetchTargets.size)
             }
             ThumbnailServerService.startServing(app, remote, port, auth, directoryPath, true)
             if (!waitForThumbnailServerReady()) {
@@ -140,7 +141,7 @@ object ThumbnailPrefetchExecutor {
                     "MediaPrepDbg",
                     "event=prefetchServerTimeout path=$directoryPath port=$port",
                 )
-                return outcomeOf(tally, targets.size, stoppedEarly = false)
+                return outcomeOf(tally, targets.size, stoppedEarly = false, misses = fetchTargets.size)
             }
             publishProgress(app, directoryPath, tally, targets.size, onProgress)
 
@@ -179,7 +180,7 @@ object ThumbnailPrefetchExecutor {
                 }
                 publishProgress(app, directoryPath, tally, targets.size, onProgress)
             }
-            val outcome = outcomeOf(tally, targets.size, stoppedEarly)
+            val outcome = outcomeOf(tally, targets.size, stoppedEarly, misses = fetchTargets.size)
             SyncLog.info(
                 app,
                 "MediaPrepDbg",
@@ -198,12 +199,18 @@ object ThumbnailPrefetchExecutor {
     }
 
     @JvmStatic
-    fun outcomeOf(tally: PrefetchTally, total: Int, stoppedEarly: Boolean): FolderPrefetchOutcome =
+    fun outcomeOf(
+        tally: PrefetchTally,
+        total: Int,
+        stoppedEarly: Boolean,
+        misses: Int = 0,
+    ): FolderPrefetchOutcome =
         FolderPrefetchOutcome(
             loaded = tally.loaded,
             total = total,
             stoppedEarly = stoppedEarly,
             failed = tally.failed,
+            misses = misses,
         )
 
     private suspend fun publishProgress(

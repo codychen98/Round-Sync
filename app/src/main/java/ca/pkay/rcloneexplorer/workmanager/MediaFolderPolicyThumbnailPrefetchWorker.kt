@@ -19,6 +19,7 @@ import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Rclone
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerService
 import ca.pkay.rcloneexplorer.util.MediaFolderPolicyPrefetchFolders
+import ca.pkay.rcloneexplorer.util.MediaPolicyPrefetchSettled
 import ca.pkay.rcloneexplorer.util.NotificationUtils
 import ca.pkay.rcloneexplorer.util.SyncLog
 import ca.pkay.rcloneexplorer.util.ThumbnailPrefetchExecutor
@@ -64,13 +65,24 @@ class MediaFolderPolicyThumbnailPrefetchWorker(
 
         var folderIndex = 0
         var folderJobsStarted = 0
+        var unverified = false
+        var stopped = false
+        val folderOutcomes = ArrayList<ThumbnailPrefetchExecutor.FolderPrefetchOutcome>(policyFolders.size)
         for (folder in policyFolders) {
             if (isStopped) {
-                return@withContext Result.success()
+                stopped = true
+                break
             }
-            val remote = rclone.getRemoteItemFromName(folder.remoteName) ?: continue
+            val remote = rclone.getRemoteItemFromName(folder.remoteName)
+            if (remote == null) {
+                unverified = true
+                continue
+            }
             val listing = rclone.getDirectoryContent(remote, folder.explorerDirectoryPath, startAtRoot)
-                ?: continue
+            if (listing == null) {
+                unverified = true
+                continue
+            }
             val targets = ThumbnailPrefetchTargets.filterForHttpThumbnailPrefetch(
                 listing,
                 remote,
@@ -125,6 +137,11 @@ class MediaFolderPolicyThumbnailPrefetchWorker(
                     "path=${folder.explorerDirectoryPath} loaded=${outcome.loaded}/${outcome.total} " +
                     "failed=${outcome.failed} stoppedEarly=${outcome.stoppedEarly}",
             )
+            folderOutcomes.add(outcome)
+            if (outcome.stoppedEarly) {
+                stopped = true
+                break
+            }
         }
         if (folderJobsStarted == 0) {
             SyncLog.info(app, TAG, "event=policyPrefetchNoTargets policyRows=${policyFolders.size}")
@@ -135,6 +152,11 @@ class MediaFolderPolicyThumbnailPrefetchWorker(
                 "event=policyPrefetchComplete foldersPrefetched=$folderJobsStarted " +
                     "policyRows=${policyFolders.size}",
             )
+        }
+        if (MediaPolicyPrefetchSettled.shouldMarkSettled(stopped || isStopped, unverified, folderOutcomes)) {
+            val hash = MediaPolicyPrefetchSettled.policyHash(policyFolders)
+            MediaPolicyPrefetchSettled.markSettled(prefs, System.currentTimeMillis(), hash)
+            SyncLog.info(app, TAG, "event=policyPrefetchSettled hash=${hash.take(12)} folders=${policyFolders.size}")
         }
         Result.success()
     }
@@ -219,6 +241,7 @@ class MediaFolderPolicyThumbnailPrefetchWorker(
         fun enqueueAfterImport(context: Context) {
             val app = context.applicationContext
             val prefs = PreferenceManager.getDefaultSharedPreferences(app)
+            MediaPolicyPrefetchSettled.clear(prefs)
             if (!ThumbnailPrefetchTargets.readShowThumbnails(prefs, app)) {
                 return
             }
@@ -235,7 +258,26 @@ class MediaFolderPolicyThumbnailPrefetchWorker(
             if (!ThumbnailPrefetchTargets.readShowThumbnails(prefs, app)) {
                 return
             }
-            if (MediaFolderPolicyPrefetchFolders.enumerate(rclone.remotes, prefs).isEmpty()) {
+            val folders = MediaFolderPolicyPrefetchFolders.enumerate(rclone.remotes, prefs)
+            if (folders.isEmpty()) {
+                return
+            }
+            val policyHash = MediaPolicyPrefetchSettled.policyHash(folders)
+            val settledAt = prefs.getLong(MediaPolicyPrefetchSettled.PREF_SETTLED_AT, 0L)
+            val storedHash = prefs.getString(MediaPolicyPrefetchSettled.PREF_SETTLED_HASH, "") ?: ""
+            if (!MediaPolicyPrefetchSettled.shouldEnqueueOnStart(
+                    settledAt,
+                    System.currentTimeMillis(),
+                    policyHash,
+                    storedHash,
+                )
+            ) {
+                SyncLog.info(
+                    app,
+                    TAG,
+                    "event=policyPrefetchSkipSettled ageMs=${System.currentTimeMillis() - settledAt} " +
+                        "hash=${policyHash.take(12)}",
+                )
                 return
             }
             enqueue(app, ExistingWorkPolicy.KEEP)
