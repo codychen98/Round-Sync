@@ -18,6 +18,7 @@ object ThumbnailDiskCacheEvictor {
 
     private const val TAG = "ThumbDiskEvictor"
 
+    @JvmStatic
     fun store(context: Context, key: Key, jpegBytes: ByteArray) {
         if (jpegBytes.isEmpty()) {
             return
