@@ -28,9 +28,15 @@ public final class ThumbnailCacheIdentity {
         return fileDataCacheKey(item.getRemote().getName(), item.getPath());
     }
 
+    /**
+     * Image disk-cache label; must equal {@link HttpServeThumbnailGlideUrl#getCacheKey()} for the
+     * real serve URL, which hashes the percent-encoded {@code URL.getPath()}. Hashing the decoded
+     * path only agreed for names without spaces / braces / non-ASCII and made every such file a
+     * probe miss.
+     */
     @NonNull
     public static String fileDataCacheKey(@NonNull String remoteName, @NonNull String remoteFilePath) {
-        return ReadableCacheKey.fromStablePath(stableServePath(remoteName, remoteFilePath), FILE_NAMESPACE);
+        return ReadableCacheKey.fromStablePath(legacyEncodedServePath(remoteName, remoteFilePath), FILE_NAMESPACE);
     }
 
     @NonNull
@@ -38,11 +44,10 @@ public final class ThumbnailCacheIdentity {
         return videoDataCacheKey(item.getRemote().getName(), item.getPath());
     }
 
+    /** Canonical (epoch 0) video label; same encoded identity as {@link #videoDiskCacheKeyLabel}. */
     @NonNull
     public static String videoDataCacheKey(@NonNull String remoteName, @NonNull String remoteFilePath) {
-        return ReadableCacheKey.fromStablePath(
-                stableServePath(remoteName, remoteFilePath) + VIDEO_VERSION_TOKEN,
-                VIDEO_NAMESPACE);
+        return videoDiskCacheKeyLabel(remoteName, remoteFilePath, 0);
     }
 
     @NonNull
@@ -50,9 +55,7 @@ public final class ThumbnailCacheIdentity {
             @NonNull String remoteName,
             @NonNull String remoteFilePath,
             int reloadEpoch) {
-        return ReadableCacheKey.fromStablePath(
-                stableServePath(remoteName, remoteFilePath) + "|reload" + reloadEpoch,
-                VIDEO_RELOAD_NAMESPACE);
+        return videoDiskCacheKeyLabel(remoteName, remoteFilePath, reloadEpoch);
     }
 
     @NonNull
