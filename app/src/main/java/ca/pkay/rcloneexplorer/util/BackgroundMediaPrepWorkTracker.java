@@ -59,6 +59,13 @@ public final class BackgroundMediaPrepWorkTracker {
         }
     }
 
+    /** True while a thumbnail prefetch loop holds {@link #incrementThumbnailPrefetchWork()}. */
+    public static boolean isThumbnailPrefetchActive() {
+        synchronized (LOCK) {
+            return thumbnailPrefetchWorkRefCount > 0;
+        }
+    }
+
     public static void setCacheWorkInProgress(boolean inProgress) {
         synchronized (LOCK) {
             cacheWorkInProgress = inProgress;

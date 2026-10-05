@@ -26,12 +26,15 @@ public class BackgroundMediaPrepWorkTrackerTest {
 
     @Test
     public void prefetchRefCount_balanced() {
+        Assert.assertFalse(BackgroundMediaPrepWorkTracker.isThumbnailPrefetchActive());
         BackgroundMediaPrepWorkTracker.incrementThumbnailPrefetchWork();
         BackgroundMediaPrepWorkTracker.incrementThumbnailPrefetchWork();
         Assert.assertTrue(BackgroundMediaPrepWorkTracker.hasActiveWork());
+        Assert.assertTrue(BackgroundMediaPrepWorkTracker.isThumbnailPrefetchActive());
         BackgroundMediaPrepWorkTracker.decrementThumbnailPrefetchWork();
         BackgroundMediaPrepWorkTracker.decrementThumbnailPrefetchWork();
         Assert.assertFalse(BackgroundMediaPrepWorkTracker.hasActiveWork());
+        Assert.assertFalse(BackgroundMediaPrepWorkTracker.isThumbnailPrefetchActive());
     }
 
     @Test

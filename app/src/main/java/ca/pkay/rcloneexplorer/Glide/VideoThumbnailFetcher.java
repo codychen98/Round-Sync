@@ -13,6 +13,7 @@ import androidx.annotation.Nullable;
 import com.bumptech.glide.Priority;
 import com.bumptech.glide.load.DataSource;
 import com.bumptech.glide.load.data.DataFetcher;
+import com.bumptech.glide.signature.ObjectKey;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -26,6 +27,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
+import ca.pkay.rcloneexplorer.util.BackgroundMediaPrepWorkTracker;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.SyncLog;
 
@@ -67,8 +69,8 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
     /**
      * Structured pipeline log for Menu → Logs exports. {@code phase} values include:
      * {@code fetcherStart}, {@code mmrEnd}, {@code exoPrepareStart}, {@code exoPrepareFail},
-     * {@code exoPrepareTimeout}, {@code exoSkip}, {@code exoEnd}, {@code decodeOk},
-     * {@code fetcherFail}, {@code fetcherEarlyCancel}.
+     * {@code exoPrepareTimeout}, {@code exoSkip}, {@code exoEnd}, {@code fastNoFrameCached},
+     * {@code decodeOk}, {@code fetcherFail}, {@code fetcherEarlyCancel}.
      */
     static void logThumbPipe(@Nullable Context ctx, @NonNull String phase, @NonNull String attrs) {
         if (ctx == null) {
@@ -188,10 +190,11 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
                     return;
                 }
 
+                long mmrMs = -1L;
                 if (frame == null) {
                     long tMmr = SystemClock.elapsedRealtime();
                     frame = extractNonBlackFrame(mmr);
-                    long mmrMs = SystemClock.elapsedRealtime() - tMmr;
+                    mmrMs = SystemClock.elapsedRealtime() - tMmr;
                     logThumbPipe(appContext, "mmrEnd",
                             "basename=" + base + " result=" + (frame != null ? "frame" : "noFrame")
                                     + " cancelled=" + cancelled + " mmrMs=" + mmrMs + " " + mgrDebugSuffix());
@@ -228,6 +231,27 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
                                         + " cancelled=" + cancelled
                                         + " sparseMs=" + (SystemClock.elapsedRealtime() - tSparse)
                                         + " " + mgrDebugSuffix());
+                    }
+                    if (!cancelled && frame == null && !exoAttempted
+                            && VideoThumbnailFastNoFrame.shouldSkipExoSeeks(
+                                    true,
+                                    mmrMs,
+                                    BackgroundMediaPrepWorkTracker.isThumbnailPrefetchActive(),
+                                    preferExo)) {
+                        rememberFastNoFrame(base, mmrMs);
+                        logThumbPipe(appContext, "exoSkip",
+                                "basename=" + base + " reason=fastNoFrame mmrMs=" + mmrMs
+                                        + " " + mgrDebugSuffix());
+                        logThumbnailSyncFailureOnce(
+                                "event=videoFetchFail reason=fastNoFrame mmrMs=" + mmrMs
+                                        + " "
+                                        + debugSuffix
+                                        + " "
+                                        + mgrDebugSuffix()
+                                        + " url=");
+                        callback.onLoadFailed(
+                                new RuntimeException("No frame extracted from " + url));
+                        return;
                     }
                     if (!cancelled && frame == null && !exoAttempted) {
                         long tExo = SystemClock.elapsedRealtime();
@@ -297,6 +321,20 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
                 activeFetchers.remove(VideoThumbnailFetcher.this);
             }
         });
+    }
+
+    /**
+     * Writes a decodable JPEG under the video disk key Glide and the prefetch probe already share,
+     * then the caller fails this load so the folder still counts as a miss that was attempted.
+     */
+    private void rememberFastNoFrame(@NonNull String base, long mmrMs) {
+        String legacy = ThumbnailStablePath.legacyPathFromServeUrl(url);
+        String label = ThumbnailCacheIdentity.resolveVideoDiskCacheKeyLabelFromLegacyPath(
+                appContext, legacy);
+        ThumbnailDiskCacheEvictor.store(
+                appContext, new ObjectKey(label), VideoThumbnailFastNoFrame.markerJpeg());
+        logThumbPipe(appContext, "fastNoFrameCached",
+                "basename=" + base + " mmrMs=" + mmrMs + " " + mgrDebugSuffix());
     }
 
     private void logThumbnailSyncFailureOnce(String messagePrefix) {
