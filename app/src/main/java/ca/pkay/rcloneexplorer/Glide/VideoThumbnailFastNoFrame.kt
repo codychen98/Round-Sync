@@ -28,11 +28,18 @@ object VideoThumbnailFastNoFrame {
         return mmrMs in 0 until FAST_NO_FRAME_MAX_MS
     }
 
+    /**
+     * 1x1 JPEG. Declared before [MARKER] because object initializers run in source order,
+     * and a later const is not yet available to an earlier property.
+     */
+    private const val MARKER_HEX =
+        "ffd8ffe000104a46494600010100000100010000ffdb004300281c1e231e19282321232d2b28303c64413c37373c7b585d4964918099968f808c8aa0b4e6c3a0aadaad8a8cc8ffcbdaeef5ffffff9bc1fffffffaffe6fdfff8ffdb0043012b2d2d3c353c76414176f8a58ca5f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8ffc00011080001000103012200021101031101ffc4001500010100000000000000000000000000000005ffc40014100100000000000000000000000000000000ffc40014010100000000000000000000000000000000ffc40014110100000000000000000000000000000000ffda000c03010002110311003f009a003fffd9"
+
+    private val MARKER: ByteArray = decodeHex(MARKER_HEX)
+
     /** Decodable JPEG written under the video disk key when prefetch gives up. */
     @JvmStatic
     fun markerJpeg(): ByteArray = MARKER.copyOf()
-
-    private val MARKER: ByteArray = decodeHex(MARKER_HEX)
 
     private fun decodeHex(hex: String): ByteArray {
         val out = ByteArray(hex.length / 2)
@@ -43,7 +50,4 @@ object VideoThumbnailFastNoFrame {
         }
         return out
     }
-
-    private const val MARKER_HEX =
-        "ffd8ffe000104a46494600010100000100010000ffdb004300281c1e231e19282321232d2b28303c64413c37373c7b585d4964918099968f808c8aa0b4e6c3a0aadaad8a8cc8ffcbdaeef5ffffff9bc1fffffffaffe6fdfff8ffdb0043012b2d2d3c353c76414176f8a58ca5f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8ffc00011080001000103012200021101031101ffc4001500010100000000000000000000000000000005ffc40014100100000000000000000000000000000000ffc40014010100000000000000000000000000000000ffc40014110100000000000000000000000000000000ffda000c03010002110311003f009a003fffd9"
 }
