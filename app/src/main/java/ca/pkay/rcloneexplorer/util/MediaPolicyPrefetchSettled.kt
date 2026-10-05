@@ -51,6 +51,19 @@ object MediaPolicyPrefetchSettled {
         return attempted == outcome.misses && fetchedOk <= 0
     }
 
+    /**
+     * True when rclone's listing error is a folder that is gone, not a transient outage.
+     * Those folders count as empty for the settled stamp. Anything else (timeouts, auth,
+     * empty text because stderr was not captured) still blocks the stamp.
+     */
+    @JvmStatic
+    fun listingErrorIsMissingFolder(rcloneErrorText: String?): Boolean {
+        if (rcloneErrorText.isNullOrEmpty()) {
+            return false
+        }
+        return rcloneErrorText.lowercase(Locale.US).contains("directory not found")
+    }
+
     @JvmStatic
     fun shouldMarkSettled(
         stopped: Boolean,

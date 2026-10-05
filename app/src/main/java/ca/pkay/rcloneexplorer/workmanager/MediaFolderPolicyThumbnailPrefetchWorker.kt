@@ -80,7 +80,21 @@ class MediaFolderPolicyThumbnailPrefetchWorker(
             }
             val listing = rclone.getDirectoryContent(remote, folder.explorerDirectoryPath, startAtRoot)
             if (listing == null) {
-                unverified = true
+                val listError = rclone.consumeLastDirectoryListError()
+                if (MediaPolicyPrefetchSettled.listingErrorIsMissingFolder(listError)) {
+                    SyncLog.info(
+                        app,
+                        TAG,
+                        "event=policyPrefetchFolderMissing path=${folder.explorerDirectoryPath}",
+                    )
+                } else {
+                    unverified = true
+                    SyncLog.info(
+                        app,
+                        TAG,
+                        "event=policyPrefetchFolderUnverified path=${folder.explorerDirectoryPath}",
+                    )
+                }
                 continue
             }
             val targets = ThumbnailPrefetchTargets.filterForHttpThumbnailPrefetch(

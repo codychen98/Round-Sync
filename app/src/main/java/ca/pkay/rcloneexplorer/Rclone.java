@@ -76,6 +76,8 @@ public class Rclone {
     private String rclone;
     private String rcloneConf;
     private Log2File log2File;
+    /** Stderr from the last [getDirectoryContent] that returned null. Empty after a success. */
+    private String lastDirectoryListError = "";
 
     public Rclone(Context context) {
         this.context = context;
@@ -233,8 +235,55 @@ public class Rclone {
         SyncLog.error(context, "Rclone operation", logOutput);
     }
 
+    /** Stderr captured when the last [getDirectoryContent] returned null. Cleared after reading. */
+    public String consumeLastDirectoryListError() {
+        String error = lastDirectoryListError;
+        lastDirectoryListError = "";
+        return error;
+    }
+
+    /**
+     * Records stderr and returns null. Stderr is always read so a "directory not found" can be
+     * told apart from an outage even when file logging is off. The log line matches
+     * [logErrorOutput] when logging is on.
+     */
+    @Nullable
+    private List<FileItem> directoryListFailed(@Nullable Process process) {
+        lastDirectoryListError = readProcessStderr(process);
+        if (!lastDirectoryListError.isEmpty()) {
+            SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
+            boolean loggingEnabled = sharedPreferences.getBoolean(context.getString(R.string.pref_key_logs), false);
+            if (loggingEnabled) {
+                log2File.log(lastDirectoryListError);
+                SyncLog.error(context, "Rclone operation", lastDirectoryListError);
+            }
+        }
+        return null;
+    }
+
+    private String readProcessStderr(@Nullable Process process) {
+        if (process == null) {
+            return "";
+        }
+        StringBuilder stringBuilder = new StringBuilder(100);
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                stringBuilder.append(line).append("\n");
+            }
+        } catch (InterruptedIOException iioe) {
+            FLog.i(TAG, "readProcessStderr: process died while reading. Log may be incomplete.");
+        } catch (IOException e) {
+            if (!"Stream closed".equals(e.getMessage())) {
+                FLog.e(TAG, "readProcessStderr: ", e);
+            }
+        }
+        return stringBuilder.toString();
+    }
+
     @Nullable
     public List<FileItem> getDirectoryContent(RemoteItem remote, String path, boolean startAtRoot) {
+        lastDirectoryListError = "";
         String remoteAndPath = remote.getName() + ":";
         if (startAtRoot) {
             remoteAndPath += "/";
@@ -252,7 +301,7 @@ public class Rclone {
             } catch (IOException e) {
                 // TODO: Provide port checking / alt port functionality
                 FLog.e(TAG, "Cannot connect to SAF DAV emulation server");
-                return null;
+                return directoryListFailed(null);
             }
         }
 
@@ -281,21 +330,18 @@ public class Rclone {
             process.waitFor();
             // For local/alias remotes, exit(6) is not a fatal error.
             if (process.exitValue() != 0 && (process.exitValue() != 6 || !remote.isRemoteType(RemoteItem.LOCAL, RemoteItem.ALIAS))) {
-                logErrorOutput(process);
-                return null;
+                return directoryListFailed(process);
             }
 
             String outputStr = output.toString();
             results = new JSONArray(outputStr);
 
         } catch (InterruptedException e) {
-            logErrorOutput(process);
             FLog.d(TAG, "getDirectoryContent: Aborted refreshing folder");
-            return null;
+            return directoryListFailed(process);
         } catch (IOException | JSONException e) {
-            logErrorOutput(process);
             FLog.e(TAG, "getDirectoryContent: Could not get folder content", e);
-            return null;
+            return directoryListFailed(process);
         }
 
         List<FileItem> fileItemList = new ArrayList<>();
@@ -321,9 +367,8 @@ public class Rclone {
                 FileItem fileItem = new FileItem(remote, filePath, fileName, fileSize, fileModTime, mimeType, fileIsDir, startAtRoot);
                 fileItemList.add(fileItem);
             } catch (JSONException e) {
-                logErrorOutput(process);
                 FLog.e(TAG, "getDirectoryContent: Could not decode JSON", e);
-                return null;
+                return directoryListFailed(process);
             }
         }
         return fileItemList;

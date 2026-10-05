@@ -88,6 +88,17 @@ class MediaPolicyPrefetchSettledTest {
     }
 
     @Test
+    fun listingErrorIsMissingFolder_matchesGoneDirectoryOnly() {
+        val gone = "ERROR : error listing: directory not found\n" +
+            "NOTICE: Failed to lsjson with 2 errors: last error was: error in ListJSON: directory not found\n"
+        assertTrue(MediaPolicyPrefetchSettled.listingErrorIsMissingFolder(gone))
+        assertTrue(MediaPolicyPrefetchSettled.listingErrorIsMissingFolder("Directory Not Found"))
+        assertFalse(MediaPolicyPrefetchSettled.listingErrorIsMissingFolder("connection reset by peer"))
+        assertFalse(MediaPolicyPrefetchSettled.listingErrorIsMissingFolder(""))
+        assertFalse(MediaPolicyPrefetchSettled.listingErrorIsMissingFolder(null))
+    }
+
+    @Test
     fun policyHash_stableAndSensitiveToFolderList() {
         val a = PolicyPrefetchFolder("pCloud", "Photo/(Life)", "/Photo/(Life)")
         val b = PolicyPrefetchFolder("pCloud", "Video Archive/Anime", "/Video Archive/Anime")
