@@ -1,6 +1,7 @@
 package ca.pkay.rcloneexplorer.Glide
 
 import android.content.Context
+import androidx.preference.PreferenceManager
 import com.bumptech.glide.signature.ObjectKey
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -30,6 +31,7 @@ class ThumbnailCachePoisonPurgeTest {
         if (::cache.isInitialized) {
             cache.close()
         }
+        GlideDiskCacheHolder.resetForTests()
     }
 
     @Test
@@ -50,6 +52,31 @@ class ThumbnailCachePoisonPurgeTest {
         assertNull(cache.get(xmlKey))
         assertNotNull(cache.get(jpegKey))
         assertTrue(prefs.getBoolean(ThumbnailCachePoisonPurge.PREF_KEY_DONE, false))
+    }
+
+    @Test
+    fun runAfterImport_reopensStaleCache_andRemovesRestoredSvg() {
+        val app = RuntimeEnvironment.getApplication()
+        val defaultPrefs = PreferenceManager.getDefaultSharedPreferences(app)
+        defaultPrefs.edit().putBoolean(ThumbnailCachePoisonPurge.PREF_KEY_DONE, true).commit()
+        // Opened on "launch": empty journal, knows nothing about what the import writes later.
+        val live = GlideDiskCacheHolder.get(app)!!
+        assertNull(live.get(ObjectKey("thumbFile__restored.svg.jpg")))
+
+        // Simulate the import: a second writer places journal entries + blobs on disk.
+        val svgKey = ObjectKey("thumbFile__restored.svg.jpg")
+        val jpegKey = ObjectKey("thumbFile__restored.jpg")
+        ThumbnailDiskCache(live.directory, 10L * 1024 * 1024).also { importer ->
+            importer.store(svgKey, "<?xml version=\"1.0\"?><svg/>".toByteArray())
+            importer.store(jpegKey, byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte()))
+            importer.close()
+        }
+
+        val result = ThumbnailCachePoisonPurge.runAfterImport(app)
+
+        assertEquals(ThumbnailCachePoisonPurge.Result(scanned = 2, removed = 1), result)
+        assertNull(live.get(svgKey))
+        assertNotNull(live.get(jpegKey))
     }
 
     @Test

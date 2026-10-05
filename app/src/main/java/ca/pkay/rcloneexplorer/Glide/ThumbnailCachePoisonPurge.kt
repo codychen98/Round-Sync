@@ -53,6 +53,30 @@ object ThumbnailCachePoisonPurge {
         }
     }
 
+    /**
+     * Runs the purge synchronously right after a backup import, regardless of the once-per-install
+     * flag (the launch-time run may have scanned an empty cache before the restore happened).
+     *
+     * The import rewrote `journal` and the blobs on disk underneath the live [ThumbnailDiskCache],
+     * whose in-memory entry table still reflects the pre-import journal and knows none of the
+     * restored keys. [ThumbnailDiskCache.close] drops that stale state so the next access reopens
+     * from the restored journal; without it `removeSafeKey` would be a no-op for every restored
+     * entry. Callers are already off the main thread (import runs in an AsyncTask / Worker).
+     */
+    @JvmStatic
+    fun runAfterImport(context: Context): Result? {
+        val app = context.applicationContext
+        val cache = GlideDiskCacheHolder.get(app) ?: return null
+        cache.close()
+        val result = purge(cache, PreferenceManager.getDefaultSharedPreferences(app))
+        SyncLog.info(
+            app,
+            LOG_TITLE,
+            "event=poisonPurgeAfterImport scanned=${result.scanned} removed=${result.removed}",
+        )
+        return result
+    }
+
     /** Scans committed entry files, removes poisoned ones through the cache, then sets the flag. */
     @JvmStatic
     fun purge(cache: ThumbnailDiskCache, prefs: SharedPreferences): Result {
@@ -60,7 +84,7 @@ object ThumbnailCachePoisonPurge {
             ?: emptyArray()
         var removed = 0
         for (file in entries) {
-            if (!isPoisoned(readHead(file))) {
+            if (!isPoisonedFile(file)) {
                 continue
             }
             if (cache.removeSafeKey(file.name.removeSuffix(ENTRY_SUFFIX))) {
@@ -70,6 +94,10 @@ object ThumbnailCachePoisonPurge {
         prefs.edit().putBoolean(PREF_KEY_DONE, true).apply()
         return Result(scanned = entries.size, removed = removed)
     }
+
+    /** [isPoisoned] over the first [HEAD_BYTES] of [file]; unreadable files count as clean. */
+    @JvmStatic
+    fun isPoisonedFile(file: File): Boolean = isPoisoned(readHead(file))
 
     /** True for payloads starting (after whitespace / UTF-8 BOM) with {@code <?xml} or {@code <svg}. */
     @JvmStatic

@@ -16,6 +16,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 
 public class ThumbnailDiskCacheEvictorTest {
@@ -65,6 +66,23 @@ public class ThumbnailDiskCacheEvictorTest {
     }
 
     @Test
+    public void put_replacesPoisonedSvgEntry() throws Exception {
+        ObjectKey key = new ObjectKey("thumb__poisoned.jpg");
+        byte[] jpeg = new byte[] {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0};
+        cache.store(key, "<svg xmlns=\"http://www.w3.org/2000/svg\"/>".getBytes(StandardCharsets.UTF_8));
+
+        cache.put(key, file -> writeBytes(file, jpeg));
+
+        File afterPut = cache.get(key);
+        assertNotNull(afterPut);
+        assertArrayEquals(jpeg, Files.readAllBytes(afterPut.toPath()));
+
+        // A second put over the now-healthy JPEG entry must still be a no-op.
+        cache.put(key, file -> writeBytes(file, new byte[] {5, 5}));
+        assertArrayEquals(jpeg, Files.readAllBytes(cache.get(key).toPath()));
+    }
+
+    @Test
     public void removeSafeKey_dropsEntryByJournalKey() {
         ObjectKey key = new ObjectKey("thumb__remove.jpg");
         cache.store(key, new byte[] {7});
@@ -73,6 +91,15 @@ public class ThumbnailDiskCacheEvictorTest {
         assertTrue(cache.removeSafeKey(safeKey));
         assertNull(cache.get(key));
         assertFalse(cache.removeSafeKey(safeKey));
+    }
+
+    private static boolean writeBytes(File file, byte[] bytes) {
+        try (OutputStream out = new FileOutputStream(file)) {
+            out.write(bytes);
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     private static File createTempCacheDir() {

@@ -6,6 +6,7 @@ import androidx.preference.PreferenceManager
 import ca.pkay.rcloneexplorer.AppShortcutsHelper
 import ca.pkay.rcloneexplorer.Database.json.Importer
 import ca.pkay.rcloneexplorer.Database.json.SharedPreferencesBackup
+import ca.pkay.rcloneexplorer.Glide.ThumbnailCachePoisonPurge
 import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Rclone
 import ca.pkay.rcloneexplorer.RemoteConfig.RemoteConfigHelper
@@ -69,6 +70,9 @@ object ConfigImporter {
             AppShortcutsHelper.populateAppShortcuts(appContext, rclone.remotes)
         }
 
+        // Restored blobs may include undecodable SVG placeholders; drop them (and reopen the
+        // disk cache from the restored journal) before the prefetch worker sees the cache.
+        ThumbnailCachePoisonPurge.runAfterImport(appContext)
         MediaFolderPolicyThumbnailPrefetchWorker.enqueueAfterImport(appContext)
     }
 

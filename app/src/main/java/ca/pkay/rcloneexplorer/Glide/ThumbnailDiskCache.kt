@@ -26,6 +26,7 @@ class ThumbnailDiskCache(
 
     private val safeKeys = SafeKeyGenerator()
     private var diskLruCache: DiskLruCache? = null
+    private val replacedLogged = HashSet<String>()
 
     @Synchronized
     @Throws(IOException::class)
@@ -47,13 +48,23 @@ class ThumbnailDiskCache(
     /** Fast existence probe by readable label (what [ObjectKey] wraps for app-owned entries). */
     fun containsLabel(label: String): Boolean = fileForSafeKey(safeKeyFor(ObjectKey(label))) != null
 
-    /** Glide semantics: a key that already has an entry is left untouched. */
+    /**
+     * Glide semantics: a key that already has an entry is left untouched, with one exception.
+     * An existing entry holding an SVG / XML placeholder (see [ThumbnailCachePoisonPurge]) can
+     * never decode, so a fresh write for that key replaces it; otherwise the entry would block
+     * every refetch forever.
+     */
     override fun put(key: Key, writer: DiskCache.Writer) {
         val safeKey = safeKeyFor(key)
         try {
             val cache = open()
-            if (cache.get(safeKey) != null) {
-                return
+            val existing = cache.get(safeKey)?.getFile(0)
+            if (existing != null) {
+                if (!ThumbnailCachePoisonPurge.isPoisonedFile(existing)) {
+                    return
+                }
+                cache.remove(safeKey)
+                logReplacedOnce(safeKey)
             }
             // A concurrent edit on the same key yields null; the other writer wins.
             val editor = cache.edit(safeKey) ?: return
@@ -66,6 +77,18 @@ class ThumbnailDiskCache(
             }
         } catch (e: IOException) {
             FLog.w(TAG, "put failed for %s", e, safeKey)
+        } catch (e: IllegalStateException) {
+            // Raised when the journal was closed/reopened under a live editor (e.g. after import).
+            FLog.w(TAG, "put raced with cache reopen for %s", e, safeKey)
+        }
+    }
+
+    private fun logReplacedOnce(safeKey: String) {
+        val first = synchronized(replacedLogged) {
+            replacedLogged.size < REPLACED_LOG_LIMIT && replacedLogged.add(safeKey)
+        }
+        if (first) {
+            FLog.d(TAG, "replaced poisoned entry %s", safeKey)
         }
     }
 
@@ -116,5 +139,6 @@ class ThumbnailDiskCache(
         const val TAG = "ThumbDiskCache"
         const val APP_VERSION = 1
         const val VALUE_COUNT = 1
+        const val REPLACED_LOG_LIMIT = 1024
     }
 }
