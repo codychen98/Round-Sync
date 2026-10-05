@@ -15,7 +15,6 @@ import com.bumptech.glide.load.DataSource;
 import com.bumptech.glide.load.data.DataFetcher;
 
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -340,13 +339,11 @@ public class VideoThumbnailFetcher implements DataFetcher<InputStream>, VideoThu
             @NonNull String base,
             long t0,
             @NonNull DataCallback<? super InputStream> callback) {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream(64 * 1024);
-        frame.compress(Bitmap.CompressFormat.JPEG, 75, baos);
-        frame.recycle();
+        byte[] jpeg = VideoFrameJpegEncoder.encodeAndRecycle(frame);
         logThumbPipe(appContext, "decodeOk",
                 "basename=" + base + " totalMs=" + (SystemClock.elapsedRealtime() - t0)
-                        + " " + mgrDebugSuffix());
-        callback.onDataReady(new ByteArrayInputStream(baos.toByteArray()));
+                        + " jpegBytes=" + jpeg.length + " " + mgrDebugSuffix());
+        callback.onDataReady(new ByteArrayInputStream(jpeg));
         return true;
     }
 

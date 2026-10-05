@@ -8,7 +8,6 @@ import android.os.SystemClock;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -81,15 +80,11 @@ final class VideoThumbnailDirectExtract {
             log(appContext, "directExtractFail basename=" + base + " totalMs=" + (SystemClock.elapsedRealtime() - t0));
             return null;
         }
-        try {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream(64 * 1024);
-            frame.compress(Bitmap.CompressFormat.JPEG, 75, baos);
-            log(appContext, "directExtractOk basename=" + base + " stage=" + stage
-                    + " totalMs=" + (SystemClock.elapsedRealtime() - t0));
-            return baos.toByteArray();
-        } finally {
-            frame.recycle();
-        }
+        byte[] jpeg = VideoFrameJpegEncoder.encodeAndRecycle(frame);
+        log(appContext, "directExtractOk basename=" + base + " stage=" + stage
+                + " jpegBytes=" + jpeg.length
+                + " totalMs=" + (SystemClock.elapsedRealtime() - t0));
+        return jpeg;
     }
 
     private static final class MmrExtractResult {
