@@ -18,7 +18,7 @@ public final class ThumbnailCacheIdentity {
     private static final String CACHE_PROBE_URL_PREFIX = "http://127.0.0.1/cacheProbe";
 
     /** Upper bound when scanning reload-epoch disk keys after a cold start. */
-    static final int MAX_RELOAD_EPOCH_DISK_PROBE = 64;
+    public static final int MAX_RELOAD_EPOCH_DISK_PROBE = 64;
 
     private ThumbnailCacheIdentity() {
     }
@@ -204,29 +204,23 @@ public final class ThumbnailCacheIdentity {
     }
 
     @NonNull
-    static String resolveVideoDiskCacheKeyFromLegacyPathIn(
+    public static String resolveVideoDiskCacheKeyFromLegacyPathIn(
             @NonNull ThumbnailDiskCache cache,
             @NonNull String legacyStablePath) {
         String normalized = ThumbnailStablePath.normalize(legacyStablePath);
         int reloadEpoch = ThumbnailReloadEpoch.get(normalized);
         if (reloadEpoch > 0) {
-            String reloadKey = ReadableCacheKey.fromStablePath(
-                    legacyStablePath + "|reload" + reloadEpoch,
-                    VIDEO_RELOAD_NAMESPACE);
+            String reloadKey = videoDiskCacheKeyLabelForLegacyPath(legacyStablePath, reloadEpoch);
             if (ThumbnailDiskCacheEvictor.isCachedIn(cache, reloadKey)) {
                 return reloadKey;
             }
         }
-        String canonicalKey = ReadableCacheKey.fromStablePath(
-                legacyStablePath + VIDEO_VERSION_TOKEN,
-                VIDEO_NAMESPACE);
+        String canonicalKey = videoDiskCacheKeyLabelForLegacyPath(legacyStablePath, 0);
         if (ThumbnailDiskCacheEvictor.isCachedIn(cache, canonicalKey)) {
             return canonicalKey;
         }
         for (int epoch = MAX_RELOAD_EPOCH_DISK_PROBE; epoch >= 1; epoch--) {
-            String reloadKey = ReadableCacheKey.fromStablePath(
-                    legacyStablePath + "|reload" + epoch,
-                    VIDEO_RELOAD_NAMESPACE);
+            String reloadKey = videoDiskCacheKeyLabelForLegacyPath(legacyStablePath, epoch);
             if (ThumbnailDiskCacheEvictor.isCachedIn(cache, reloadKey)) {
                 return reloadKey;
             }
@@ -234,10 +228,14 @@ public final class ThumbnailCacheIdentity {
         return defaultVideoDiskCacheKeyLabelForLegacyPath(legacyStablePath);
     }
 
+    /**
+     * Disk label for one video file at a reload generation. Epoch 0 is the single frame the grid
+     * shows; epochs above 0 are leftover reload copies.
+     */
     @NonNull
-    private static String defaultVideoDiskCacheKeyLabelForLegacyPath(@NonNull String legacyStablePath) {
-        int reloadEpoch = ThumbnailReloadEpoch.get(
-                ThumbnailStablePath.normalize(legacyStablePath));
+    public static String videoDiskCacheKeyLabelForLegacyPath(
+            @NonNull String legacyStablePath,
+            int reloadEpoch) {
         if (reloadEpoch > 0) {
             return ReadableCacheKey.fromStablePath(
                     legacyStablePath + "|reload" + reloadEpoch,
@@ -246,6 +244,13 @@ public final class ThumbnailCacheIdentity {
         return ReadableCacheKey.fromStablePath(
                 legacyStablePath + VIDEO_VERSION_TOKEN,
                 VIDEO_NAMESPACE);
+    }
+
+    @NonNull
+    private static String defaultVideoDiskCacheKeyLabelForLegacyPath(@NonNull String legacyStablePath) {
+        int reloadEpoch = ThumbnailReloadEpoch.get(
+                ThumbnailStablePath.normalize(legacyStablePath));
+        return videoDiskCacheKeyLabelForLegacyPath(legacyStablePath, Math.max(reloadEpoch, 0));
     }
 
     @Nullable

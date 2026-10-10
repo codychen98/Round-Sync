@@ -26,6 +26,7 @@ public class VideoThumbnailLoader implements ModelLoader<VideoThumbnailUrl, Inpu
     public LoadData<InputStream> buildLoadData(@NonNull VideoThumbnailUrl model,
                                                 int width, int height,
                                                 @NonNull Options options) {
+        ThumbnailDiskCacheEvictor.retainOnlyShownVideoDiskEntry(appContext, model.getStablePath());
         String cacheKey = ThumbnailCacheIdentity.resolveVideoDiskCacheKeyLabelFromLegacyPath(
                 appContext,
                 model.getStablePath());

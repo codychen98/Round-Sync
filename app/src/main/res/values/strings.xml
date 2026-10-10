@@ -237,6 +237,9 @@
     <string name="reload_thumbnail">Reload thumbnail</string>
     <string name="reload_thumbnail_success">Reloading thumbnail</string>
     <string name="reload_thumbnail_failed">Could not reload thumbnail</string>
+    <string name="set_video_thumbnail">Set thumbnail</string>
+    <string name="set_video_thumbnail_success">Thumbnail set</string>
+    <string name="set_video_thumbnail_failed">Could not set thumbnail</string>
     <string name="pref_thumbnails_size_title">Maximum file size for thumbnails</string>
     <string name="pref_thumbnails_dlg_title">Size limit (MB)</string>
     <string name="pref_thumbnails_size_summary">%1$.1f MB</string>
@@ -695,6 +698,14 @@
     <string name="app_update_title">Updates</string>
     <string name="preference_dialog_filesize_label">Filesize</string>
     <string name="preference_category_header_thumbnails">Thumbnails</string>
+    <string name="pref_remove_duplicate_thumbnails_title">Remove duplicate thumbnails</string>
+    <string name="pref_remove_duplicate_thumbnails_summary">Keep the thumbnail each video is showing and delete older reload copies. Videos do not need to be opened.</string>
+    <string name="remove_duplicate_thumbnails_dialog_title">Remove duplicate thumbnails?</string>
+    <string name="remove_duplicate_thumbnails_dialog_message">This checks thumbnail folders and folders you have opened. The picture currently shown for each video stays. Extra copies from Reload thumbnail are deleted.</string>
+    <string name="remove_duplicate_thumbnails_working">Removing duplicate thumbnails</string>
+    <string name="remove_duplicate_thumbnails_done">Removed %1$d duplicate thumbnails</string>
+    <string name="remove_duplicate_thumbnails_none">No duplicate thumbnails found</string>
+    <string name="remove_duplicate_thumbnails_failed">Could not remove duplicate thumbnails</string>
     <string name="preference_category_header_selected_folder_media_cache">Selected-folder media cache</string>
     <string name="preference_category_header_proxy">Proxy</string>
     <string name="preference_category_header_background_work">Background Work</string>

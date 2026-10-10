@@ -23,6 +23,11 @@
             android:title="@string/pref_thumbnails_dlg_title"
             app:dependency="@string/pref_key_show_thumbnails" />
 
+        <Preference
+            android:key="removeDuplicateThumbnailsKey"
+            android:title="@string/pref_remove_duplicate_thumbnails_title"
+            android:summary="@string/pref_remove_duplicate_thumbnails_summary" />
+
     </PreferenceCategory>
 
     <Preference

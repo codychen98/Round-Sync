@@ -3,6 +3,7 @@ package ca.pkay.rcloneexplorer.util
 import android.content.Context
 import android.util.Base64
 import ca.pkay.rcloneexplorer.Glide.HttpServeThumbnailGlideUrl
+import ca.pkay.rcloneexplorer.Glide.PinnedVideoThumbnailStore
 import ca.pkay.rcloneexplorer.Glide.ThumbnailCacheIdentity
 import ca.pkay.rcloneexplorer.Glide.ThumbnailDiskCacheEvictor
 import ca.pkay.rcloneexplorer.Glide.ThumbnailReloadPriority
@@ -59,8 +60,16 @@ object ThumbnailPrefetchExecutor {
     ): Pair<Int, List<FileItem>> {
         var cachedCount = 0
         val fetchTargets = ArrayList<FileItem>(targets.size)
+        val needProbe = ArrayList<FileItem>(targets.size)
+        for (item in targets) {
+            if (isPinnedVideo(context, item)) {
+                cachedCount++
+            } else {
+                needProbe.add(item)
+            }
+        }
         ThumbnailDiskCacheEvictor.withOpenCache(context) { cache ->
-            for (item in targets) {
+            for (item in needProbe) {
                 val label = ThumbnailCacheIdentity.prefetchDiskCacheKeyLabel(
                     cache,
                     item.remote.name,
@@ -75,6 +84,19 @@ object ThumbnailPrefetchExecutor {
             }
         }
         return cachedCount to fetchTargets
+    }
+
+    private fun isPinnedVideo(context: Context, item: FileItem): Boolean {
+        val mime = item.mimeType ?: return false
+        if (!mime.startsWith("video/")) {
+            return false
+        }
+        val remoteName = item.remote?.name ?: return false
+        val path = item.path ?: return false
+        return PinnedVideoThumbnailStore.has(
+            context,
+            ThumbnailCacheIdentity.stableServePath(remoteName, path),
+        )
     }
 
     suspend fun prefetchFolder(

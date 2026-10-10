@@ -28,9 +28,12 @@ import com.bumptech.glide.Glide;
 import com.bumptech.glide.Priority;
 import com.bumptech.glide.load.engine.DiskCacheStrategy;
 import com.bumptech.glide.request.RequestOptions;
+import com.bumptech.glide.signature.ObjectKey;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -40,7 +43,9 @@ import java.util.concurrent.atomic.AtomicLong;
 import ca.pkay.rcloneexplorer.Glide.RetryRequestListener;
 import ca.pkay.rcloneexplorer.Glide.FolderThumbnailGlideUrl;
 import ca.pkay.rcloneexplorer.Glide.HttpServeThumbnailGlideUrl;
+import ca.pkay.rcloneexplorer.Glide.PinnedVideoThumbnailStore;
 import ca.pkay.rcloneexplorer.Glide.ThumbnailCacheIdentity;
+import ca.pkay.rcloneexplorer.Glide.ThumbnailStablePath;
 import ca.pkay.rcloneexplorer.Glide.ThumbnailDiskCacheEvictor;
 import ca.pkay.rcloneexplorer.Glide.ThumbnailReloadEpoch;
 import ca.pkay.rcloneexplorer.Glide.ThumbnailReloadPriority;
@@ -540,6 +545,10 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         holder.fileIcon.setImageResource(R.drawable.ic_file);
                     }
                 }
+            } else if (mimeType.startsWith("video/")
+                    && bindPinnedVideoThumbnailIfPresent(holder, item)) {
+                startupBranch = "videoPinned";
+                startupPolicyAllowed = true;
             } else if (mimeType.startsWith("video/") && !localLoad) {
                 startupBranch = "videoCandidate";
                 String stablePath = ThumbnailCacheIdentity.stableServePath(
@@ -1048,33 +1057,64 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     }
 
     /**
-     * Whether the file 3-dot menu should offer {@code Reload thumbnail} for this row.
+     * Shows a user-chosen video frame when one has been saved from the player.
+     * Returns false when this row should use the automatic thumbnail path.
      */
-    public boolean isReloadThumbnailMenuVisible(@NonNull FileItem item) {
-        if (!showThumbnails || item.isDir()) {
+    private boolean bindPinnedVideoThumbnailIfPresent(@NonNull ViewHolder holder, @NonNull FileItem item) {
+        if (context == null || item.getRemote() == null || item.getPath() == null) {
             return false;
         }
-        String mimeType = item.getMimeType();
-        if (mimeType == null) {
+        String stablePath = ThumbnailCacheIdentity.stableServePath(
+                item.getRemote().getName(), item.getPath());
+        File pinned = PinnedVideoThumbnailStore.fileIfPresent(context.getApplicationContext(), stablePath);
+        if (pinned == null) {
             return false;
         }
-        boolean localLoad = item.getRemote().getType() == RemoteItem.SAFW;
-        if (mimeType.startsWith("video/")) {
-            if (localLoad) {
-                return false;
-            }
-            return isHttpThumbnailPolicyAllowedForNetworkThumbnail(item);
+        ThumbnailDiskCacheEvictor.clearGlideEntriesForPinnedVideoOnce(
+                context.getApplicationContext(),
+                item.getRemote().getName(),
+                item.getPath());
+        prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
+        Glide.with(context.getApplicationContext())
+                .load(pinned)
+                .apply(new RequestOptions()
+                        .centerCrop()
+                        .dontAnimate()
+                        .diskCacheStrategy(DiskCacheStrategy.NONE)
+                        .signature(new ObjectKey(pinned.lastModified() + ":" + pinned.length()))
+                        .placeholder(R.drawable.ic_file)
+                        .error(R.drawable.ic_file))
+                .into(holder.fileIcon);
+        return true;
+    }
+
+    /**
+     * Rebinds rows whose stable path was pinned from the video player.
+     */
+    public void refreshThumbnailsForStablePaths(@Nullable String[] stablePaths) {
+        if (stablePaths == null || stablePaths.length == 0 || files == null) {
+            return;
         }
-        if (mimeType.startsWith("image/")) {
-            if (item.getSize() > sizeLimit) {
-                return false;
+        HashSet<String> wanted = new HashSet<>();
+        for (String stablePath : stablePaths) {
+            if (stablePath != null && !stablePath.isEmpty()) {
+                wanted.add(ThumbnailStablePath.normalize(stablePath));
             }
-            if (localLoad) {
-                return true;
-            }
-            return isHttpThumbnailPolicyAllowedForNetworkThumbnail(item);
         }
-        return false;
+        if (wanted.isEmpty()) {
+            return;
+        }
+        for (int i = 0; i < files.size(); i++) {
+            FileItem item = files.get(i);
+            if (item.getRemote() == null || item.getPath() == null) {
+                continue;
+            }
+            String stable = ThumbnailCacheIdentity.stableServePath(
+                    item.getRemote().getName(), item.getPath());
+            if (wanted.contains(stable)) {
+                notifyItemChanged(i, THUMBNAIL_PAYLOAD);
+            }
+        }
     }
 
     public int getFilePosition(@NonNull FileItem item) {

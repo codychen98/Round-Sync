@@ -94,7 +94,7 @@ import ca.pkay.rcloneexplorer.Items.SyncDirectionObject;
 import ca.pkay.rcloneexplorer.Items.Task;
 import ca.pkay.rcloneexplorer.R;
 import ca.pkay.rcloneexplorer.Rclone;
-import ca.pkay.rcloneexplorer.Glide.ThumbnailReloadHelper;
+import ca.pkay.rcloneexplorer.Glide.PinnedVideoThumbnailStore;
 import ca.pkay.rcloneexplorer.RecyclerViewAdapters.FileExplorerRecyclerViewAdapter;
 import ca.pkay.rcloneexplorer.Services.ExplorerThumbnailServeCoordinator;
 import ca.pkay.rcloneexplorer.Services.StreamingService;
@@ -104,6 +104,7 @@ import ca.pkay.rcloneexplorer.util.ActivityHelper;
 import ca.pkay.rcloneexplorer.util.BackgroundMediaPrepWorkTracker;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.LastFolderSnapshotStore;
+import ca.pkay.rcloneexplorer.util.VisitedThumbnailFolders;
 import ca.pkay.rcloneexplorer.util.MediaFolderPolicy;
 import ca.pkay.rcloneexplorer.util.PolicyType;
 import ca.pkay.rcloneexplorer.util.SyncLog;
@@ -470,12 +471,20 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         super.onResume();
         if (recyclerViewAdapter != null) {
             recyclerViewAdapter.setThumbnailHostResumed(true);
+            recyclerViewAdapter.refreshThumbnailsForStablePaths(
+                    PinnedVideoThumbnailStore.consumePendingRefresh());
+            PinnedVideoThumbnailStore.setRefreshListener(stablePath -> {
+                if (recyclerViewAdapter != null) {
+                    recyclerViewAdapter.refreshThumbnailsForStablePaths(new String[]{stablePath});
+                }
+            });
         }
         applyPendingScrollRestore();
     }
 
     @Override
     public void onPause() {
+        PinnedVideoThumbnailStore.setRefreshListener(null);
         if (recyclerViewAdapter != null) {
             recyclerViewAdapter.setThumbnailHostResumed(false);
         }
@@ -674,6 +683,10 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         } else if (requestCode == STREAMING_INTENT_RESULT) {
             Intent serveIntent = new Intent(getContext(), StreamingService.class);
             context.stopService(serveIntent);
+            if (resultCode == Activity.RESULT_OK && data != null && recyclerViewAdapter != null) {
+                recyclerViewAdapter.refreshThumbnailsForStablePaths(
+                        data.getStringArrayExtra(VideoPlayerActivity.EXTRA_PINNED_STABLE_PATHS));
+            }
         }
     }
 
@@ -1555,6 +1568,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         super.onStop();
         if (context != null && remoteName != null && directoryObject != null) {
             LastFolderSnapshotStore.persist(context, remoteName, directoryObject.getCurrentPath());
+            VisitedThumbnailFolders.remember(context, remoteName, directoryObject.getCurrentPath());
             LastFolderThumbnailPrefetchWorker.enqueue(context);
         }
         if (context != null) {
@@ -1773,32 +1787,6 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                 case R.id.action_open_as:
                     showOpenAsDialog(fileItem);
                     break;
-                case R.id.action_reload_thumbnail: {
-                    int position = recyclerViewAdapter.getFilePosition(fileItem);
-                    if (position == RecyclerView.NO_POSITION) {
-                        SyncLog.error(context, "ThumbReloadDbg",
-                                "event=reloadMenuFail reason=positionNotFound path=" + fileItem.getPath());
-                        Toasty.error(context, getString(R.string.reload_thumbnail_failed),
-                                Toast.LENGTH_SHORT, true).show();
-                        break;
-                    }
-                    SyncLog.info(context, "ThumbReloadDbg",
-                            "event=reloadMenuTapped path=" + fileItem.getPath()
-                                    + " position=" + position
-                                    + " mimeType=" + fileItem.getMimeType());
-                    ThumbnailReloadHelper.reload(context, fileItem, recyclerViewAdapter, position, success -> {
-                        if (isAdded()) {
-                            if (success) {
-                                Toasty.info(context, getString(R.string.reload_thumbnail_success),
-                                        Toast.LENGTH_SHORT, true).show();
-                            } else {
-                                Toasty.error(context, getString(R.string.reload_thumbnail_failed),
-                                        Toast.LENGTH_SHORT, true).show();
-                            }
-                        }
-                    });
-                    break;
-                }
                 case R.id.action_serve:
                     String[] serveOptions = getResources().getStringArray(R.array.serve_options);
                     AlertDialog.Builder builder = new AlertDialog.Builder(context);
@@ -1866,16 +1854,12 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         popupMenu.show();
         if (fileItem.isDir()) {
             popupMenu.getMenu().findItem(R.id.action_open_as).setVisible(false);
-            popupMenu.getMenu().findItem(R.id.action_reload_thumbnail).setVisible(false);
             boolean alreadyPinned = PinnedItemStore.isPinned(context, remote.getName(), fileItem.getPath());
             popupMenu.getMenu().findItem(R.id.action_pin_to_drawer)
                     .setTitle(alreadyPinned ? R.string.unpin_from_drawer : R.string.pin_to_drawer);
         } else {
             popupMenu.getMenu().findItem(R.id.action_sync).setVisible(false);
             popupMenu.getMenu().findItem(R.id.action_pin_to_drawer).setVisible(false);
-            boolean showReload = recyclerViewAdapter != null
-                    && recyclerViewAdapter.isReloadThumbnailMenuVisible(fileItem);
-            popupMenu.getMenu().findItem(R.id.action_reload_thumbnail).setVisible(showReload);
         }
         if (!remote.hasSyncSupport()) {
             // TODO: remove once destination sync is added.
@@ -2504,6 +2488,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
 
         List<String> videoUrls = new ArrayList<>();
         List<String> videoNames = new ArrayList<>();
+        List<String> videoRemoteNames = new ArrayList<>();
+        List<String> videoPaths = new ArrayList<>();
         int startIndex = 0;
         for (int i = 0; i < videoFiles.size(); i++) {
             FileItem vf = videoFiles.get(i);
@@ -2513,6 +2499,9 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                     .build();
             videoUrls.add(uri.toString());
             videoNames.add(vf.getName());
+            String remoteNameForFile = vf.getRemote() != null ? vf.getRemote().getName() : remote.getName();
+            videoRemoteNames.add(remoteNameForFile != null ? remoteNameForFile : "");
+            videoPaths.add(vf.getPath() != null ? vf.getPath() : "");
             if (vf.getPath().equals(clickedVideo.getPath())) {
                 startIndex = i;
             }
@@ -2521,12 +2510,11 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         Intent intent = new Intent(getContext(), VideoPlayerActivity.class);
         intent.putExtra("video_urls", videoUrls.toArray(new String[0]));
         intent.putExtra("video_names", videoNames.toArray(new String[0]));
+        intent.putExtra(VideoPlayerActivity.EXTRA_VIDEO_REMOTE_NAMES, videoRemoteNames.toArray(new String[0]));
+        intent.putExtra(VideoPlayerActivity.EXTRA_VIDEO_PATHS, videoPaths.toArray(new String[0]));
         intent.putExtra("start_index", startIndex);
         intent.putExtra(VideoPlayerActivity.EXTRA_VIDEO_CACHE_ENABLED, buildCacheEnabledForFiles(videoFiles));
-        Activity activity = getActivity();
-        if (activity != null) {
-            tryStartActivityForResult(activity, intent, STREAMING_INTENT_RESULT);
-        }
+        tryStartActivityForResult(this, intent, STREAMING_INTENT_RESULT);
     }
 
     private void launchImageViewer(FileItem clickedImage, int port) {

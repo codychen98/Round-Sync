@@ -14,6 +14,7 @@ import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.PreferenceManager
 import ca.pkay.rcloneexplorer.Activities.MediaFolderPolicyActivity
 import ca.pkay.rcloneexplorer.AppShortcutsHelper
+import ca.pkay.rcloneexplorer.Glide.DuplicateVideoThumbnailSweep
 import ca.pkay.rcloneexplorer.Items.RemoteItem
 import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Rclone
@@ -64,6 +65,20 @@ class GeneralPreferencesFragment : PreferenceFragmentCompat() {
             true
         }
 
+        val removeDuplicateThumbnailsPreference =
+            findPreference("removeDuplicateThumbnailsKey") as Preference?
+        removeDuplicateThumbnailsPreference?.setOnPreferenceClickListener {
+            AlertDialog.Builder(requireContext())
+                .setTitle(R.string.remove_duplicate_thumbnails_dialog_title)
+                .setMessage(R.string.remove_duplicate_thumbnails_dialog_message)
+                .setNegativeButton(R.string.cancel, null)
+                .setPositiveButton(R.string.ok) { _: DialogInterface, _: Int ->
+                    runDuplicateThumbnailSweep()
+                }
+                .show()
+            true
+        }
+
         val clearMediaCachePreference = findPreference("clearSelectedFolderMediaCacheKey") as Preference?
         clearMediaCachePreference?.setOnPreferenceClickListener {
             AlertDialog.Builder(requireContext())
@@ -77,6 +92,59 @@ class GeneralPreferencesFragment : PreferenceFragmentCompat() {
             true
         }
 
+    }
+
+    private fun runDuplicateThumbnailSweep() {
+        val appContext = requireContext().applicationContext
+        val activity = requireActivity()
+        Toasty.info(
+            activity,
+            getString(R.string.remove_duplicate_thumbnails_working),
+            Toast.LENGTH_SHORT,
+            true,
+        ).show()
+        Thread {
+            var result: DuplicateVideoThumbnailSweep.Result? = null
+            var failed = false
+            try {
+                result = DuplicateVideoThumbnailSweep.run(appContext)
+            } catch (t: Throwable) {
+                failed = true
+                FLog.e(TAG(), "runDuplicateThumbnailSweep", t)
+            }
+            val sweep = result
+            activity.runOnUiThread {
+                if (!isAdded) {
+                    return@runOnUiThread
+                }
+                when {
+                    failed || sweep == null -> Toasty.error(
+                        activity,
+                        getString(R.string.remove_duplicate_thumbnails_failed),
+                        Toast.LENGTH_SHORT,
+                        true,
+                    ).show()
+                    sweep.removed > 0 -> Toasty.success(
+                        activity,
+                        getString(R.string.remove_duplicate_thumbnails_done, sweep.removed),
+                        Toast.LENGTH_SHORT,
+                        true,
+                    ).show()
+                    sweep.videos == 0 && sweep.failedFolders > 0 -> Toasty.error(
+                        activity,
+                        getString(R.string.remove_duplicate_thumbnails_failed),
+                        Toast.LENGTH_SHORT,
+                        true,
+                    ).show()
+                    else -> Toasty.info(
+                        activity,
+                        getString(R.string.remove_duplicate_thumbnails_none),
+                        Toast.LENGTH_SHORT,
+                        true,
+                    ).show()
+                }
+            }
+        }.start()
     }
 
     private fun runSelectedFolderMediaCacheClear() {

@@ -30,6 +30,9 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import ca.pkay.rcloneexplorer.Glide.OkHttpMediaDataSource
+import ca.pkay.rcloneexplorer.Glide.PinnedVideoThumbnailStore
+import ca.pkay.rcloneexplorer.Glide.ThumbnailCacheIdentity
+import ca.pkay.rcloneexplorer.Glide.ThumbnailDiskCacheEvictor
 import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Services.StreamingService
 import ca.pkay.rcloneexplorer.util.Media3ExtensionRenderers
@@ -48,7 +51,12 @@ class VideoPlayerActivity : AppCompatActivity() {
     private lateinit var videoTitle: TextView
     private lateinit var episodeCounter: TextView
     private lateinit var btnScaleMode: ImageButton
+    private lateinit var btnSetThumbnail: ImageButton
     private var player: ExoPlayer? = null
+    private var videoRemoteNames: Array<String> = emptyArray()
+    private var videoPaths: Array<String> = emptyArray()
+    private val pinnedThisVisit = LinkedHashSet<String>()
+    private var thumbnailCaptureInFlight = false
     private var scaleIndex = 0
 
     private val scaleModes = intArrayOf(
@@ -84,6 +92,13 @@ class VideoPlayerActivity : AppCompatActivity() {
         videoTitle = findViewById(R.id.video_title)
         episodeCounter = findViewById(R.id.episode_counter)
         btnScaleMode = findViewById(R.id.btn_scale_mode)
+        btnSetThumbnail = findViewById(R.id.btn_set_thumbnail)
+
+        videoRemoteNames = intent.getStringArrayExtra(EXTRA_VIDEO_REMOTE_NAMES) ?: emptyArray()
+        videoPaths = intent.getStringArrayExtra(EXTRA_VIDEO_PATHS) ?: emptyArray()
+        savedInstanceState?.getStringArray(EXTRA_PINNED_STABLE_PATHS)?.let { restored ->
+            pinnedThisVisit.addAll(restored.filter { it.isNotEmpty() })
+        }
 
         applyScaleMode()
         topBar.visibility = View.GONE
@@ -125,6 +140,7 @@ class VideoPlayerActivity : AppCompatActivity() {
         setupGestureOverlays()
 
         btnScaleMode.setOnClickListener { cycleScaleMode() }
+        btnSetThumbnail.setOnClickListener { onSetThumbnailClicked() }
 
         val uris = intent.getStringArrayExtra("video_urls") ?: return finish()
         val names = intent.getStringArrayExtra("video_names") ?: return finish()
@@ -230,6 +246,91 @@ class VideoPlayerActivity : AppCompatActivity() {
             }
         }
         SyncLog.info(this, SYNC_LOG_VIDEO_PLAYBACK_TITLE, content)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        if (pinnedThisVisit.isNotEmpty()) {
+            outState.putStringArray(EXTRA_PINNED_STABLE_PATHS, pinnedThisVisit.toTypedArray())
+        }
+    }
+
+    override fun finish() {
+        if (pinnedThisVisit.isNotEmpty()) {
+            setResult(
+                RESULT_OK,
+                Intent().putExtra(EXTRA_PINNED_STABLE_PATHS, pinnedThisVisit.toTypedArray()),
+            )
+        }
+        super.finish()
+    }
+
+    private fun onSetThumbnailClicked() {
+        if (thumbnailCaptureInFlight) {
+            return
+        }
+        val exo = player
+        val identity = currentVideoIdentity()
+        if (exo == null || exo.playbackState != Player.STATE_READY || identity == null) {
+            Toast.makeText(this, R.string.set_video_thumbnail_failed, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val positionMs = exo.currentPosition
+        val mediaUrl = exo.currentMediaItem?.localConfiguration?.uri?.toString()
+        thumbnailCaptureInFlight = true
+        btnSetThumbnail.isEnabled = false
+        VideoFrameGrabber.capture(playerView, positionMs, mediaUrl, applicationContext) { jpeg ->
+            thumbnailCaptureInFlight = false
+            if (!isDestroyed) {
+                btnSetThumbnail.isEnabled = true
+            }
+            if (jpeg == null || jpeg.isEmpty()) {
+                if (!isDestroyed) {
+                    Toast.makeText(this, R.string.set_video_thumbnail_failed, Toast.LENGTH_SHORT).show()
+                }
+                return@capture
+            }
+            val saved = PinnedVideoThumbnailStore.put(applicationContext, identity.stablePath, jpeg)
+            if (!saved) {
+                if (!isDestroyed) {
+                    Toast.makeText(this, R.string.set_video_thumbnail_failed, Toast.LENGTH_SHORT).show()
+                }
+                return@capture
+            }
+            ThumbnailDiskCacheEvictor.clearGlideEntriesForPinnedVideo(
+                applicationContext,
+                identity.remoteName,
+                identity.path,
+            )
+            pinnedThisVisit.add(identity.stablePath)
+            if (!isDestroyed) {
+                Toast.makeText(this, R.string.set_video_thumbnail_success, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private data class PlayingVideoIdentity(
+        val remoteName: String,
+        val path: String,
+        val stablePath: String,
+    )
+
+    private fun currentVideoIdentity(): PlayingVideoIdentity? {
+        val exo = player ?: return null
+        val index = exo.currentMediaItemIndex
+        if (index < 0 || index >= videoRemoteNames.size || index >= videoPaths.size) {
+            return null
+        }
+        val remoteName = videoRemoteNames[index]
+        val path = videoPaths[index]
+        if (remoteName.isEmpty() || path.isEmpty()) {
+            return null
+        }
+        return PlayingVideoIdentity(
+            remoteName,
+            path,
+            ThumbnailCacheIdentity.stableServePath(remoteName, path),
+        )
     }
 
     private fun updateUI(names: Array<String>) {
@@ -601,6 +702,9 @@ class VideoPlayerActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_VIDEO_CACHE_ENABLED = "video_cache_enabled"
+        const val EXTRA_VIDEO_REMOTE_NAMES = "video_remote_names"
+        const val EXTRA_VIDEO_PATHS = "video_paths"
+        const val EXTRA_PINNED_STABLE_PATHS = "pinned_stable_paths"
 
         /** Prefix for Menu → Logs filter (written to sync.log). */
         private const val SYNC_LOG_VIDEO_PLAYBACK_TITLE = "VideoPlaybackDbg"
