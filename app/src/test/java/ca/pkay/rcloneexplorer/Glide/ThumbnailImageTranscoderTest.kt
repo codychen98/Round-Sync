@@ -41,6 +41,24 @@ class ThumbnailImageTranscoderTest {
     }
 
     @Test
+    fun transcode_opaquePngWithinMaxEdge_returnsJpeg() {
+        val bytes = encode(800, 600, Bitmap.CompressFormat.PNG)
+        val result = ThumbnailImageTranscoder.transcode(bytes)
+        assertNotNull(result)
+        assertEquals(ThumbnailImageTranscoder.Format.JPEG, ThumbnailImageTranscoder.sniff(result!!))
+        assertEquals(800 to 600, bounds(result))
+    }
+
+    @Test
+    fun transcode_alphaPngWithinMaxEdge_staysPng() {
+        val bytes = encodeWithAlpha(400, 300)
+        assertEquals(ThumbnailImageTranscoder.Format.PNG, ThumbnailImageTranscoder.sniff(bytes))
+        val result = ThumbnailImageTranscoder.transcode(bytes)
+        assertSame(bytes, result)
+        assertEquals(ThumbnailImageTranscoder.Format.PNG, ThumbnailImageTranscoder.sniff(result!!))
+    }
+
+    @Test
     fun transcode_svgPayload_isRejected() {
         val withProlog = "<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\"/>".toByteArray()
         val bare = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\"/>".toByteArray()
@@ -92,6 +110,18 @@ class ThumbnailImageTranscoderTest {
             bitmap.eraseColor(Color.rgb(40, 90, 160))
             val out = ByteArrayOutputStream()
             bitmap.compress(format, 90, out)
+            return out.toByteArray()
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    private fun encodeWithAlpha(width: Int, height: Int): ByteArray {
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        try {
+            bitmap.eraseColor(Color.argb(128, 40, 90, 160))
+            val out = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
             return out.toByteArray()
         } finally {
             bitmap.recycle()

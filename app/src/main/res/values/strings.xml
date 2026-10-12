@@ -721,6 +721,7 @@
     <string name="view_mode_grid">Grid view</string>
     <string name="view_mode_list">List view</string>
 
+    <string name="video_seek_not_supported">Seeking not supported for this video</string>
     <string name="video_error_network">Network error. Check your connection and try again.</string>
     <string name="video_error_seeking">Error seeking video. The video may not support seeking.</string>
     <string name="video_error_format">Unsupported video format or codec.</string>

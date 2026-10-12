@@ -135,6 +135,17 @@ class ThumbnailDiskCache(
         }
     }
 
+    /**
+     * Runs [block] while holding this cache's monitor with the journal open. Callers that rewrite
+     * entry files in place (e.g. [ThumbnailCacheCompactor]) must use this instead of opening a
+     * second [DiskLruCache] on [directory].
+     */
+    @Synchronized
+    fun <T> withExclusiveAccess(block: () -> T): T {
+        open()
+        return block()
+    }
+
     private companion object {
         const val TAG = "ThumbDiskCache"
         const val APP_VERSION = 1

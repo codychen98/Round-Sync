@@ -21,6 +21,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.ParserException
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.util.Util
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -36,8 +37,9 @@ import ca.pkay.rcloneexplorer.Glide.ThumbnailDiskCacheEvictor
 import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Services.StreamingService
 import ca.pkay.rcloneexplorer.util.Media3ExtensionRenderers
-import ca.pkay.rcloneexplorer.util.SyncLog
 import ca.pkay.rcloneexplorer.util.SelectedFolderSimpleCacheProvider
+import ca.pkay.rcloneexplorer.util.SyncLog
+import ca.pkay.rcloneexplorer.util.VideoSeekPolicy
 import java.io.EOFException
 import java.io.IOException
 
@@ -239,6 +241,15 @@ class VideoPlayerActivity : AppCompatActivity() {
             append(" seekable=").append(seekable)
             append(" durationMs=").append(durStr)
             append(" commandSeekInCurrentWindow=").append(cmdSeekInWindow)
+            if (!seekable) {
+                val timeline = exo.currentTimeline
+                if (!timeline.isEmpty) {
+                    val window = Timeline.Window()
+                    timeline.getWindow(exo.currentMediaItemIndex, window)
+                    append(" windowDurationUs=").append(window.durationUs)
+                    append(" windowIsPlaceholder=").append(window.isPlaceholder)
+                }
+            }
             append(" httpEngine=OkHttpDataSource ProgressiveMediaSource")
             append(" extensionRendererMode=on")
             if (uri.isNotEmpty()) {
@@ -503,6 +514,14 @@ class VideoPlayerActivity : AppCompatActivity() {
 
     private fun seekRelativeMs(deltaMs: Long) {
         val p = player ?: return
+        val canSeek = VideoSeekPolicy.canSeekInCurrentWindow(
+            p.isCurrentMediaItemSeekable,
+            p.availableCommands.contains(Player.COMMAND_SEEK_IN_CURRENT_WINDOW),
+        )
+        if (!canSeek) {
+            Toast.makeText(this, R.string.video_seek_not_supported, Toast.LENGTH_SHORT).show()
+            return
+        }
         val current = p.currentPosition
         val duration = p.duration
         val target = current + deltaMs
@@ -552,7 +571,17 @@ class VideoPlayerActivity : AppCompatActivity() {
         if (willRetry) {
             retryCount++
             Toast.makeText(this, getString(R.string.video_error_retry, retryCount, maxRetries), Toast.LENGTH_SHORT).show()
-            player?.prepare()
+            val p = player
+            val resumePos = p?.currentPosition ?: 0L
+            p?.prepare()
+            if (p != null &&
+                VideoSeekPolicy.canSeekInCurrentWindow(
+                    p.isCurrentMediaItemSeekable,
+                    p.availableCommands.contains(Player.COMMAND_SEEK_IN_CURRENT_WINDOW),
+                )
+            ) {
+                p.seekTo(resumePos)
+            }
         } else {
             Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         }

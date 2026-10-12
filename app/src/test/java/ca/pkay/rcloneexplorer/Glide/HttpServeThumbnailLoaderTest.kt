@@ -5,7 +5,9 @@ import com.bumptech.glide.load.data.HttpUrlFetcher
 import com.bumptech.glide.load.model.GlideUrl
 import com.bumptech.glide.load.model.stream.HttpGlideUrlLoader
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -32,13 +34,29 @@ class HttpServeThumbnailLoaderTest {
     }
 
     @Test
-    fun plainAndFolderModels_delegateToStockFetcher() {
-        for (model in listOf(GlideUrl(url), FolderThumbnailGlideUrl(url))) {
-            val loadData = loader.buildLoadData(model, 200, 200, Options())
-            assertNotNull(loadData)
-            assertTrue(loadData!!.fetcher is HttpUrlFetcher)
-            assertEquals(model.cacheKey, (loadData.sourceKey as GlideUrl).cacheKey)
-        }
+    fun plainGlideUrl_delegatesToStockFetcher() {
+        val model = GlideUrl(url)
+        val loadData = loader.buildLoadData(model, 200, 200, Options())
+        assertNotNull(loadData)
+        assertTrue(loadData!!.fetcher is HttpUrlFetcher)
+        assertEquals(model.cacheKey, (loadData.sourceKey as GlideUrl).cacheKey)
+    }
+
+    @Test
+    fun folderThumbnailModel_isNotHandledByHttpServeLoader() {
+        val model = FolderThumbnailGlideUrl(url)
+        assertFalse(loader.handles(model))
+        assertNull(loader.buildLoadData(model, 200, 200, Options()))
+    }
+
+    @Test
+    fun folderThumbnailLoader_wrapsStockFetcherWithTranscoder() {
+        val folderLoader = FolderThumbnailLoader(HttpGlideUrlLoader())
+        val model = FolderThumbnailGlideUrl(url)
+        val loadData = folderLoader.buildLoadData(model, 200, 200, Options())
+        assertNotNull(loadData)
+        assertTrue(loadData!!.fetcher is FolderThumbnailTranscodingFetcher)
+        assertEquals(model.cacheKey, (loadData.sourceKey as GlideUrl).cacheKey)
     }
 
     @Test

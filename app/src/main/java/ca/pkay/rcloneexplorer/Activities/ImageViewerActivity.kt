@@ -22,6 +22,7 @@ import ca.pkay.rcloneexplorer.util.ImageViewerNetworkPolicy
 import ca.pkay.rcloneexplorer.util.SelectedFolderImageHttpClientHolder
 import com.bumptech.glide.Glide
 import com.bumptech.glide.Priority
+import com.bumptech.glide.load.engine.DiskCacheStrategy
 import com.bumptech.glide.load.model.GlideUrl
 import com.bumptech.glide.request.RequestOptions
 import com.google.android.material.appbar.MaterialToolbar
@@ -158,6 +159,7 @@ class ImageViewerActivity : AppCompatActivity() {
         val dm = resources.displayMetrics
         val base = RequestOptions()
             .fitCenter()
+            .diskCacheStrategy(DiskCacheStrategy.RESOURCE)
             .error(R.drawable.ic_file)
         return if (highFidelity) {
             val w = (dm.widthPixels * 2).coerceAtMost(4096).coerceAtLeast(1)

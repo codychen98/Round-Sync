@@ -38,8 +38,13 @@ public class RoundSyncGlideModule extends AppGlideModule {
                                    @NonNull Registry registry) {
         registry.prepend(VideoThumbnailUrl.class, InputStream.class,
                 new VideoThumbnailLoader.Factory(context));
+        // Folder models: dedicated loader wraps stock HTTP fetch + ThumbnailImageTranscoder.
+        // Registered before GlideUrl replace; HttpServeThumbnailLoader.handles excludes folders
+        // so Glide never MultiModelLoader-fall-through to an untranscoded path.
+        registry.replace(FolderThumbnailGlideUrl.class, InputStream.class,
+                new FolderThumbnailLoader.Factory(context));
         // replace, not prepend: see HttpServeThumbnailLoader for why fall-through must be avoided.
-        // FolderThumbnailGlideUrl and plain GlideUrl models are delegated to the stock loader.
+        // Plain GlideUrl and HttpServeThumbnailGlideUrl go through HttpServeThumbnailLoader.
         registry.replace(GlideUrl.class, InputStream.class,
                 new HttpServeThumbnailLoader.Factory(context));
     }

@@ -63,6 +63,7 @@ import ca.pkay.rcloneexplorer.Dialogs.LoadingDialog;
 import ca.pkay.rcloneexplorer.Dialogs.PinnedItemsPickerDialogFragment;
 import ca.pkay.rcloneexplorer.Fragments.FileExplorerFragment;
 import ca.pkay.rcloneexplorer.Fragments.LogFragment;
+import ca.pkay.rcloneexplorer.Glide.ThumbnailCacheCompactor;
 import ca.pkay.rcloneexplorer.Glide.ThumbnailCachePoisonPurge;
 import ca.pkay.rcloneexplorer.Fragments.PermissionFragment;
 import ca.pkay.rcloneexplorer.Fragments.RemotesFragment;
@@ -132,6 +133,7 @@ public class MainActivity extends AppCompatActivity
         SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(this);
         runThumbnailPrefsMigrationIfNeeded(sharedPreferences);
         ThumbnailCachePoisonPurge.runOnceIfNeeded(this);
+        ThumbnailCacheCompactor.runOnceIfNeeded(this);
         boolean allPermissionsGranted = (new PermissionManager(this)).hasAllRequiredPermissions();
         boolean completedIntroOnce = OnboardingActivity.Companion.completedIntro(this);
         if(!allPermissionsGranted || !completedIntroOnce) {

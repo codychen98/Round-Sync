@@ -2,6 +2,7 @@ package ca.pkay.rcloneexplorer.Glide
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.graphics.Matrix
 import androidx.exifinterface.media.ExifInterface
 import java.io.ByteArrayInputStream
@@ -14,7 +15,10 @@ import java.io.ByteArrayOutputStream
  * photo), which overflows the thumbnail cache and evicts restored entries. Results:
  * - unknown / non-raster payloads (SVG, HTML, text): `null`, so the load fails and nothing is cached;
  * - GIF and animated WebP: original bytes, to keep animation;
- * - rasters already within [maxEdgePx]: original bytes;
+ * - opaque PNG (any size): JPEG q85, downscaled to [maxEdgePx] when larger;
+ * - PNG with real alpha: original bytes when already within [maxEdgePx], otherwise downscaled JPEG
+ *   (same as pre-v1 large-PNG behaviour);
+ * - other rasters already within [maxEdgePx]: original bytes;
  * - larger rasters: EXIF-oriented, downscaled JPEG.
  * Decode failures of a recognised raster return the original bytes so behaviour matches today.
  */
@@ -22,6 +26,7 @@ object ThumbnailImageTranscoder {
 
     const val DEFAULT_MAX_EDGE_PX = 1280
     private const val JPEG_QUALITY = 85
+    private const val ALPHA_SAMPLE_STRIDE = 16
 
     enum class Format { JPEG, PNG, WEBP, WEBP_ANIMATED, GIF, HEIF, BMP, UNKNOWN }
 
@@ -47,6 +52,13 @@ object ThumbnailImageTranscoder {
         return when (sniff(bytes)) {
             Format.UNKNOWN -> null
             Format.GIF, Format.WEBP_ANIMATED -> bytes
+            Format.PNG -> try {
+                pngTranscode(bytes, maxEdgePx.coerceAtLeast(1))
+            } catch (_: Exception) {
+                bytes
+            } catch (_: OutOfMemoryError) {
+                bytes
+            }
             else -> try {
                 downscaleOrPassthrough(bytes, maxEdgePx.coerceAtLeast(1))
             } catch (_: Exception) {
@@ -54,6 +66,34 @@ object ThumbnailImageTranscoder {
             } catch (_: OutOfMemoryError) {
                 bytes
             }
+        }
+    }
+
+    /**
+     * Opaque PNGs become JPEG (downscaled when oversized). Alpha PNGs keep the previous rule:
+     * pass through when within [maxEdgePx], otherwise downscale to JPEG.
+     */
+    private fun pngTranscode(bytes: ByteArray, maxEdgePx: Int): ByteArray {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        val srcEdge = maxOf(bounds.outWidth, bounds.outHeight)
+        if (srcEdge <= 0) {
+            return bytes
+        }
+        val opts = BitmapFactory.Options().apply {
+            inSampleSize = if (srcEdge > maxEdgePx) sampleSizeFor(srcEdge, maxEdgePx) else 1
+        }
+        val sampled = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) ?: return bytes
+        try {
+            if (bitmapHasRealAlpha(sampled)) {
+                if (srcEdge <= maxEdgePx) {
+                    return bytes
+                }
+                return encodeDownscaledJpeg(sampled, maxEdgePx, bytes)
+            }
+            return encodeDownscaledJpeg(sampled, maxEdgePx, bytes)
+        } finally {
+            sampled.recycle()
         }
     }
 
@@ -67,23 +107,51 @@ object ThumbnailImageTranscoder {
         val opts = BitmapFactory.Options().apply { inSampleSize = sampleSizeFor(srcEdge, maxEdgePx) }
         val sampled = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) ?: return bytes
         try {
-            val matrix = Matrix()
-            val scale = maxEdgePx.toFloat() / maxOf(sampled.width, sampled.height)
-            if (scale < 1f) {
-                matrix.postScale(scale, scale)
-            }
-            applyExifOrientation(matrix, readOrientation(bytes))
-            val oriented = Bitmap.createBitmap(sampled, 0, 0, sampled.width, sampled.height, matrix, true)
-            try {
-                return encodeJpeg(oriented)
-            } finally {
-                if (oriented !== sampled) {
-                    oriented.recycle()
-                }
-            }
+            return encodeDownscaledJpeg(sampled, maxEdgePx, bytes)
         } finally {
             sampled.recycle()
         }
+    }
+
+    private fun encodeDownscaledJpeg(sampled: Bitmap, maxEdgePx: Int, sourceBytes: ByteArray): ByteArray {
+        val matrix = Matrix()
+        val scale = maxEdgePx.toFloat() / maxOf(sampled.width, sampled.height)
+        if (scale < 1f) {
+            matrix.postScale(scale, scale)
+        }
+        applyExifOrientation(matrix, readOrientation(sourceBytes))
+        val oriented = Bitmap.createBitmap(sampled, 0, 0, sampled.width, sampled.height, matrix, true)
+        try {
+            return encodeJpeg(oriented)
+        } finally {
+            if (oriented !== sampled) {
+                oriented.recycle()
+            }
+        }
+    }
+
+    /** True when the bitmap reports an alpha channel and at least one sampled pixel is translucent. */
+    internal fun bitmapHasRealAlpha(bitmap: Bitmap): Boolean {
+        if (!bitmap.hasAlpha()) {
+            return false
+        }
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w <= 0 || h <= 0) {
+            return false
+        }
+        var y = 0
+        while (y < h) {
+            var x = 0
+            while (x < w) {
+                if (Color.alpha(bitmap.getPixel(x, y)) < 255) {
+                    return true
+                }
+                x += ALPHA_SAMPLE_STRIDE
+            }
+            y += ALPHA_SAMPLE_STRIDE
+        }
+        return false
     }
 
     /** Largest power of two that keeps the sampled edge at or above the target (no upscaling later). */

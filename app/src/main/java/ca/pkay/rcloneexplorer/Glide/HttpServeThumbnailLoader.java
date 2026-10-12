@@ -51,12 +51,18 @@ public class HttpServeThumbnailLoader implements ModelLoader<GlideUrl, InputStre
                     thumbModel,
                     new HttpServeThumbnailFetcher(thumbModel, appContext, sourceSizeLimitBytes(appContext)));
         }
+        // FolderThumbnailGlideUrl is registered on its own loader; never fall through here.
+        if (model instanceof FolderThumbnailGlideUrl) {
+            return null;
+        }
         return delegate.buildLoadData(model, width, height, options);
     }
 
     @Override
     public boolean handles(@NonNull GlideUrl model) {
-        return true;
+        // Exclude folder models so Glide does not MultiModelLoader-fall-through past the
+        // FolderThumbnailLoader (which would re-cache untranscoded originals on failure).
+        return !(model instanceof FolderThumbnailGlideUrl);
     }
 
     /** User-configured thumbnail source size limit (same preference the explorer applies). */
