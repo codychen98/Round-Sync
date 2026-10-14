@@ -41,7 +41,8 @@ object VideoProblemLister {
                 break
             }
             val dir = queue.removeFirst()
-            val listing = rclone.getDirectoryContent(remote, dir, startAtRoot) ?: run {
+            val listing = rclone.getDirectoryContent(remote, dir, startAtRoot)
+            if (listing == null) {
                 if (!rootListed && dir == normalizedRoot) {
                     return null
                 }
