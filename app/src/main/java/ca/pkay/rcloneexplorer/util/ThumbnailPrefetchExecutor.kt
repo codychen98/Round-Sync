@@ -9,6 +9,7 @@ import ca.pkay.rcloneexplorer.Glide.ThumbnailCacheIdentity
 import ca.pkay.rcloneexplorer.Glide.ThumbnailDiskCacheEvictor
 import ca.pkay.rcloneexplorer.Glide.ThumbnailDiskCacheSize
 import ca.pkay.rcloneexplorer.Glide.ThumbnailReloadPriority
+import ca.pkay.rcloneexplorer.Glide.ThumbnailRestoreDiag
 import ca.pkay.rcloneexplorer.Glide.VideoThumbnailUrl
 import ca.pkay.rcloneexplorer.Items.FileItem
 import ca.pkay.rcloneexplorer.Items.RemoteItem
@@ -88,6 +89,15 @@ object ThumbnailPrefetchExecutor {
         return cachedCount to fetchTargets
     }
 
+    private fun logMissSamples(context: Context, directoryPath: String, misses: List<FileItem>) {
+        if (misses.isEmpty()) {
+            return
+        }
+        ThumbnailDiskCacheEvictor.withOpenCache(context) { cache ->
+            ThumbnailRestoreDiag.logPrefetchMissSamples(context, cache, directoryPath, misses)
+        }
+    }
+
     private fun diskCacheProbeStats(context: Context): String {
         val cache = GlideDiskCacheHolder.get(context) ?: return "holderMaxMiB=none"
         val dir = cache.directory
@@ -134,6 +144,10 @@ object ThumbnailPrefetchExecutor {
             "event=prefetchCacheProbe cached=$cachedCount misses=${fetchTargets.size} " +
                 "total=${targets.size} path=$directoryPath $diskStats",
         )
+        if (fetchTargets.isNotEmpty() && cachedCount == 0) {
+            // Only when a folder is a total miss — confirms orphan vs key-mismatch without spam.
+            logMissSamples(app, directoryPath, fetchTargets)
+        }
         if (fetchTargets.isEmpty()) {
             SyncLog.info(
                 app,

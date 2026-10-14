@@ -96,6 +96,7 @@ object ThumbnailCachePoisonPurge {
                 "usageDeltaMiB=${(usageAfter - usageBefore) / (1024L * 1024L)} " +
                 "trimmed=${entriesAfter < entriesBefore || usageAfter < usageBefore}",
         )
+        ThumbnailRestoreDiag.logJournalSample(app, cache)
         SyncLog.info(
             app,
             LOG_TITLE,

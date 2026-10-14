@@ -3,6 +3,7 @@ package ca.pkay.rcloneexplorer.util
 import android.content.Context
 import android.net.Uri
 import ca.pkay.rcloneexplorer.Glide.ThumbnailDiskCacheSize
+import ca.pkay.rcloneexplorer.Glide.ThumbnailRestoreDiag
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
@@ -47,6 +48,7 @@ object CacheArchiveImporter {
                 return extractFromZipFile(app, file)
             }
         }
+        ThumbnailRestoreDiag.logPreExtract(app)
         val inputStream = openUriInputStream(app, uri) ?: return Result(0, 0, 0)
         return logExtractResult(app, extractFromZipStream(app, inputStream))
     }
@@ -54,6 +56,7 @@ object CacheArchiveImporter {
     @JvmStatic
     fun extractFromZipFile(context: Context, file: File): Result {
         val app = context.applicationContext
+        ThumbnailRestoreDiag.logPreExtract(app)
         return try {
             ZipFile(file).use { zipFile ->
                 logExtractResult(app, extractFromZipFileHandle(app, zipFile))

@@ -135,6 +135,10 @@ class ThumbnailDiskCache(
         }
     }
 
+    /** True when the underlying [DiskLruCache] journal is currently open in this process. */
+    @Synchronized
+    fun isJournalOpen(): Boolean = diskLruCache != null
+
     /**
      * Runs [block] while holding this cache's monitor with the journal open. Callers that rewrite
      * entry files in place (e.g. [ThumbnailCacheCompactor]) must use this instead of opening a

@@ -54,6 +54,11 @@ object GlideDiskCacheHolder {
         return ThumbnailDiskCache(dir, size).also { instance = it }
     }
 
+    /** Diagnostic peek: does not create or open a cache. */
+    @JvmStatic
+    @Synchronized
+    fun peekForDiag(): ThumbnailDiskCache? = instance
+
     /** Test hook: drops the shared instance so the next caller opens a fresh cache. */
     @Synchronized
     internal fun resetForTests() {
