@@ -2,6 +2,7 @@ package ca.pkay.rcloneexplorer.util
 
 import android.content.Context
 import android.net.Uri
+import ca.pkay.rcloneexplorer.Glide.GlideDiskCacheHolder
 import ca.pkay.rcloneexplorer.Glide.ThumbnailDiskCacheSize
 import ca.pkay.rcloneexplorer.Glide.ThumbnailRestoreDiag
 import java.io.BufferedInputStream
@@ -48,7 +49,7 @@ object CacheArchiveImporter {
                 return extractFromZipFile(app, file)
             }
         }
-        ThumbnailRestoreDiag.logPreExtract(app)
+        prepareThumbnailCacheForImport(app)
         val inputStream = openUriInputStream(app, uri) ?: return Result(0, 0, 0)
         return logExtractResult(app, extractFromZipStream(app, inputStream))
     }
@@ -56,7 +57,7 @@ object CacheArchiveImporter {
     @JvmStatic
     fun extractFromZipFile(context: Context, file: File): Result {
         val app = context.applicationContext
-        ThumbnailRestoreDiag.logPreExtract(app)
+        prepareThumbnailCacheForImport(app)
         return try {
             ZipFile(file).use { zipFile ->
                 logExtractResult(app, extractFromZipFileHandle(app, zipFile))
@@ -70,16 +71,23 @@ object CacheArchiveImporter {
         }
     }
 
+    private fun prepareThumbnailCacheForImport(context: Context) {
+        ThumbnailRestoreDiag.logPreExtract(context)
+        GlideDiskCacheHolder.closeJournalForImport(context)
+    }
+
     private fun logExtractResult(context: Context, result: Result): Result {
         val dir = CanonicalCachePathResolver.thumbnailsDirOrNull(context)
         val usage = dir?.let { ThumbnailDiskCacheSize.directoryUsageBytes(it) } ?: 0L
         val entries = dir?.let { ThumbnailDiskCacheSize.committedEntryCount(it) } ?: 0
         val memo = dir?.let { ThumbnailDiskCacheSize.memoizedMaxBytesOrNull(it) }
+        val journalBytes = dir?.let { File(it, "journal") }?.takeIf { it.isFile }?.length() ?: -1L
         SyncLog.info(
             context,
             "ThumbRestoreDbg",
             "event=cacheExtractDone extracted=${result.extracted} skipped=${result.skipped} " +
                 "failed=${result.failed} usageMiB=${usage / (1024L * 1024L)} entries=$entries " +
+                "journalBytes=$journalBytes " +
                 "memoMaxMiB=${memo?.let { it / (1024L * 1024L) } ?: "none"} " +
                 "usageExceedsMemo=${memo != null && usage > memo}",
         )
@@ -185,9 +193,16 @@ object CacheArchiveImporter {
      *
      * [ZipInputStream] often reports [entrySize] as -1 (data descriptor). In that case, any
      * non-empty local file that is at least as new as the zip entry is preserved.
+     *
+     * DiskLruCache journal sidecars are never skipped: a cold start can leave a tiny empty
+     * `journal` that would otherwise win over the backup journal when size is unknown, leaving
+     * restored `*.0` blobs as unreadable orphans.
      */
     @JvmStatic
     fun shouldSkipExtraction(targetFile: File, entrySize: Long, entryTime: Long): Boolean {
+        if (isDiskLruJournalFileName(targetFile.name)) {
+            return false
+        }
         if (!targetFile.isFile || targetFile.length() <= 0L) {
             return false
         }
@@ -199,6 +214,11 @@ object CacheArchiveImporter {
         }
         return true
     }
+
+    /** Glide/DiskLruCache journal file names that must always be taken from the backup zip. */
+    @JvmStatic
+    fun isDiskLruJournalFileName(name: String): Boolean =
+        name == "journal" || name == "journal.tmp" || name == "journal.bak"
 
     private fun processEntry(
         context: Context,

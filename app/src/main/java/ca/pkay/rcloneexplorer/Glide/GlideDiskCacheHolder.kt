@@ -59,6 +59,24 @@ object GlideDiskCacheHolder {
     @Synchronized
     fun peekForDiag(): ThumbnailDiskCache? = instance
 
+    /**
+     * Closes the live DiskLruCache journal before a backup extract rewrites `journal` on disk.
+     * Keeps the same [ThumbnailDiskCache] instance (Glide may already hold it) so the next open
+     * reads the restored journal instead of flushing a stale in-memory one over it.
+     */
+    @JvmStatic
+    @Synchronized
+    fun closeJournalForImport(context: Context) {
+        val current = instance ?: return
+        val wasOpen = current.isJournalOpen()
+        current.close()
+        SyncLog.info(
+            context.applicationContext,
+            LOG_TITLE,
+            "event=importCloseBeforeExtract journalWasOpen=$wasOpen path=${current.directory.absolutePath}",
+        )
+    }
+
     /** Test hook: drops the shared instance so the next caller opens a fresh cache. */
     @Synchronized
     internal fun resetForTests() {

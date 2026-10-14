@@ -106,6 +106,57 @@ class CacheArchiveImporterTest {
     }
 
     @Test
+    fun shouldSkipExtraction_neverSkipsDiskLruJournalEvenWhenLocalExists() {
+        for (name in listOf("journal", "journal.tmp", "journal.bak")) {
+            val file = File(temp.root, name)
+            file.writeBytes(ByteArray(31) { 1 })
+            file.setLastModified(9_000L)
+
+            assertFalse(
+                "journal sidecar must come from backup: $name",
+                CacheArchiveImporter.shouldSkipExtraction(file, -1L, -1L),
+            )
+            assertFalse(CacheArchiveImporter.shouldSkipExtraction(file, 31L, 1_000L))
+        }
+    }
+
+    @Test
+    fun isDiskLruJournalFileName_onlyJournalSidecars() {
+        assertTrue(CacheArchiveImporter.isDiskLruJournalFileName("journal"))
+        assertTrue(CacheArchiveImporter.isDiskLruJournalFileName("journal.tmp"))
+        assertTrue(CacheArchiveImporter.isDiskLruJournalFileName("journal.bak"))
+        assertFalse(CacheArchiveImporter.isDiskLruJournalFileName("journal.0"))
+        assertFalse(CacheArchiveImporter.isDiskLruJournalFileName("abc123.0"))
+    }
+
+    @Test
+    fun extractFromZipFile_overwritesTinyLocalJournal() {
+        val context = RuntimeEnvironment.getApplication()
+        val thumbnailsDir = CanonicalCachePathResolver.thumbnailsDirOrNull(context)
+        requireNotNull(thumbnailsDir)
+
+        val localJournal = File(thumbnailsDir, "journal")
+        localJournal.writeBytes(ByteArray(31) { 'x'.code.toByte() })
+        localJournal.setLastModified(9_000L)
+
+        val restoredJournal = "libcore.io.DiskLruCache\n1\n1\n1\n\nCLEAN abc 4\n".toByteArray()
+        val zip = temp.newFile("backup-journal.zip")
+        ZipOutputStream(FileOutputStream(zip)).use { zos ->
+            // Size unknown path is covered by shouldSkipExtraction unit test; ZipFile has sizes.
+            val entry = ZipEntry("cache/thumbnails/journal")
+            entry.time = 1_000L
+            zos.putNextEntry(entry)
+            zos.write(restoredJournal)
+            zos.closeEntry()
+        }
+
+        val result = CacheArchiveImporter.extractFromZipFile(context, zip)
+        assertEquals(1, result.extracted)
+        assertEquals(0, result.skipped)
+        assertTrue(localJournal.readBytes().contentEquals(restoredJournal))
+    }
+
+    @Test
     fun shouldSkipExtraction_falseWhenSizeUnknownButLocalOlder() {
         val file = temp.newFile("cached.dat")
         file.writeBytes(ByteArray(4) { 1 })
