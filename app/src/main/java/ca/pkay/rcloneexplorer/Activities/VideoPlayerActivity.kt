@@ -22,6 +22,7 @@ import androidx.media3.common.ParserException
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
+import androidx.media3.common.Tracks
 import androidx.media3.common.util.Util
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -79,6 +80,10 @@ class VideoPlayerActivity : AppCompatActivity() {
 
     /** One `playbackReady` SyncLog line per playlist index per activity instance (avoids rebuffer spam). */
     private val playbackReadyDiagLoggedIndices = HashSet<Int>()
+
+    /** One audio-track SyncLog / unsupported toast per playlist index per activity instance. */
+    private val audioTrackDiagLoggedIndices = HashSet<Int>()
+    private val unsupportedAudioToastShownIndices = HashSet<Int>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -196,6 +201,11 @@ class VideoPlayerActivity : AppCompatActivity() {
         player = ExoPlayer.Builder(this, renderersFactory).build().also { exo ->
             playerView.player = exo
 
+            exo.trackSelectionParameters = exo.trackSelectionParameters
+                .buildUpon()
+                .setPreferredAudioLanguages("ja", "jpn", "en", "eng")
+                .build()
+
             exo.setMediaSources(sources, startIndex, 0L)
 
             exo.addListener(object : Player.Listener {
@@ -207,6 +217,10 @@ class VideoPlayerActivity : AppCompatActivity() {
                     if (playbackState == Player.STATE_READY) {
                         maybeLogPlaybackReadySeekDiag(exo, names)
                     }
+                }
+
+                override fun onTracksChanged(tracks: Tracks) {
+                    maybeLogAudioTrackDiag(exo, names, tracks)
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
@@ -257,6 +271,59 @@ class VideoPlayerActivity : AppCompatActivity() {
             }
         }
         SyncLog.info(this, SYNC_LOG_VIDEO_PLAYBACK_TITLE, content)
+    }
+
+    private fun maybeLogAudioTrackDiag(exo: ExoPlayer, names: Array<String>, tracks: Tracks) {
+        val idx = exo.currentMediaItemIndex
+        if (!audioTrackDiagLoggedIndices.add(idx)) {
+            return
+        }
+        val basename = names.getOrElse(idx) { "" }.replace('\n', ' ').replace('\r', ' ')
+        val audioParts = ArrayList<String>()
+        var audioCount = 0
+        var selectedCount = 0
+        var firstUnsupportedMime: String? = null
+        for (group in tracks.groups) {
+            if (group.type != C.TRACK_TYPE_AUDIO) {
+                continue
+            }
+            for (i in 0 until group.length) {
+                audioCount++
+                val format = group.getTrackFormat(i)
+                val mime = format.sampleMimeType.orEmpty()
+                val lang = format.language.orEmpty()
+                val supported = group.isTrackSupported(i)
+                val selected = group.isTrackSelected(i)
+                if (selected) {
+                    selectedCount++
+                }
+                if (!supported && firstUnsupportedMime == null && mime.isNotEmpty()) {
+                    firstUnsupportedMime = mime
+                }
+                audioParts.add(
+                    "mime=$mime lang=$lang supported=$supported selected=$selected",
+                )
+            }
+        }
+        val content = buildString {
+            append("event=audioTracks index=").append(idx)
+            append(" basename=").append(basename)
+            append(" count=").append(audioCount)
+            if (audioParts.isEmpty()) {
+                append(" tracks=none")
+            } else {
+                append(" tracks=[").append(audioParts.joinToString("; ")).append("]")
+            }
+        }
+        SyncLog.info(this, SYNC_LOG_VIDEO_PLAYBACK_TITLE, content)
+        if (audioCount > 0 && selectedCount == 0 && unsupportedAudioToastShownIndices.add(idx)) {
+            val mimeForToast = firstUnsupportedMime ?: "unknown"
+            Toast.makeText(
+                this,
+                getString(R.string.video_audio_format_not_supported, mimeForToast),
+                Toast.LENGTH_LONG,
+            ).show()
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {

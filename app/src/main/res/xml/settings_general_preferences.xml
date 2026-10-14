@@ -35,6 +35,11 @@
         android:title="@string/title_activity_media_folder_policy"
         app:summary="@string/pref_media_folder_policy_summary" />
 
+    <Preference
+        android:key="videoProblemScanEntryKey"
+        android:title="@string/title_activity_video_problem_scan"
+        app:summary="@string/pref_video_problem_scan_summary" />
+
     <PreferenceCategory android:title="@string/preference_category_header_selected_folder_media_cache">
         <Preference
             android:key="clearSelectedFolderMediaCacheKey"

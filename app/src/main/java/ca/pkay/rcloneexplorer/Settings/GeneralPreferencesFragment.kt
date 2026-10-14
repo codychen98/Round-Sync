@@ -13,6 +13,7 @@ import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.PreferenceManager
 import ca.pkay.rcloneexplorer.Activities.MediaFolderPolicyActivity
+import ca.pkay.rcloneexplorer.Activities.VideoProblemScanActivity
 import ca.pkay.rcloneexplorer.AppShortcutsHelper
 import ca.pkay.rcloneexplorer.Glide.DuplicateVideoThumbnailSweep
 import ca.pkay.rcloneexplorer.Items.RemoteItem
@@ -62,6 +63,12 @@ class GeneralPreferencesFragment : PreferenceFragmentCompat() {
         val mediaFolderPolicyPreference = findPreference("mediaFolderPolicyEntryKey") as Preference?
         mediaFolderPolicyPreference?.setOnPreferenceClickListener {
             startActivity(Intent(requireContext(), MediaFolderPolicyActivity::class.java))
+            true
+        }
+
+        val videoProblemScanPreference = findPreference("videoProblemScanEntryKey") as Preference?
+        videoProblemScanPreference?.setOnPreferenceClickListener {
+            startActivity(Intent(requireContext(), VideoProblemScanActivity::class.java))
             true
         }
 

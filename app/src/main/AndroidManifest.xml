@@ -192,6 +192,12 @@
             android:parentActivityName=".Activities.MainActivity"
             android:theme="@style/AppTheme.NoActionBar" />
         <activity
+            android:name=".Activities.VideoProblemScanActivity"
+            android:exported="false"
+            android:label="@string/title_activity_video_problem_scan"
+            android:parentActivityName=".Activities.MainActivity"
+            android:theme="@style/AppTheme.NoActionBar" />
+        <activity
             android:name=".Activities.SharingActivity"
             android:exported="true"
             android:label="@string/app_name"
