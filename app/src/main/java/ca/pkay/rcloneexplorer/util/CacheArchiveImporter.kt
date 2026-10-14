@@ -2,6 +2,7 @@ package ca.pkay.rcloneexplorer.util
 
 import android.content.Context
 import android.net.Uri
+import ca.pkay.rcloneexplorer.Glide.ThumbnailDiskCacheSize
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
@@ -47,14 +48,15 @@ object CacheArchiveImporter {
             }
         }
         val inputStream = openUriInputStream(app, uri) ?: return Result(0, 0, 0)
-        return extractFromZipStream(app, inputStream)
+        return logExtractResult(app, extractFromZipStream(app, inputStream))
     }
 
     @JvmStatic
     fun extractFromZipFile(context: Context, file: File): Result {
+        val app = context.applicationContext
         return try {
             ZipFile(file).use { zipFile ->
-                extractFromZipFileHandle(context.applicationContext, zipFile)
+                logExtractResult(app, extractFromZipFileHandle(app, zipFile))
             }
         } catch (t: IOException) {
             FLog.w(TAG, "Could not open import file", t)
@@ -63,6 +65,22 @@ object CacheArchiveImporter {
             FLog.w(TAG, "Cache import interrupted", t)
             Result(0, 0, 0)
         }
+    }
+
+    private fun logExtractResult(context: Context, result: Result): Result {
+        val dir = CanonicalCachePathResolver.thumbnailsDirOrNull(context)
+        val usage = dir?.let { ThumbnailDiskCacheSize.directoryUsageBytes(it) } ?: 0L
+        val entries = dir?.let { ThumbnailDiskCacheSize.committedEntryCount(it) } ?: 0
+        val memo = dir?.let { ThumbnailDiskCacheSize.memoizedMaxBytesOrNull(it) }
+        SyncLog.info(
+            context,
+            "ThumbRestoreDbg",
+            "event=cacheExtractDone extracted=${result.extracted} skipped=${result.skipped} " +
+                "failed=${result.failed} usageMiB=${usage / (1024L * 1024L)} entries=$entries " +
+                "memoMaxMiB=${memo?.let { it / (1024L * 1024L) } ?: "none"} " +
+                "usageExceedsMemo=${memo != null && usage > memo}",
+        )
+        return result
     }
 
     private fun extractFromZipFileHandle(context: Context, zipFile: ZipFile): Result {

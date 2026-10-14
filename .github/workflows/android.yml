@@ -39,39 +39,33 @@ jobs:
         mkdir -p ~/.android
         echo "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" | base64 -d > ~/.android/debug.keystore
         keytool -list -keystore ~/.android/debug.keystore -storepass android -noprompt
-    - name: Build app
-      run: ./gradlew assembleOssDebug
+    - name: Build RoundSyncDebug and RoundSync (ciCurrent)
+      run: ./gradlew assembleOssDebug assembleOssCiCurrent
     - name: Verify FFmpeg JNI in OSS debug APK (video thumb fallback)
       run: |
         APK=$(ls app/build/outputs/apk/oss/debug/*-oss-arm64-v8a-debug.apk)
         unzip -l "$APK" | grep -q "lib/arm64-v8a/libffmpegJNI.so"
-    - name: Verify APK signature
+    - name: Verify FFmpeg JNI in OSS ciCurrent APK
+      run: |
+        APK=$(ls app/build/outputs/apk/oss/ciCurrent/*-oss-arm64-v8a-ciCurrent.apk)
+        unzip -l "$APK" | grep -q "lib/arm64-v8a/libffmpegJNI.so"
+    - name: Verify debug APK signature
       run: |
         APK=$(ls app/build/outputs/apk/oss/debug/*-oss-arm64-v8a-debug.apk)
         $ANDROID_SDK_ROOT/build-tools/$(ls $ANDROID_SDK_ROOT/build-tools/ | tail -1)/apksigner verify --print-certs "$APK" | grep "SHA-256"
-    - name: Upload APK (arm)
+    - name: Verify ciCurrent APK signature
+      run: |
+        APK=$(ls app/build/outputs/apk/oss/ciCurrent/*-oss-arm64-v8a-ciCurrent.apk)
+        $ANDROID_SDK_ROOT/build-tools/$(ls $ANDROID_SDK_ROOT/build-tools/ | tail -1)/apksigner verify --print-certs "$APK" | grep "SHA-256"
+    - name: Upload RoundSyncDebug APK (arm64)
       uses: actions/upload-artifact@v4
       with:
-        name: nightly-armeabi.apk
-        path: ${{ github.workspace }}/app/build/outputs/apk/oss/debug/*-oss-armeabi-v7a-debug.apk
-    - name: Upload APK (arm64)
-      uses: actions/upload-artifact@v4
-      with:
-        name: nightly-arm64.apk
+        name: roundsync-debug-arm64
         path: ${{ github.workspace }}/app/build/outputs/apk/oss/debug/*-oss-arm64-v8a-debug.apk
-    - name: Upload APK (x86)
+        retention-days: 14
+    - name: Upload RoundSync current APK (arm64)
       uses: actions/upload-artifact@v4
       with:
-        name: nightly-x86.apk
-        path: ${{ github.workspace }}/app/build/outputs/apk/oss/debug/*-oss-x86-debug.apk
-    - name: Upload APK (arm)
-      uses: actions/upload-artifact@v4
-      with:
-        name: nightly-x64.apk
-        path: ${{ github.workspace }}/app/build/outputs/apk/oss/debug/*-oss-x86_64-debug.apk
-    - name: Upload APK (universal)
-      uses: actions/upload-artifact@v4
-      with:
-        name: nightly-universal.apk
-        path: ${{ github.workspace }}/app/build/outputs/apk/oss/debug/*-oss-universal-debug.apk
+        name: roundsync-current-arm64
+        path: ${{ github.workspace }}/app/build/outputs/apk/oss/ciCurrent/*-oss-arm64-v8a-ciCurrent.apk
         retention-days: 14

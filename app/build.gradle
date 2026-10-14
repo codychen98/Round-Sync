@@ -46,6 +46,29 @@ android {
             signingConfig signingConfigs.debug
             minifyEnabled false
             shrinkResources false
+            // Side-by-side install: does not replace the production package or its data.
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-DEBUG"
+            resValue("string", "app_name", "RoundSyncDebug")
+            resValue("string", "app_short_name", "RoundSyncDebug")
+            manifestPlaceholders = [
+                    appIcon: "@mipmap/ic_launcher_debug",
+                    appIconRound: "@mipmap/ic_launcher_debug_round"
+            ]
+        }
+        // Lean CI artifact with the production applicationId (no .debug suffix).
+        // Same debuggable/debug-keystore style as debug; use for updating the
+        // day-to-day RoundSync install without installing RoundSyncDebug.
+        // Defined without initWith(debug) so applicationIdSuffix ".debug" cannot leak.
+        ciCurrent {
+            debuggable true
+            signingConfig signingConfigs.debug
+            minifyEnabled false
+            shrinkResources false
+            versionNameSuffix "-CI"
+            matchingFallbacks = ['debug']
+            resValue("string", "app_name", "RoundSync")
+            resValue("string", "app_short_name", "RoundSync")
             manifestPlaceholders = [
                     appIcon: "@mipmap/ic_launcher_debug",
                     appIconRound: "@mipmap/ic_launcher_debug_round"
@@ -104,6 +127,8 @@ android {
     ]
 
     android.applicationVariants.all { variant ->
+        // Match SAF/VCP BuildConfig to the final applicationId (includes .debug suffix).
+        variant.buildConfigField "String", "VCP_AUTHORITY", "\"${variant.applicationId}.vcp\""
         variant.outputs.each { output ->
             output.versionCodeOverride =
                     project.ext.versionCodes.get(output.getFilter(com.android.build.OutputFile.ABI), 0) + android.defaultConfig.versionCode
@@ -129,15 +154,6 @@ android {
         generateLocaleConfig true
     }
 
-    buildTypes {
-        getByName("debug") {
-            versionNameSuffix = "-DEBUG"
-            buildConfigField "java.lang.String", "VCP_AUTHORITY", "\"" + defaultConfig.applicationId + ".vcp\"";
-            resValue("string", "app_name", "RoundSync")
-            resValue("string", "app_short_name", "RoundSync")
-        }
-    }
-
     lint {
         baseline = file("lint-baseline.xml")
         abortOnError = true
@@ -146,8 +162,10 @@ android {
     }
 
     gradle.projectsEvaluated {
-        // Only build arm64 rclone for debug, all architectures for release
-        tasks.matching { it.name.contains('Debug') && it.name.startsWith('pre') }.configureEach {
+        // Only build arm64 rclone for debug/ciCurrent, all architectures for release
+        tasks.matching {
+            it.name.startsWith('pre') && (it.name.contains('Debug') || it.name.contains('CiCurrent'))
+        }.configureEach {
             dependsOn(':rclone:buildArm64')
         }
         tasks.matching { it.name.contains('Release') && it.name.startsWith('pre') }.configureEach {

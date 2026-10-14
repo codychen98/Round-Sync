@@ -21,7 +21,7 @@ import java.io.IOException
  */
 class ThumbnailDiskCache(
     val directory: File,
-    private val maxSizeBytes: Long,
+    val maxSizeBytes: Long,
 ) : DiskCache {
 
     private val safeKeys = SafeKeyGenerator()

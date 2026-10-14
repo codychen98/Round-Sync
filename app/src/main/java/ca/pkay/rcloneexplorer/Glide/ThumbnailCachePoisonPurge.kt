@@ -67,8 +67,35 @@ object ThumbnailCachePoisonPurge {
     fun runAfterImport(context: Context): Result? {
         val app = context.applicationContext
         val cache = GlideDiskCacheHolder.get(app) ?: return null
+        val dir = cache.directory
+        val usageBefore = ThumbnailDiskCacheSize.directoryUsageBytes(dir)
+        val entriesBefore = ThumbnailDiskCacheSize.committedEntryCount(dir)
+        val holderMax = cache.maxSizeBytes
+        val memoMax = ThumbnailDiskCacheSize.memoizedMaxBytesOrNull(dir)
+        SyncLog.info(
+            app,
+            "ThumbRestoreDbg",
+            "event=importReopenBefore usageMiB=${usageBefore / (1024L * 1024L)} " +
+                "entries=$entriesBefore holderMaxMiB=${holderMax / (1024L * 1024L)} " +
+                "memoMaxMiB=${memoMax?.let { it / (1024L * 1024L) } ?: "none"} " +
+                "usageExceedsHolderMax=${usageBefore > holderMax}",
+        )
         cache.close()
         val result = purge(cache, PreferenceManager.getDefaultSharedPreferences(app))
+        // Force DiskLruCache.open even when purge found no poisoned keys, so an undersized
+        // holderMax trims restored blobs here (visible in the after stats) rather than later.
+        cache.withExclusiveAccess { }
+        val usageAfter = ThumbnailDiskCacheSize.directoryUsageBytes(dir)
+        val entriesAfter = ThumbnailDiskCacheSize.committedEntryCount(dir)
+        SyncLog.info(
+            app,
+            "ThumbRestoreDbg",
+            "event=importReopenAfter usageMiB=${usageAfter / (1024L * 1024L)} " +
+                "entries=$entriesAfter scanned=${result.scanned} removed=${result.removed} " +
+                "entryDelta=${entriesAfter - entriesBefore} " +
+                "usageDeltaMiB=${(usageAfter - usageBefore) / (1024L * 1024L)} " +
+                "trimmed=${entriesAfter < entriesBefore || usageAfter < usageBefore}",
+        )
         SyncLog.info(
             app,
             LOG_TITLE,

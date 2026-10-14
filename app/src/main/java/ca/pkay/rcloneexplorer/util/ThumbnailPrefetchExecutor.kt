@@ -2,10 +2,12 @@ package ca.pkay.rcloneexplorer.util
 
 import android.content.Context
 import android.util.Base64
+import ca.pkay.rcloneexplorer.Glide.GlideDiskCacheHolder
 import ca.pkay.rcloneexplorer.Glide.HttpServeThumbnailGlideUrl
 import ca.pkay.rcloneexplorer.Glide.PinnedVideoThumbnailStore
 import ca.pkay.rcloneexplorer.Glide.ThumbnailCacheIdentity
 import ca.pkay.rcloneexplorer.Glide.ThumbnailDiskCacheEvictor
+import ca.pkay.rcloneexplorer.Glide.ThumbnailDiskCacheSize
 import ca.pkay.rcloneexplorer.Glide.ThumbnailReloadPriority
 import ca.pkay.rcloneexplorer.Glide.VideoThumbnailUrl
 import ca.pkay.rcloneexplorer.Items.FileItem
@@ -86,6 +88,14 @@ object ThumbnailPrefetchExecutor {
         return cachedCount to fetchTargets
     }
 
+    private fun diskCacheProbeStats(context: Context): String {
+        val cache = GlideDiskCacheHolder.get(context) ?: return "holderMaxMiB=none"
+        val dir = cache.directory
+        return "holderMaxMiB=${cache.maxSizeBytes / (1024L * 1024L)} " +
+            "usageMiB=${ThumbnailDiskCacheSize.directoryUsageBytes(dir) / (1024L * 1024L)} " +
+            "entries=${ThumbnailDiskCacheSize.committedEntryCount(dir)}"
+    }
+
     private fun isPinnedVideo(context: Context, item: FileItem): Boolean {
         val mime = item.mimeType ?: return false
         if (!mime.startsWith("video/")) {
@@ -111,11 +121,18 @@ object ThumbnailPrefetchExecutor {
             return FolderPrefetchOutcome(loaded = 0, total = 0, stoppedEarly = false)
         }
         val (cachedCount, fetchTargets) = partitionCachedTargets(app, targets)
+        val diskStats = diskCacheProbeStats(app)
         SyncLog.info(
             app,
             "MediaPrepDbg",
             "event=prefetchCacheProbe cached=$cachedCount misses=${fetchTargets.size} " +
-                "total=${targets.size} path=$directoryPath",
+                "total=${targets.size} path=$directoryPath $diskStats",
+        )
+        SyncLog.info(
+            app,
+            "ThumbRestoreDbg",
+            "event=prefetchCacheProbe cached=$cachedCount misses=${fetchTargets.size} " +
+                "total=${targets.size} path=$directoryPath $diskStats",
         )
         if (fetchTargets.isEmpty()) {
             SyncLog.info(

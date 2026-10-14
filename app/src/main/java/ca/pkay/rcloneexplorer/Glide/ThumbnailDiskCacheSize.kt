@@ -41,6 +41,12 @@ object ThumbnailDiskCacheSize {
         val path = thumbnailsDir.absolutePath
         memoized?.let { (cachedPath, size) ->
             if (cachedPath == path) {
+                FLog.d(
+                    TAG,
+                    "Thumbnail disk cache size memo hit size=%d MiB path=%s",
+                    size / (1024L * 1024L),
+                    path,
+                )
                 return size
             }
         }
@@ -56,6 +62,29 @@ object ThumbnailDiskCacheSize {
         }
     }
 
+    /** Bytes currently occupied by files directly under [dir] (DiskLruCache is flat). */
+    @JvmStatic
+    fun directoryUsageBytes(dir: File): Long =
+        dir.listFiles()?.asSequence()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
+
+    /** Count of committed DiskLruCache value files (`*.0`). */
+    @JvmStatic
+    fun committedEntryCount(dir: File): Int =
+        dir.listFiles()?.count { it.isFile && it.name.endsWith(".0") } ?: 0
+
+    /** Process-memoized max size for [dir], or null if [forDir] has not run yet for that path. */
+    @JvmStatic
+    fun memoizedMaxBytesOrNull(dir: File): Long? {
+        val path = dir.absolutePath
+        return memoized?.let { (cachedPath, size) -> if (cachedPath == path) size else null }
+    }
+
+    /** Test hook: clears process memo so the next [forDir] recomputes from disk. */
+    @JvmStatic
+    internal fun clearMemoForTests() {
+        memoized = null
+    }
+
     private fun computeForDir(dir: File): Long {
         return try {
             val available = StatFs(dir.absolutePath).availableBytes
@@ -63,7 +92,7 @@ object ThumbnailDiskCacheSize {
             val size = compute(available, usage)
             FLog.d(
                 TAG,
-                "Thumbnail disk cache size=%d MiB (available=%d MiB, usage=%d MiB)",
+                "Thumbnail disk cache size=%d MiB (available=%d MiB, usage=%d MiB) memoized=false",
                 size / (1024L * 1024L),
                 available / (1024L * 1024L),
                 usage / (1024L * 1024L),
@@ -74,8 +103,4 @@ object ThumbnailDiskCacheSize {
             FLOOR_BYTES
         }
     }
-
-    /** DiskLruCache keeps a flat directory, so a single-level listing is sufficient. */
-    private fun directoryUsageBytes(dir: File): Long =
-        dir.listFiles()?.asSequence()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
 }

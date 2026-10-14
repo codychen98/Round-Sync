@@ -25,7 +25,7 @@ public class RoundSyncGlideModule extends AppGlideModule {
                 CanonicalCachePathResolver.INSTANCE.thumbnailsDirOrNull(context.getApplicationContext());
         if (thumbnailsDir != null) {
             // Single DiskLruCache instance shared with ThumbnailDiskCacheEvictor (see holder).
-            builder.setDiskCache(GlideDiskCacheHolder.factory(thumbnailsDir));
+            builder.setDiskCache(GlideDiskCacheHolder.factory(context, thumbnailsDir));
         } else {
             builder.setDiskCache(new InternalCacheDiskCacheFactory(
                     context, ThumbnailDiskCacheSize.FLOOR_BYTES));
