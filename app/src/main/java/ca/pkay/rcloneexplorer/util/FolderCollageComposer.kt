@@ -3,17 +3,15 @@ package ca.pkay.rcloneexplorer.util
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Paint
 import android.graphics.Rect
-import android.graphics.RectF
-import android.graphics.drawable.Drawable
 import androidx.annotation.VisibleForTesting
 import kotlin.math.max
 
 /**
- * Composes 1–4 cell bitmaps into a single folder-tile collage.
+ * Composes 1–4 cell bitmaps into a single folder-tile collage with outer container inset
+ * (so the tile reads as a folder preview, not a full-bleed file thumb).
  *
- * - 1: full bleed
+ * - 1: single cell inset
  * - 2: side-by-side rectangles
  * - 3: two on top, one wide bottom
  * - 4: 2×2 equal squares
@@ -21,55 +19,70 @@ import kotlin.math.max
 object FolderCollageComposer {
 
     const val DEFAULT_SIZE_PX = 512
+    /** Outer margin as fraction of tile size (container padding). */
+    private const val OUTER_INSET_FRACTION = 0.08f
     private const val GUTTER_PX = 4
-    private const val BADGE_FRACTION = 0.20f
-    private const val BADGE_PAD_FRACTION = 0.04f
 
     @JvmStatic
     @JvmOverloads
     fun compose(
         cells: List<Bitmap>,
-        badge: Drawable?,
         sizePx: Int = DEFAULT_SIZE_PX,
     ): Bitmap {
         val usable = cells.filter { !it.isRecycled && it.width > 0 && it.height > 0 }.take(4)
         val out = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(out)
-        canvas.drawColor(Color.rgb(0x22, 0x22, 0x22))
+        // Container background (matches dark tile chrome).
+        canvas.drawColor(Color.rgb(0x2A, 0x2A, 0x2E))
         if (usable.isEmpty()) {
-            drawBadge(canvas, badge, sizePx)
             return out
         }
+        val inset = max(2, (sizePx * OUTER_INSET_FRACTION).toInt())
+        val content = Rect(inset, inset, sizePx - inset, sizePx - inset)
         val gutter = max(1, (sizePx * GUTTER_PX) / DEFAULT_SIZE_PX)
         when (usable.size) {
-            1 -> drawCell(canvas, usable[0], Rect(0, 0, sizePx, sizePx))
+            1 -> drawCell(canvas, usable[0], content)
             2 -> {
-                val mid = (sizePx - gutter) / 2
-                drawCell(canvas, usable[0], Rect(0, 0, mid, sizePx))
-                drawCell(canvas, usable[1], Rect(mid + gutter, 0, sizePx, sizePx))
+                val mid = content.left + (content.width() - gutter) / 2
+                drawCell(canvas, usable[0], Rect(content.left, content.top, mid, content.bottom))
+                drawCell(
+                    canvas,
+                    usable[1],
+                    Rect(mid + gutter, content.top, content.right, content.bottom),
+                )
             }
             3 -> {
-                val midX = (sizePx - gutter) / 2
-                val midY = (sizePx - gutter) / 2
-                drawCell(canvas, usable[0], Rect(0, 0, midX, midY))
-                drawCell(canvas, usable[1], Rect(midX + gutter, 0, sizePx, midY))
-                drawCell(canvas, usable[2], Rect(0, midY + gutter, sizePx, sizePx))
+                val midX = content.left + (content.width() - gutter) / 2
+                val midY = content.top + (content.height() - gutter) / 2
+                drawCell(canvas, usable[0], Rect(content.left, content.top, midX, midY))
+                drawCell(canvas, usable[1], Rect(midX + gutter, content.top, content.right, midY))
+                drawCell(
+                    canvas,
+                    usable[2],
+                    Rect(content.left, midY + gutter, content.right, content.bottom),
+                )
             }
             else -> {
-                val midX = (sizePx - gutter) / 2
-                val midY = (sizePx - gutter) / 2
-                drawCell(canvas, usable[0], Rect(0, 0, midX, midY))
-                drawCell(canvas, usable[1], Rect(midX + gutter, 0, sizePx, midY))
-                drawCell(canvas, usable[2], Rect(0, midY + gutter, midX, sizePx))
-                drawCell(canvas, usable[3], Rect(midX + gutter, midY + gutter, sizePx, sizePx))
+                val midX = content.left + (content.width() - gutter) / 2
+                val midY = content.top + (content.height() - gutter) / 2
+                drawCell(canvas, usable[0], Rect(content.left, content.top, midX, midY))
+                drawCell(canvas, usable[1], Rect(midX + gutter, content.top, content.right, midY))
+                drawCell(canvas, usable[2], Rect(content.left, midY + gutter, midX, content.bottom))
+                drawCell(
+                    canvas,
+                    usable[3],
+                    Rect(midX + gutter, midY + gutter, content.right, content.bottom),
+                )
             }
         }
-        drawBadge(canvas, badge, sizePx)
         return out
     }
 
     @VisibleForTesting
     internal fun drawCell(canvas: Canvas, src: Bitmap, dst: Rect) {
+        if (dst.width() <= 0 || dst.height() <= 0) {
+            return
+        }
         val srcRect = centerCropSrc(src.width, src.height, dst.width(), dst.height())
         canvas.drawBitmap(src, srcRect, dst, null)
     }
@@ -89,34 +102,5 @@ object FolderCollageComposer {
             val top = (srcH - newH) / 2
             Rect(0, top, srcW, top + newH)
         }
-    }
-
-    private fun drawBadge(canvas: Canvas, badge: Drawable?, sizePx: Int) {
-        if (badge == null) {
-            return
-        }
-        val pad = (sizePx * BADGE_PAD_FRACTION).toInt().coerceAtLeast(2)
-        val badgeSize = (sizePx * BADGE_FRACTION).toInt().coerceAtLeast(16)
-        val left = pad
-        val top = sizePx - pad - badgeSize
-        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(0xB0, 0x10, 0x10, 0x10)
-        }
-        val radius = badgeSize * 0.22f
-        canvas.drawRoundRect(
-            RectF(
-                left.toFloat() - pad * 0.35f,
-                top.toFloat() - pad * 0.35f,
-                (left + badgeSize + pad * 0.35f),
-                (top + badgeSize + pad * 0.35f),
-            ),
-            radius,
-            radius,
-            bgPaint,
-        )
-        val mut = badge.mutate()
-        mut.setBounds(left, top, left + badgeSize, top + badgeSize)
-        mut.alpha = 230
-        mut.draw(canvas)
     }
 }

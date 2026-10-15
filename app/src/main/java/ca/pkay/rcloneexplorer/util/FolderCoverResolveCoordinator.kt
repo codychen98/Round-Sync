@@ -2,26 +2,17 @@ package ca.pkay.rcloneexplorer.util
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.drawable.Drawable
 import android.os.Handler
 import android.os.Looper
-import androidx.core.content.ContextCompat
-import com.bumptech.glide.Glide
-import com.bumptech.glide.load.engine.DiskCacheStrategy
-import com.bumptech.glide.request.RequestOptions
-import ca.pkay.rcloneexplorer.Glide.ThumbnailCacheIdentity
-import ca.pkay.rcloneexplorer.Glide.ThumbnailDiskCacheEvictor
 import ca.pkay.rcloneexplorer.Items.RemoteItem
-import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Rclone
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 
 /**
- * Resolves folder-tile collages from **already disk-cached** file thumbnails only.
- * Never issues network / video-decode work to fill missing cells.
+ * Resolves folder-tile collages from **already available** file thumbnails only
+ * (pinned JPEGs or Glide disk-cache files). Never triggers video regenerate / serve fetch.
  */
 class FolderCoverResolveCoordinator(
     appContext: Context,
@@ -47,14 +38,22 @@ class FolderCoverResolveCoordinator(
     private val mainHandler = Handler(Looper.getMainLooper())
 
     fun peek(remoteName: String, folderPath: String): Outcome? {
-        return cache[cacheKey(remoteName, folderPath)]
+        val existing = cache[cacheKey(remoteName, folderPath)]
+        if (existing is Outcome.Found && existing.collage.isRecycled) {
+            cache.remove(cacheKey(remoteName, folderPath))
+            return null
+        }
+        return existing
     }
 
     fun request(remote: RemoteItem, folderPath: String) {
         val key = cacheKey(remote.name, folderPath)
         val existing = cache[key]
-        if (existing is Outcome.Found) {
+        if (existing is Outcome.Found && !existing.collage.isRecycled) {
             return
+        }
+        if (existing is Outcome.Found && existing.collage.isRecycled) {
+            cache.remove(key)
         }
         if (existing is Outcome.None) {
             val at = noneResolvedAtMs[key] ?: 0L
@@ -91,6 +90,17 @@ class FolderCoverResolveCoordinator(
         }
     }
 
+    /** Drops negative cache only so returning to a parent can rebuild after pins warm up. */
+    fun clearNegativeCache() {
+        val keys = cache.keys.toList()
+        for (key in keys) {
+            if (cache[key] is Outcome.None) {
+                cache.remove(key)
+                noneResolvedAtMs.remove(key)
+            }
+        }
+    }
+
     fun clearCache() {
         cache.clear()
         noneResolvedAtMs.clear()
@@ -113,41 +123,33 @@ class FolderCoverResolveCoordinator(
             entries,
             sizeLimitBytesSupplier(),
         )
-        val cachedCovers = ArrayList<FolderCoverResolver.Cover>(4)
-        for (cover in candidates) {
-            if (cachedCovers.size >= 4) {
-                break
-            }
-            if (isFileThumbCached(remote.name, cover.path, cover.mimeType)) {
-                cachedCovers.add(cover)
-            }
-        }
-        if (cachedCovers.isEmpty()) {
-            ThumbRootCauseLog.info(
-                appContext,
-                "folderCollageNone",
-                "rowPath=$folderPath candidates=${candidates.size} cached=0",
-            )
-            return Outcome.None
-        }
-
-        val cellSize = FolderCollageComposer.DEFAULT_SIZE_PX / 2
-        val cellBitmaps = ArrayList<Bitmap>(cachedCovers.size)
+        val cellSize = (FolderCollageComposer.DEFAULT_SIZE_PX * 0.42f).toInt().coerceAtLeast(64)
+        val cellBitmaps = ArrayList<Bitmap>(4)
         try {
-            for (cover in cachedCovers) {
-                val bmp = loadCachedThumbBitmap(remote.name, cover, cellSize) ?: continue
+            for (cover in candidates) {
+                if (cellBitmaps.size >= 4) {
+                    break
+                }
+                if (!FolderCollageCellLoader.isAvailable(appContext, remote.name, cover)) {
+                    continue
+                }
+                val bmp = FolderCollageCellLoader.loadBitmap(
+                    appContext,
+                    remote.name,
+                    cover,
+                    cellSize,
+                ) ?: continue
                 cellBitmaps.add(bmp)
             }
             if (cellBitmaps.isEmpty()) {
                 ThumbRootCauseLog.info(
                     appContext,
                     "folderCollageNone",
-                    "rowPath=$folderPath candidates=${candidates.size} cachedLabel=${cachedCovers.size} decode=0",
+                    "rowPath=$folderPath candidates=${candidates.size} cells=0",
                 )
                 return Outcome.None
             }
-            val badge: Drawable? = ContextCompat.getDrawable(appContext, R.drawable.ic_folder)
-            val collage = FolderCollageComposer.compose(cellBitmaps, badge)
+            val collage = FolderCollageComposer.compose(cellBitmaps)
             ThumbRootCauseLog.info(
                 appContext,
                 "folderCollageReady",
@@ -160,46 +162,6 @@ class FolderCoverResolveCoordinator(
                     bmp.recycle()
                 }
             }
-        }
-    }
-
-    private fun isFileThumbCached(remoteName: String, path: String, mimeType: String): Boolean {
-        val label = ThumbnailCacheIdentity.prefetchDiskCacheKeyLabel(
-            appContext,
-            remoteName,
-            path,
-            mimeType,
-        ) ?: return false
-        return ThumbnailDiskCacheEvictor.isCachedByLabel(appContext, label)
-    }
-
-    private fun loadCachedThumbBitmap(
-        remoteName: String,
-        cover: FolderCoverResolver.Cover,
-        cellSize: Int,
-    ): Bitmap? {
-        val model = ThumbnailCacheIdentity.buildDiskCacheLoadModel(
-            remoteName,
-            cover.path,
-            cover.mimeType,
-        ) ?: return null
-        val future = Glide.with(appContext)
-            .asBitmap()
-            .load(model)
-            .apply(
-                RequestOptions()
-                    .onlyRetrieveFromCache(true)
-                    .diskCacheStrategy(DiskCacheStrategy.DATA)
-                    .centerCrop()
-                    .dontAnimate(),
-            )
-            .submit(cellSize, cellSize)
-        return try {
-            future.get(3, TimeUnit.SECONDS)
-        } catch (_: Exception) {
-            null
-        } finally {
-            Glide.with(appContext).clear(future)
         }
     }
 

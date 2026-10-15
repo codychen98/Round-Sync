@@ -1526,6 +1526,15 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 continue;
             }
             cancelActiveRetryListener(holder);
+            if (item.isDir()
+                    && folderCoverCoordinator != null
+                    && item.getRemote() != null
+                    && folderCoverCoordinator.peek(
+                            item.getRemote().getName(), item.getPath())
+                    instanceof FolderCoverResolveCoordinator.Outcome.Found) {
+                // Keep in-memory collage on the ImageView; serve stop does not invalidate it.
+                continue;
+            }
             clearFileIcon(holder, "clearVisibleThumbnailGlideRequestsOnStop");
             holder.lastBoundThumbKey = null;
             holder.fileIcon.setImageTintList(holder.defaultIconTint);
@@ -1638,7 +1647,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     public void newData(List<FileItem> data) {
         invalidateThumbPolicyCache();
         if (folderCoverCoordinator != null) {
-            folderCoverCoordinator.clearCache();
+            // Keep successful collages when navigating away/back; only retry prior misses.
+            folderCoverCoordinator.clearNegativeCache();
         }
         thumbnailTotal = countThumbnailTargets(data);
         resetAndSeedThumbnailProgress(data);
@@ -1667,7 +1677,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     public void updateData(List<FileItem> data) {
         invalidateThumbPolicyCache();
         if (folderCoverCoordinator != null) {
-            folderCoverCoordinator.clearCache();
+            folderCoverCoordinator.clearNegativeCache();
         }
         if (data.isEmpty()) {
             int count = files.size();
