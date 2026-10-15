@@ -1592,6 +1592,9 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         if (context != null) {
             ThumbnailServerService.clearProgress(context);
         }
+        if (recyclerViewAdapter != null) {
+            recyclerViewAdapter.cancelListingThumbnailWarmup();
+        }
         if (recyclerView != null && recyclerViewAdapter != null) {
             recyclerViewAdapter.clearVisibleThumbnailGlideRequestsOnStop(recyclerView);
         }

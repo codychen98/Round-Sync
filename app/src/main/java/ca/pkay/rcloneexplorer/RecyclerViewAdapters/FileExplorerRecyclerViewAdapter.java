@@ -29,6 +29,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.bumptech.glide.Glide;
 import com.bumptech.glide.Priority;
 import com.bumptech.glide.load.engine.DiskCacheStrategy;
+import com.bumptech.glide.request.FutureTarget;
 import com.bumptech.glide.request.RequestOptions;
 import com.bumptech.glide.signature.ObjectKey;
 
@@ -44,6 +45,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import ca.pkay.rcloneexplorer.Glide.RetryRequestListener;
 import ca.pkay.rcloneexplorer.Glide.HttpServeThumbnailGlideUrl;
+import ca.pkay.rcloneexplorer.Glide.PinnedVideoThumbnailMigrator;
 import ca.pkay.rcloneexplorer.Glide.PinnedVideoThumbnailStore;
 import ca.pkay.rcloneexplorer.Glide.ThumbnailCacheIdentity;
 import ca.pkay.rcloneexplorer.Glide.ThumbnailStablePath;
@@ -116,6 +118,13 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     private static final int STARTUP_ROW_LOG_LIMIT = 40;
     private static final ConcurrentHashMap<String, Long> STARTUP_ROW_LOG_AT = new ConcurrentHashMap<>();
     private static final long STARTUP_ROW_LOG_COOLDOWN_MS = 3_000L;
+    /** Cap for folder-open {@link Glide#preload} ahead of the visible window. */
+    private static final int FOLDER_OPEN_PRELOAD_CAP = 40;
+    /** Approximate grid cell edge for preload; bind uses ImageView size. */
+    private static final int FOLDER_OPEN_PRELOAD_PX = 320;
+    private final AtomicLong folderOpenPreloadGeneration = new AtomicLong(0L);
+    private final List<FutureTarget<?>> folderOpenPreloadTargets =
+            Collections.synchronizedList(new ArrayList<>());
     public interface OnClickListener {
         void onFileClicked(FileItem fileItem);
         void onDirectoryClicked(FileItem fileItem, int position);
@@ -506,12 +515,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             }
 
             if (mimeType.startsWith("image/") && item.getSize() <= sizeLimit) {
-                RequestOptions glideOption = new RequestOptions()
-                        .centerCrop()
-                        .diskCacheStrategy(DiskCacheStrategy.DATA)
-                        .dontAnimate()
-                        .placeholder(R.drawable.ic_file)
-                        .error(R.drawable.ic_file);
+                RequestOptions glideOption = networkThumbRequestOptions();
                 if (localLoad) {
                     startupBranch = "imageLocal";
                     startupPolicyAllowed = true;
@@ -620,12 +624,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 String stablePath = ThumbnailCacheIdentity.stableServePath(
                         item.getRemote().getName(), item.getPath());
                 boolean userReload = ThumbnailReloadEpoch.consumePendingUserReload(stablePath);
-                RequestOptions baseVideoGlideOption = new RequestOptions()
-                        .centerCrop()
-                        .diskCacheStrategy(DiskCacheStrategy.DATA)
-                        .dontAnimate()
-                        .placeholder(R.drawable.ic_file)
-                        .error(R.drawable.ic_file);
+                RequestOptions baseVideoGlideOption = networkThumbRequestOptions();
                 if (userReload) {
                     maybeLogThumbPipelineDbg(item, "videoUserReload", true);
                 }
@@ -870,15 +869,13 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         return true;
     }
 
+    /**
+     * On recycle: cancel pending retries only. Do not clear the ImageView drawable or
+     * {@code lastBoundThumbKey} — warm same-key rebind must keep an already-loaded poster.
+     * Cold bind still clears when {@code !warmKeep} / key mismatch.
+     */
     private void resetRecycledFileIcon(@NonNull ViewHolder holder) {
         cancelActiveRetryListener(holder);
-        if (context == null) {
-            return;
-        }
-        clearFileIcon(holder, "resetRecycledFileIcon");
-        holder.lastBoundThumbKey = null;
-        holder.fileIcon.setImageTintList(holder.defaultIconTint);
-        holder.fileIcon.setImageResource(R.drawable.ic_file);
     }
 
     private void cancelActiveRetryListener(ViewHolder holder) {
@@ -886,6 +883,106 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             holder.activeRetryListener.cancel();
             holder.activeRetryListener = null;
         }
+    }
+
+    /** Shared RequestOptions for network image/video thumbnail binds and folder-open preload. */
+    @NonNull
+    private static RequestOptions networkThumbRequestOptions() {
+        return new RequestOptions()
+                .centerCrop()
+                .diskCacheStrategy(DiskCacheStrategy.DATA)
+                .dontAnimate()
+                .placeholder(R.drawable.ic_file)
+                .error(R.drawable.ic_file);
+    }
+
+    private void schedulePinnedThumbnailMigration() {
+        if (!showThumbnails || context == null || files == null || files.isEmpty()) {
+            PinnedVideoThumbnailMigrator.cancel();
+            return;
+        }
+        PinnedVideoThumbnailMigrator.scheduleForListing(context, files);
+    }
+
+    private void cancelFolderOpenPreload() {
+        folderOpenPreloadGeneration.incrementAndGet();
+        if (context == null) {
+            folderOpenPreloadTargets.clear();
+            return;
+        }
+        Context app = context.getApplicationContext();
+        synchronized (folderOpenPreloadTargets) {
+            for (FutureTarget<?> target : folderOpenPreloadTargets) {
+                Glide.with(app).clear(target);
+            }
+            folderOpenPreloadTargets.clear();
+        }
+    }
+
+    /**
+     * Preloads the next {@link #FOLDER_OPEN_PRELOAD_CAP} network thumbnail rows with the same
+     * models/options as bind. No {@link RetryRequestListener}; cancel on folder exit / stop.
+     */
+    private void scheduleFolderOpenPreload() {
+        cancelFolderOpenPreload();
+        if (!showThumbnails || !serverReady || context == null || files == null || files.isEmpty()) {
+            return;
+        }
+        final long gen = folderOpenPreloadGeneration.get();
+        final Context app = context.getApplicationContext();
+        RequestOptions opts = networkThumbRequestOptions();
+        int issued = 0;
+        for (FileItem item : files) {
+            if (gen != folderOpenPreloadGeneration.get()) {
+                return;
+            }
+            if (issued >= FOLDER_OPEN_PRELOAD_CAP) {
+                break;
+            }
+            if (item == null || item.isDir() || item.getRemote() == null || item.getPath() == null) {
+                continue;
+            }
+            if (item.getRemote().getType() == RemoteItem.SAFW) {
+                continue;
+            }
+            if (!isHttpThumbnailPolicyAllowedForNetworkThumbnail(item)) {
+                continue;
+            }
+            String mimeType = item.getMimeType();
+            if (mimeType == null) {
+                continue;
+            }
+            FutureTarget<Drawable> target;
+            if (mimeType.startsWith("image/")) {
+                if (item.getSize() > sizeLimit) {
+                    continue;
+                }
+                target = Glide.with(app)
+                        .load(new HttpServeThumbnailGlideUrl(buildThumbnailUrl(item)))
+                        .apply(opts)
+                        .thumbnail(0.1f)
+                        .preload(FOLDER_OPEN_PRELOAD_PX, FOLDER_OPEN_PRELOAD_PX);
+            } else if (mimeType.startsWith("video/")) {
+                if (PinnedVideoThumbnailStore.has(app, ThumbnailCacheIdentity.stableServePath(
+                        item.getRemote().getName(), item.getPath()))) {
+                    continue;
+                }
+                target = Glide.with(app)
+                        .load(new VideoThumbnailUrl(buildThumbnailUrl(item)))
+                        .apply(opts)
+                        .preload(FOLDER_OPEN_PRELOAD_PX, FOLDER_OPEN_PRELOAD_PX);
+            } else {
+                continue;
+            }
+            folderOpenPreloadTargets.add(target);
+            issued++;
+        }
+    }
+
+    /** Cancels pin migration and folder-open preload (folder exit / fragment stop). */
+    public void cancelListingThumbnailWarmup() {
+        PinnedVideoThumbnailMigrator.cancel();
+        cancelFolderOpenPreload();
     }
 
     private void invalidateThumbPolicyCache() {
@@ -1166,6 +1263,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
     public void setThumbnailServerReady(boolean ready) {
         this.serverReady = ready;
+        if (ready) {
+            scheduleFolderOpenPreload();
+        } else {
+            cancelFolderOpenPreload();
+        }
     }
 
     /**
@@ -1507,6 +1609,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
      * Only runs when {@link #showThumbnails} is true.
      */
     public void clearVisibleThumbnailGlideRequestsOnStop(@NonNull RecyclerView recyclerView) {
+        cancelListingThumbnailWarmup();
         if (!showThumbnails || context == null) {
             return;
         }
@@ -1672,6 +1775,12 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         }
         clearRecycledViewPoolIfAttached();
         notifyThumbnailIdleIfNoTargets();
+        schedulePinnedThumbnailMigration();
+        if (serverReady) {
+            scheduleFolderOpenPreload();
+        } else {
+            cancelFolderOpenPreload();
+        }
     }
 
     public void updateData(List<FileItem> data) {
@@ -1687,6 +1796,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             thumbnailTotal = 0;
             resetThumbnailProgressAccounting();
             notifyThumbnailIdleIfNoTargets();
+            cancelListingThumbnailWarmup();
             return;
         }
         showEmptyState(false);
@@ -1701,6 +1811,12 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         resetAndSeedThumbnailProgress(files);
         diffResult.dispatchUpdatesTo(this);
         notifyThumbnailIdleIfNoTargets();
+        schedulePinnedThumbnailMigration();
+        if (serverReady) {
+            scheduleFolderOpenPreload();
+        } else {
+            cancelFolderOpenPreload();
+        }
     }
 
     private void syncSelectedItemsWithUpdatedData(@NonNull List<FileItem> updatedData) {
@@ -1760,6 +1876,12 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         }
         clearRecycledViewPoolIfAttached();
         notifyThumbnailIdleIfNoTargets();
+        schedulePinnedThumbnailMigration();
+        if (serverReady) {
+            scheduleFolderOpenPreload();
+        } else {
+            cancelFolderOpenPreload();
+        }
     }
 
     public void refreshData() {
