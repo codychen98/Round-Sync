@@ -42,9 +42,31 @@ object FolderCollageCellLoader {
         cover: FolderCoverResolver.Cover,
         maxEdgePx: Int,
     ): Bitmap? {
+        return loadPrefetchCachedBitmap(
+            context,
+            remoteName,
+            cover.path,
+            cover.mimeType,
+            maxEdgePx,
+        )
+    }
+
+    /**
+     * Synchronous decode of an already-cached pin or Glide DATA file for grid bind.
+     * Avoids queuing Glide LOCAL/DATA work that leaves blank tiles under large folders.
+     */
+    @JvmStatic
+    fun loadPrefetchCachedBitmap(
+        context: Context,
+        remoteName: String,
+        path: String,
+        mimeType: String?,
+        maxEdgePx: Int,
+    ): Bitmap? {
         val app = context.applicationContext
-        if (cover.mimeType.startsWith("video/")) {
-            val stable = ThumbnailCacheIdentity.stableServePath(remoteName, cover.path)
+        val mime = mimeType ?: return null
+        if (mime.startsWith("video/")) {
+            val stable = ThumbnailCacheIdentity.stableServePath(remoteName, path)
             val pinned = PinnedVideoThumbnailStore.fileIfPresent(app, stable)
             if (pinned != null) {
                 return decodeFile(pinned, maxEdgePx)
@@ -53,8 +75,8 @@ object FolderCollageCellLoader {
         val label = ThumbnailCacheIdentity.prefetchDiskCacheKeyLabel(
             app,
             remoteName,
-            cover.path,
-            cover.mimeType,
+            path,
+            mime,
         ) ?: return null
         val file = diskCacheFile(app, label) ?: return null
         return decodeFile(file, maxEdgePx)

@@ -4,7 +4,6 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
@@ -62,6 +61,7 @@ import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.MediaFolderPolicy;
 import ca.pkay.rcloneexplorer.util.PolicyType;
+import ca.pkay.rcloneexplorer.util.FolderCollageCellLoader;
 import ca.pkay.rcloneexplorer.util.FolderCoverResolveCoordinator;
 import ca.pkay.rcloneexplorer.util.SyncLog;
 import ca.pkay.rcloneexplorer.util.ThumbRootCauseLog;
@@ -535,6 +535,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                     } else if (deferExclusiveUserReloadThumbnail(holder, item, glideOption, "image")) {
                         startupBranch = "deferredForUserReload";
                         startupPolicyAllowed = true;
+                    } else if (bindDiskWarmThumbBitmapIfPresent(holder, item, thumbKey, warmKeep)) {
+                        startupBranch = "imageDiskWarmSync";
+                        startupPolicyAllowed = true;
+                        maybeLogThumbPipelineDbg(item, "imageDiskWarmSync", true);
+                        notifyFolderThumbnailProgress(item);
                     } else {
                         startupBranch = "imageThumb";
                         startupPolicyAllowed = true;
@@ -647,6 +652,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                     } else if (deferExclusiveUserReloadThumbnail(holder, item, glideOption, "video")) {
                         startupBranch = "deferredForUserReload";
                         startupPolicyAllowed = true;
+                    } else if (bindDiskWarmThumbBitmapIfPresent(holder, item, thumbKey, warmKeep)) {
+                        startupBranch = "videoDiskWarmSync";
+                        startupPolicyAllowed = true;
+                        maybeLogThumbPipelineDbg(item, "videoDiskWarmSync", true);
+                        notifyFolderThumbnailProgress(item);
                     } else {
                         startupBranch = "videoThumb";
                         startupPolicyAllowed = true;
@@ -802,6 +812,50 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             }
         }
         return ThumbnailCacheIdentity.isPrefetchThumbnailCached(context, item);
+    }
+
+    /**
+     * Paints an already-cached pin/Glide DATA JPEG synchronously so the cell is not left blank
+     * while Glide's decode queue catches up in large folders.
+     */
+    private boolean bindDiskWarmThumbBitmapIfPresent(
+            @NonNull ViewHolder holder,
+            @NonNull FileItem item,
+            @NonNull String thumbKey,
+            boolean warmKeep) {
+        if (context == null || item.getRemote() == null || item.getPath() == null) {
+            return false;
+        }
+        if (warmKeep && hasNonPlaceholderThumbDrawable(holder)) {
+            holder.lastBoundThumbKey = thumbKey;
+            return true;
+        }
+        long issuedAt = SystemClock.elapsedRealtime();
+        Bitmap bmp = FolderCollageCellLoader.loadPrefetchCachedBitmap(
+                context.getApplicationContext(),
+                item.getRemote().getName(),
+                item.getPath(),
+                item.getMimeType(),
+                FOLDER_OPEN_PRELOAD_PX);
+        if (bmp == null) {
+            return false;
+        }
+        cancelActiveRetryListener(holder);
+        holder.fileIcon.setImageTintList(null);
+        holder.fileIcon.setImageBitmap(bmp);
+        holder.lastBoundThumbKey = thumbKey;
+        String kind = item.getMimeType() != null && item.getMimeType().startsWith("image/")
+                ? "|img"
+                : "|vid";
+        ThumbRootCauseLog.info(
+                context,
+                "thumbReady",
+                "key=" + item.getPath() + kind
+                        + " dataSource=DATA_SYNC"
+                        + " skipMemCache=false"
+                        + " reloadEpoch=0"
+                        + " latencyMs=" + (SystemClock.elapsedRealtime() - issuedAt));
+        return true;
     }
 
     private void clearFileIcon(@NonNull ViewHolder holder, @NonNull String reason) {
@@ -1362,23 +1416,27 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         final String pinKey = item.getPath() + "|pin";
         // Paint pin JPEG synchronously. Queuing Glide.LOCAL for every row in a large folder
         // left cleared cells blank for ~800ms+ (white tiles) while decodes waited in line.
-        if (!warmKeep || !hasNonPlaceholderThumbDrawable(holder)) {
-            Bitmap pinBmp = decodePinnedThumbBitmap(pinned, FOLDER_OPEN_PRELOAD_PX);
-            if (pinBmp != null) {
-                cancelActiveRetryListener(holder);
-                holder.fileIcon.setImageTintList(null);
-                holder.fileIcon.setImageBitmap(pinBmp);
-                ThumbRootCauseLog.info(
-                        context,
-                        "thumbReady",
-                        "key=" + pinKey
-                                + " dataSource=LOCAL_SYNC"
-                                + " skipMemCache=false"
-                                + " reloadEpoch=0"
-                                + " latencyMs=" + (SystemClock.elapsedRealtime() - pinIssuedAt));
-                return true;
-            }
-        } else {
+        if (warmKeep && hasNonPlaceholderThumbDrawable(holder)) {
+            return true;
+        }
+        Bitmap pinBmp = FolderCollageCellLoader.loadPrefetchCachedBitmap(
+                context.getApplicationContext(),
+                item.getRemote().getName(),
+                item.getPath(),
+                item.getMimeType(),
+                FOLDER_OPEN_PRELOAD_PX);
+        if (pinBmp != null) {
+            cancelActiveRetryListener(holder);
+            holder.fileIcon.setImageTintList(null);
+            holder.fileIcon.setImageBitmap(pinBmp);
+            ThumbRootCauseLog.info(
+                    context,
+                    "thumbReady",
+                    "key=" + pinKey
+                            + " dataSource=LOCAL_SYNC"
+                            + " skipMemCache=false"
+                            + " reloadEpoch=0"
+                            + " latencyMs=" + (SystemClock.elapsedRealtime() - pinIssuedAt));
             return true;
         }
         // Decode failed — fall back to Glide with an explicit resource stamp.
@@ -1422,31 +1480,6 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 })
                 .into(holder.fileIcon);
         return true;
-    }
-
-    @Nullable
-    private static Bitmap decodePinnedThumbBitmap(@NonNull File pinned, int maxEdgePx) {
-        if (!pinned.isFile() || pinned.length() <= 0L) {
-            return null;
-        }
-        try {
-            BitmapFactory.Options bounds = new BitmapFactory.Options();
-            bounds.inJustDecodeBounds = true;
-            BitmapFactory.decodeFile(pinned.getAbsolutePath(), bounds);
-            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-                return null;
-            }
-            int edge = Math.max(bounds.outWidth, bounds.outHeight);
-            int sample = 1;
-            while (edge / (sample * 2) >= maxEdgePx) {
-                sample *= 2;
-            }
-            BitmapFactory.Options opts = new BitmapFactory.Options();
-            opts.inSampleSize = sample;
-            return BitmapFactory.decodeFile(pinned.getAbsolutePath(), opts);
-        } catch (Exception | OutOfMemoryError e) {
-            return null;
-        }
     }
 
     /**
