@@ -490,10 +490,10 @@ public class MainActivity extends AppCompatActivity
 
     private void pinRemotesToDrawer() {
         Menu menu = navigationView.getMenu();
-        MenuItem existingMenu = menu.findItem(1);
-        if (existingMenu != null) {
-            return;
-        }
+        // Always rebuild so import / pin edits refresh the drawer without requiring an app restart.
+        menu.removeItem(1);
+        drawerPinnedRemoteIds.clear();
+        availableDrawerPinnedRemoteId = 2;
 
         SubMenu subMenu = menu.addSubMenu(R.id.drawer_pinned_header, 1, Menu.NONE, R.string.nav_drawer_pinned_header);
 
@@ -767,25 +767,11 @@ public class MainActivity extends AppCompatActivity
 
     @Override
     public void addRemoteToNavDrawer() {
-        Menu menu = navigationView.getMenu();
-
-        // remove all items and add them again so that it's in alpha order
-        menu.removeItem(1);
-        drawerPinnedRemoteIds.clear();
-        availableDrawerPinnedRemoteId = 1;
-
         pinRemotesToDrawer();
     }
 
     @Override
     public void removeRemoteFromNavDrawer() {
-        Menu menu = navigationView.getMenu();
-
-        // remove all items and add them again so that it's in alpha order
-        menu.removeItem(1);
-        drawerPinnedRemoteIds.clear();
-        availableDrawerPinnedRemoteId = 1;
-
         pinRemotesToDrawer();
     }
 

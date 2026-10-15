@@ -1335,9 +1335,25 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         if (!showThumbnails || thumbnailTotal == 0 || context == null) {
             return;
         }
+        // Count pinned video posters as already loaded (same rule as ThumbnailPrefetchExecutor).
+        // Otherwise explorer shows e.g. 13/224 and starts media-prep while the grid is already full.
+        for (FileItem item : data) {
+            if (!isThumbnailProgressTarget(item)) {
+                continue;
+            }
+            if (!isPinnedVideoThumbnailPresent(item)) {
+                continue;
+            }
+            if (thumbnailCountedPaths.add(item.getPath())) {
+                thumbnailLoaded.incrementAndGet();
+            }
+        }
         ThumbnailDiskCacheEvictor.withOpenCache(context, cache -> {
             for (FileItem item : data) {
                 if (!isThumbnailProgressTarget(item)) {
+                    continue;
+                }
+                if (thumbnailCountedPaths.contains(item.getPath())) {
                     continue;
                 }
                 String label = ThumbnailCacheIdentity.prefetchDiskCacheKeyLabel(
@@ -1356,6 +1372,24 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                     + " total=" + thumbnailTotal + " listSize=" + data.size());
         }
         emitInitialThumbnailProgress(loaded);
+    }
+
+    private boolean isPinnedVideoThumbnailPresent(@NonNull FileItem item) {
+        String mime = item.getMimeType();
+        if (mime == null || !mime.startsWith("video/")) {
+            return false;
+        }
+        RemoteItem remote = item.getRemote();
+        if (remote == null) {
+            return false;
+        }
+        String path = item.getPath();
+        if (path == null || path.isEmpty()) {
+            return false;
+        }
+        return PinnedVideoThumbnailStore.has(
+                context.getApplicationContext(),
+                ThumbnailCacheIdentity.stableServePath(remote.getName(), path));
     }
 
     private void emitInitialThumbnailProgress(int loaded) {
