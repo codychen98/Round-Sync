@@ -4,10 +4,11 @@ import androidx.annotation.VisibleForTesting
 import java.util.Locale
 
 /**
- * Picks a cover file from a single non-recursive folder listing for folder-tile thumbnails.
+ * Selects media files from a folder listing for folder-tile collage cells.
  *
- * Priority: well-known cover filenames (case-insensitive) → first image within [sizeLimitBytes]
- * → first video (any size). Directories are ignored.
+ * Does not generate thumbnails — callers must use already-cached file thumbs only.
+ *
+ * Priority: well-known cover filenames → images within [sizeLimitBytes] → videos.
  */
 object FolderCoverResolver {
 
@@ -38,15 +39,38 @@ object FolderCoverResolver {
         "thumbnail.jpg",
     )
 
+    private const val DEFAULT_MAX_CANDIDATES = 24
+
+    /**
+     * Ordered collage candidates (not yet filtered by disk-cache presence).
+     */
     @JvmStatic
+    @JvmOverloads
     @VisibleForTesting
-    fun pickCover(entries: List<PrefetchListingEntry>, sizeLimitBytes: Long): Cover? {
-        if (entries.isEmpty()) {
-            return null
+    fun pickCollageCandidates(
+        entries: List<PrefetchListingEntry>,
+        sizeLimitBytes: Long,
+        maxCandidates: Int = DEFAULT_MAX_CANDIDATES,
+    ): List<Cover> {
+        if (entries.isEmpty() || maxCandidates <= 0) {
+            return emptyList()
         }
         val files = entries.filter { !it.isDir }
         if (files.isEmpty()) {
-            return null
+            return emptyList()
+        }
+        val out = ArrayList<Cover>(maxCandidates)
+        val seenPaths = HashSet<String>()
+
+        fun add(entry: PrefetchListingEntry, kind: CoverKind): Boolean {
+            if (out.size >= maxCandidates) {
+                return false
+            }
+            if (!seenPaths.add(entry.path)) {
+                return true
+            }
+            out.add(Cover(kind, entry.path, entry.name, entry.mimeType))
+            return out.size < maxCandidates
         }
 
         for (entry in files) {
@@ -55,35 +79,34 @@ object FolderCoverResolver {
                 continue
             }
             val mime = entry.mimeType
-            if (mime.startsWith("image/") && entry.size <= sizeLimitBytes) {
-                return Cover(CoverKind.IMAGE, entry.path, entry.name, mime)
-            }
-            if (mime.startsWith("video/")) {
-                return Cover(CoverKind.VIDEO, entry.path, entry.name, mime)
+            when {
+                mime.startsWith("image/") && entry.size <= sizeLimitBytes -> {
+                    if (!add(entry, CoverKind.IMAGE)) return out
+                }
+                mime.startsWith("video/") -> {
+                    if (!add(entry, CoverKind.VIDEO)) return out
+                }
             }
         }
 
-        val firstImage = files.firstOrNull {
-            it.mimeType.startsWith("image/") && it.size <= sizeLimitBytes
-        }
-        if (firstImage != null) {
-            return Cover(
-                CoverKind.IMAGE,
-                firstImage.path,
-                firstImage.name,
-                firstImage.mimeType,
-            )
+        for (entry in files) {
+            if (entry.mimeType.startsWith("image/") && entry.size <= sizeLimitBytes) {
+                if (!add(entry, CoverKind.IMAGE)) return out
+            }
         }
 
-        val firstVideo = files.firstOrNull { it.mimeType.startsWith("video/") }
-        if (firstVideo != null) {
-            return Cover(
-                CoverKind.VIDEO,
-                firstVideo.path,
-                firstVideo.name,
-                firstVideo.mimeType,
-            )
+        for (entry in files) {
+            if (entry.mimeType.startsWith("video/")) {
+                if (!add(entry, CoverKind.VIDEO)) return out
+            }
         }
-        return null
+        return out
+    }
+
+    /** Single-cover helper kept for tests / simple call sites. */
+    @JvmStatic
+    @VisibleForTesting
+    fun pickCover(entries: List<PrefetchListingEntry>, sizeLimitBytes: Long): Cover? {
+        return pickCollageCandidates(entries, sizeLimitBytes, maxCandidates = 1).firstOrNull()
     }
 }

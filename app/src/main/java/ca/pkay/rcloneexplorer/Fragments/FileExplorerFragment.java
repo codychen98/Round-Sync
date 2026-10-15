@@ -344,6 +344,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         recyclerViewAdapter.showThumbnails(showThumbnails);
         recyclerViewAdapter.setWrapFileNames(wrapFilenames);
         recyclerViewAdapter.setFolderCoverCoordinator(new FolderCoverResolveCoordinator(
+                context.getApplicationContext(),
                 () -> rclone,
                 () -> startAtRoot,
                 () -> recyclerViewAdapter.getThumbnailSizeLimitBytes(),
