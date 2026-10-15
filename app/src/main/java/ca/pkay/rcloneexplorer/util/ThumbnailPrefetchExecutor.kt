@@ -144,8 +144,8 @@ object ThumbnailPrefetchExecutor {
             "event=prefetchCacheProbe cached=$cachedCount misses=${fetchTargets.size} " +
                 "total=${targets.size} path=$directoryPath $diskStats",
         )
-        if (fetchTargets.isNotEmpty() && cachedCount == 0) {
-            // Only when a folder is a total miss — confirms orphan vs key-mismatch without spam.
+        if (fetchTargets.isNotEmpty()) {
+            // Total or partial miss: per-item samples + folder tallies (legacy key vs absent).
             logMissSamples(app, directoryPath, fetchTargets)
         }
         if (fetchTargets.isEmpty()) {

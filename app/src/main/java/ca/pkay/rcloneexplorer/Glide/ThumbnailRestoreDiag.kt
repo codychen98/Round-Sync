@@ -12,12 +12,15 @@ import java.io.File
  * - journal orphans (*.0 on disk but DiskLruCache.get misses)
  * - probe label / key-format mismatch (journal resolves samples, but current labels miss;
  *   an alternate legacy label hits)
+ * - blobs never present in the backup (all alternate labels miss on disk)
  */
 object ThumbnailRestoreDiag {
 
     private const val LOG_TITLE = "ThumbRestoreDbg"
     private const val SAMPLE_LIMIT = 24
     private const val MISS_LOG_LIMIT = 6
+    /** Cap full-folder miss tallies so huge listings stay cheap. */
+    private const val MISS_TALLY_LIMIT = 256
 
     /** Call immediately before zip extract into the thumbnails dir. */
     @JvmStatic
@@ -79,8 +82,8 @@ object ThumbnailRestoreDiag {
     }
 
     /**
-     * For the first few prefetch misses in a folder, log current vs alternate legacy labels and
-     * whether each resolves in the journal / exists as a hashed file.
+     * For prefetch misses (total or partial), log a few per-item probes plus folder-wide tallies
+     * of current vs legacy alternate labels.
      */
     @JvmStatic
     fun logPrefetchMissSamples(
@@ -93,38 +96,100 @@ object ThumbnailRestoreDiag {
             return
         }
         val app = context.applicationContext
-        val limit = misses.size.coerceAtMost(MISS_LOG_LIMIT)
+        val detailLimit = misses.size.coerceAtMost(MISS_LOG_LIMIT)
+        val tallyLimit = misses.size.coerceAtMost(MISS_TALLY_LIMIT)
         SyncLog.info(
             app,
             LOG_TITLE,
-            "event=prefetchMissSampleStart path=$directoryPath missCount=${misses.size} logging=$limit",
+            "event=prefetchMissSampleStart path=$directoryPath missCount=${misses.size} " +
+                "detailLog=$detailLimit tallyScan=$tallyLimit",
         )
-        for (i in 0 until limit) {
+
+        var currentHit = 0
+        var currentFile = 0
+        var altDecodedV2Hit = 0
+        var altEncodedNoV2Hit = 0
+        var altDecodedNoV2Hit = 0
+        var altImgDecodedHit = 0
+        var anyAltHit = 0
+        var noBlobAtAll = 0
+        var lookupIdentityLikely = 0
+
+        for (i in 0 until tallyLimit) {
             val item = misses[i]
-            val remote = item.remote?.name ?: "null"
-            val path = item.path ?: "null"
-            val mime = item.mimeType ?: "null"
+            val remote = item.remote?.name ?: continue
+            val path = item.path ?: continue
+            val mime = item.mimeType
             val currentLabel = ThumbnailCacheIdentity.prefetchDiskCacheKeyLabel(
                 cache,
                 remote,
                 path,
-                item.mimeType,
+                mime,
             )
-            val alts = alternateLabels(remote, path, item.mimeType)
             val currentProbe = probeLabel(cache, currentLabel)
-            val altHits = alts.map { (name, label) ->
-                val p = probeLabel(cache, label)
-                "$name:hit=${p.journalHit}:file=${p.safeKeyFileExists}:label=${label.take(48)}"
-            }.joinToString(" ")
-            SyncLog.info(
-                app,
-                LOG_TITLE,
-                "event=prefetchMissSample i=$i mime=$mime remote=$remote path=$path " +
-                    "currentHit=${currentProbe.journalHit} currentFile=${currentProbe.safeKeyFileExists} " +
-                    "currentSafe=${currentProbe.safeKey ?: "none"} " +
-                    "currentLabel=${currentLabel?.take(64) ?: "null"} $altHits",
-            )
+            if (currentProbe.journalHit) {
+                currentHit++
+            }
+            if (currentProbe.safeKeyFileExists) {
+                currentFile++
+            }
+
+            val alts = alternateLabels(remote, path, mime)
+            val altProbes = alts.map { (name, label) -> name to probeLabel(cache, label) }
+            var thisAnyAltHit = false
+            var thisAnyFile = currentProbe.safeKeyFileExists
+            for ((name, probe) in altProbes) {
+                if (probe.safeKeyFileExists) {
+                    thisAnyFile = true
+                }
+                if (probe.journalHit) {
+                    thisAnyAltHit = true
+                    when (name) {
+                        "vidDecodedV2" -> altDecodedV2Hit++
+                        "vidEncodedNoV2" -> altEncodedNoV2Hit++
+                        "vidDecodedNoV2" -> altDecodedNoV2Hit++
+                        "imgDecoded" -> altImgDecodedHit++
+                    }
+                }
+            }
+            if (thisAnyAltHit) {
+                anyAltHit++
+            }
+            if (!thisAnyFile) {
+                noBlobAtAll++
+            }
+            if (!currentProbe.journalHit && thisAnyAltHit) {
+                lookupIdentityLikely++
+            }
+
+            if (i < detailLimit) {
+                val altHits = altProbes.joinToString(" ") { (name, p) ->
+                    val label = alts.first { it.first == name }.second
+                    "$name:hit=${p.journalHit}:file=${p.safeKeyFileExists}:label=${label.take(48)}"
+                }
+                SyncLog.info(
+                    app,
+                    LOG_TITLE,
+                    "event=prefetchMissSample i=$i mime=${mime ?: "null"} remote=$remote path=$path " +
+                        "currentHit=${currentProbe.journalHit} currentFile=${currentProbe.safeKeyFileExists} " +
+                        "currentSafe=${currentProbe.safeKey ?: "none"} " +
+                        "currentLabel=${currentLabel?.take(64) ?: "null"} $altHits",
+                )
+            }
         }
+
+        SyncLog.info(
+            app,
+            LOG_TITLE,
+            "event=prefetchMissTally path=$directoryPath missCount=${misses.size} scanned=$tallyLimit " +
+                "currentHit=$currentHit currentFile=$currentFile " +
+                "altDecodedV2Hit=$altDecodedV2Hit altEncodedNoV2Hit=$altEncodedNoV2Hit " +
+                "altDecodedNoV2Hit=$altDecodedNoV2Hit altImgDecodedHit=$altImgDecodedHit " +
+                "anyAltHit=$anyAltHit lookupIdentityLikely=$lookupIdentityLikely " +
+                "noBlobAtAll=$noBlobAtAll " +
+                "identityLikelyDominant=${lookupIdentityLikely * 2 >= tallyLimit && lookupIdentityLikely > 0} " +
+                "absentLikelyDominant=${noBlobAtAll * 2 >= tallyLimit && noBlobAtAll > 0}",
+        )
     }
 
     private data class LabelProbe(
