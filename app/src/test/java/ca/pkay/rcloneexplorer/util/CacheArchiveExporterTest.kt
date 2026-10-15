@@ -1,5 +1,6 @@
 package ca.pkay.rcloneexplorer.util
 
+import ca.pkay.rcloneexplorer.Glide.PinnedVideoThumbnailStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -98,6 +99,30 @@ class CacheArchiveExporterTest {
             it.parentFile.mkdirs()
             it.writeText("exo")
         }
+        // Clear any thumbnails/pinned from other tests in this process.
+        CanonicalCachePathResolver.thumbnailsDirOrNull(context)?.listFiles()?.forEach { it.delete() }
+        PinnedVideoThumbnailStore.directory(context).listFiles()?.forEach { it.delete() }
         assertFalse(CacheArchiveExporter.hasCacheEntriesToExport(context))
+    }
+
+    @Test
+    fun hasCacheEntriesToExport_trueWhenOnlyPinnedPresent() {
+        val context = RuntimeEnvironment.getApplication()
+        CanonicalCachePathResolver.thumbnailsDirOrNull(context)?.listFiles()?.forEach { it.delete() }
+        val pinned = PinnedVideoThumbnailStore.directory(context)
+        pinned.mkdirs()
+        File(pinned, "abcd.jpg").writeBytes(ByteArray(8) { 1 })
+        assertTrue(CacheArchiveExporter.hasCacheEntriesToExport(context))
+    }
+
+    @Test
+    fun zipEntryName_pinnedPrefix() {
+        assertEquals(
+            "files/pinned_video_thumbnails/abcd.jpg",
+            CacheArchiveExporter.zipEntryName(
+                CacheArchiveExporter.ZIP_PINNED_THUMBNAILS_PREFIX,
+                "abcd.jpg",
+            ),
+        )
     }
 }

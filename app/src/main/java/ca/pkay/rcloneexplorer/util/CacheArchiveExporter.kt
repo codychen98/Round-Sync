@@ -1,17 +1,18 @@
 package ca.pkay.rcloneexplorer.util
 
 import android.content.Context
+import ca.pkay.rcloneexplorer.Glide.PinnedVideoThumbnailStore
 import java.io.File
 import java.io.IOException
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 /**
- * Appends Glide thumbnail disk-cache blobs to a config export zip under `cache/thumbnails/`.
+ * Appends durable thumbnail assets to a config export zip:
+ * - Glide DiskLruCache under `cache/thumbnails/` (on-disk: `{filesDir}/thumbnails`)
+ * - Pinned video posters under `files/pinned_video_thumbnails/`
  *
- * Streamed media cache ([CanonicalCachePathResolver.mediaCacheDirOrNull] and legacy
- * [SelectedFolderMediaCacheLayout]) is intentionally excluded — it can be gigabytes and is
- * device-local playback data, not portable preview images.
+ * Streamed media cache is intentionally excluded.
  */
 object CacheArchiveExporter {
 
@@ -21,19 +22,30 @@ object CacheArchiveExporter {
     const val ZIP_CACHE_PREFIX = "cache/"
     const val ZIP_THUMBNAILS_PREFIX = "${ZIP_CACHE_PREFIX}thumbnails/"
     const val ZIP_MEDIA_CACHE_PREFIX = "${ZIP_CACHE_PREFIX}media_cache/"
+    const val ZIP_FILES_PREFIX = "files/"
+    const val ZIP_PINNED_THUMBNAILS_PREFIX = "${ZIP_FILES_PREFIX}${PinnedVideoThumbnailStore.DIR_NAME}/"
 
     @JvmStatic
     fun hasCacheEntriesToExport(context: Context): Boolean {
-        val thumbnailsDir = CanonicalCachePathResolver.thumbnailsDirOrNull(context.applicationContext)
-        return thumbnailsDir != null && isNonEmptyDirectory(thumbnailsDir)
+        val app = context.applicationContext
+        val thumbnailsDir = CanonicalCachePathResolver.thumbnailsDirOrNull(app)
+        if (thumbnailsDir != null && isNonEmptyDirectory(thumbnailsDir)) {
+            return true
+        }
+        return isNonEmptyDirectory(PinnedVideoThumbnailStore.directory(app))
     }
 
     @JvmStatic
     fun appendCacheEntries(context: Context, zos: ZipOutputStream) {
+        val app = context.applicationContext
         val exported = HashSet<String>()
-        val thumbnailsDir = CanonicalCachePathResolver.thumbnailsDirOrNull(context.applicationContext)
+        val thumbnailsDir = CanonicalCachePathResolver.thumbnailsDirOrNull(app)
         if (thumbnailsDir != null && isNonEmptyDirectory(thumbnailsDir)) {
             exportDirectory(thumbnailsDir, ZIP_THUMBNAILS_PREFIX, zos, exported)
+        }
+        val pinnedDir = PinnedVideoThumbnailStore.directory(app)
+        if (isNonEmptyDirectory(pinnedDir)) {
+            exportDirectory(pinnedDir, ZIP_PINNED_THUMBNAILS_PREFIX, zos, exported)
         }
     }
 
@@ -79,8 +91,6 @@ object CacheArchiveExporter {
     private fun writeZipEntry(zos: ZipOutputStream, file: File, entryName: String) {
         try {
             val entry = ZipEntry(entryName)
-            // Record size/mtime so import can skip existing equal-or-newer local blobs.
-            // ZipFile reads these from the central directory; ZipInputStream may still report -1.
             val length = file.length()
             if (length >= 0L) {
                 entry.size = length

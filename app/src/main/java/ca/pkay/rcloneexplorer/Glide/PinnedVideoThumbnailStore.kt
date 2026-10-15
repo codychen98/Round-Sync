@@ -62,6 +62,15 @@ object PinnedVideoThumbnailStore {
     }
 
     @JvmStatic
+    fun remove(context: Context, stablePath: String): Boolean {
+        if (stablePath.isEmpty()) {
+            return false
+        }
+        val file = fileFor(directory(context), stablePath)
+        return !file.exists() || file.delete()
+    }
+
+    @JvmStatic
     fun put(context: Context, stablePath: String, jpeg: ByteArray): Boolean =
         put(directory(context), stablePath, jpeg)
 

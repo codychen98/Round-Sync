@@ -72,11 +72,13 @@ class EphemeralTaskManager(private var mContext: Context) {
             EphemeralTaskManager(context).work(data.build(), "")
         }
 
+        @JvmOverloads
         fun queueDelete(
             context: Context,
             remote: RemoteItem,
             file: FileItem,
-            currentPath: String
+            currentPath: String,
+            extraPurgePaths: Array<String> = emptyArray(),
         ) {
 
             DeleteWorkerNotification(context).generateChannels()
@@ -86,6 +88,9 @@ class EphemeralTaskManager(private var mContext: Context) {
             addRemoteItemToData(EphemeralWorker.REMOTE, remote, data)
 
             addFileItemToData(EphemeralWorker.DELETE_FILE, file, data)
+            if (extraPurgePaths.isNotEmpty()) {
+                data.putStringArray(EphemeralWorker.DELETE_EXTRA_PURGE_PATHS, extraPurgePaths)
+            }
             EphemeralTaskManager(context).work(data.build(), "")
         }
 

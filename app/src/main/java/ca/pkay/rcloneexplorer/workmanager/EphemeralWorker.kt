@@ -24,6 +24,7 @@ import ca.pkay.rcloneexplorer.notifications.prototypes.WorkerNotification
 import ca.pkay.rcloneexplorer.notifications.support.StatusObject
 import ca.pkay.rcloneexplorer.util.FLog
 import ca.pkay.rcloneexplorer.util.SyncLog
+import ca.pkay.rcloneexplorer.util.ThumbnailLifecycle
 import ca.pkay.rcloneexplorer.util.WifiConnectivitiyUtil
 import de.felixnuesse.extract.extensions.tag
 import de.felixnuesse.extract.notifications.implementations.DownloadWorkerNotification
@@ -57,6 +58,8 @@ class EphemeralWorker (private var mContext: Context, workerParams: WorkerParame
         const val MOVE_TARGETPATH = "MOVE_TARGETPATH"
 
         const val DELETE_FILE = "DELETE_FILE"
+        /** Extra remote paths to purge thumbnails for (e.g. known children of a deleted folder). */
+        const val DELETE_EXTRA_PURGE_PATHS = "DELETE_EXTRA_PURGE_PATHS"
     }
 
     internal enum class FAILURE_REASON {
@@ -167,6 +170,7 @@ class EphemeralWorker (private var mContext: Context, workerParams: WorkerParame
                     }
                 }
                 handleSync(mTitle)
+                applyThumbnailLifecycleAfterSuccess(type, remoteItem)
             } else {
                 log("Preconditions are not met!")
                 postSync()
@@ -201,6 +205,54 @@ class EphemeralWorker (private var mContext: Context, workerParams: WorkerParame
             Type.UPLOAD -> UploadWorkerNotification(mContext)
             Type.DELETE -> DeleteWorkerNotification(mContext)
             Type.MOVE -> MoveWorkerNotification(mContext)
+        }
+    }
+
+    private fun rcloneProcessSucceeded(): Boolean {
+        if (failureReason != FAILURE_REASON.NO_FAILURE) {
+            return false
+        }
+        val process = sRcloneProcess ?: return false
+        return try {
+            process.exitValue() == 0
+        } catch (_: IllegalThreadStateException) {
+            false
+        }
+    }
+
+    private fun applyThumbnailLifecycleAfterSuccess(type: Type, remoteItem: RemoteItem) {
+        if (!rcloneProcessSucceeded()) {
+            return
+        }
+        when (type) {
+            Type.DELETE -> {
+                val fileItem = getFileitemFromParcel(DELETE_FILE)
+                ThumbnailLifecycle.purgePath(
+                    mContext,
+                    remoteItem.name,
+                    fileItem.path,
+                    fileItem.isDir,
+                )
+                val extras = inputData.getStringArray(DELETE_EXTRA_PURGE_PATHS)
+                if (extras != null) {
+                    for (path in extras) {
+                        if (!path.isNullOrEmpty()) {
+                            ThumbnailLifecycle.purgePath(mContext, remoteItem.name, path, false)
+                        }
+                    }
+                }
+            }
+            Type.MOVE -> {
+                val fileItem = getFileitemFromParcel(MOVE_FILE)
+                val targetDir = inputData.getString(MOVE_TARGETPATH) ?: return
+                val newPath = ThumbnailLifecycle.destinationPathAfterMove(
+                    remoteItem.name,
+                    targetDir,
+                    fileItem.name,
+                )
+                ThumbnailLifecycle.carry(mContext, remoteItem.name, fileItem.path, newPath)
+            }
+            else -> {}
         }
     }
 

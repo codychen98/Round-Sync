@@ -28,6 +28,59 @@ public class DirectoryObject {
         directoryValidity.put(path, System.currentTimeMillis());
     }
 
+    /** Previous listing for [path], or null if never cached. */
+    public List<FileItem> getCachedContent(String path) {
+        List<FileItem> cached = directoryCache.get(path);
+        if (cached == null) {
+            return null;
+        }
+        return new ArrayList<>(cached);
+    }
+
+    /**
+     * File items from any cached listing whose directory path equals [folderPath] or is nested
+     * under it (prefix match). Used when purging thumbnails after a folder delete.
+     */
+    public List<FileItem> cachedFileItemsUnder(String folderPath) {
+        List<FileItem> out = new ArrayList<>();
+        if (folderPath == null || folderPath.isEmpty()) {
+            return out;
+        }
+        String prefix = folderPath.endsWith("/") ? folderPath : folderPath + "/";
+        for (Map.Entry<String, List<FileItem>> entry : directoryCache.entrySet()) {
+            String dirPath = entry.getKey();
+            if (dirPath == null) {
+                continue;
+            }
+            if (!dirPath.equals(folderPath) && !dirPath.startsWith(prefix)) {
+                continue;
+            }
+            out.addAll(entry.getValue());
+        }
+        return out;
+    }
+
+    /** Drops cached listings for [folderPath] and nested paths. */
+    public void removeCachedPathsUnder(String folderPath) {
+        if (folderPath == null || folderPath.isEmpty()) {
+            return;
+        }
+        String prefix = folderPath.endsWith("/") ? folderPath : folderPath + "/";
+        List<String> toRemove = new ArrayList<>();
+        for (String dirPath : directoryCache.keySet()) {
+            if (dirPath == null) {
+                continue;
+            }
+            if (dirPath.equals(folderPath) || dirPath.startsWith(prefix)) {
+                toRemove.add(dirPath);
+            }
+        }
+        for (String path : toRemove) {
+            directoryCache.remove(path);
+            directoryValidity.remove(path);
+        }
+    }
+
     public void setPath(String path) {
         currentDir = path;
         directoryContent.clear();

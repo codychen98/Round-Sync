@@ -1,7 +1,9 @@
 package ca.pkay.rcloneexplorer.Glide
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class ThumbnailDiskCacheSizeTest {
 
@@ -39,4 +41,25 @@ class ThumbnailDiskCacheSizeTest {
     fun compute_negativeInputs_treatedAsZero() {
         assertEquals(ThumbnailDiskCacheSize.FLOOR_BYTES, ThumbnailDiskCacheSize.compute(-1L, -1L))
     }
+
+    @Test
+    fun forDir_disablesSizeEviction() {
+        ThumbnailDiskCacheSize.clearMemoForTests()
+        val dir = File(System.getProperty("java.io.tmpdir"), "thumb-size-test-${System.nanoTime()}")
+        assertTrue(dir.mkdirs() || dir.isDirectory)
+        try {
+            assertEquals(
+                ThumbnailDiskCacheSize.NO_SIZE_EVICTION_BYTES,
+                ThumbnailDiskCacheSize.forDir(dir),
+            )
+            assertEquals(
+                ThumbnailDiskCacheSize.NO_SIZE_EVICTION_BYTES,
+                ThumbnailDiskCacheSize.forDir(dir),
+            )
+        } finally {
+            dir.delete()
+            ThumbnailDiskCacheSize.clearMemoForTests()
+        }
+    }
 }
+

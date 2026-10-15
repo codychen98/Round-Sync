@@ -1,5 +1,6 @@
 package ca.pkay.rcloneexplorer.util
 
+import ca.pkay.rcloneexplorer.Glide.PinnedVideoThumbnailStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -54,6 +55,28 @@ class CacheArchiveImporterTest {
         val context = RuntimeEnvironment.getApplication()
         assertNull(CacheArchiveImporter.targetFileForEntry(context, "rclone.conf"))
         assertNull(CacheArchiveImporter.targetFileForEntry(context, "cache/other/file.dat"))
+    }
+
+    @Test
+    fun targetFileForEntry_mapsPinnedUnderFilesDir() {
+        val context = RuntimeEnvironment.getApplication()
+        val pinnedDir = PinnedVideoThumbnailStore.directory(context)
+        val target = CacheArchiveImporter.targetFileForEntry(
+            context,
+            "files/pinned_video_thumbnails/aabbcc.jpg",
+        )
+        assertEquals(File(pinnedDir, "aabbcc.jpg"), target)
+    }
+
+    @Test
+    fun targetFileForEntry_rejectsPinnedPathTraversal() {
+        val context = RuntimeEnvironment.getApplication()
+        assertNull(
+            CacheArchiveImporter.targetFileForEntry(
+                context,
+                "files/pinned_video_thumbnails/../escape.jpg",
+            ),
+        )
     }
 
     @Test

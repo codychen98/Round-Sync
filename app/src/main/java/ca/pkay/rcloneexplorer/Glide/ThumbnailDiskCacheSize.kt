@@ -1,31 +1,38 @@
 package ca.pkay.rcloneexplorer.Glide
 
-import android.os.StatFs
 import ca.pkay.rcloneexplorer.util.FLog
 import java.io.File
 
 /**
- * Sizes the Glide thumbnail disk cache from free space and current usage.
+ * Sizes the Glide thumbnail DiskLruCache.
  *
- * Every {@code DiskLruCache.open} on the thumbnails directory (Glide's own instance and
- * [ThumbnailDiskCacheEvictor]) must use the same {@code maxSize}, otherwise the instance with
- * the smaller limit trims entries the other one still expects. [forDir] therefore memoizes
- * the first value computed in this process.
+ * Loaded thumbnails are durable user data: size-based LRU eviction is disabled so Clear cache /
+ * free-space pressure cannot drop existing posters. Entries are removed only via
+ * [ca.pkay.rcloneexplorer.util.ThumbnailLifecycle] (delete / listing-gone / pin replace / carry).
+ *
+ * Every [com.bumptech.glide.disklrucache.DiskLruCache.open] on the thumbnails directory must use
+ * the same [maxSize] ([forDir] memoizes per process).
  */
 object ThumbnailDiskCacheSize {
 
     private const val TAG = "ThumbDiskCacheSize"
 
+    /** Historical floor/ceiling kept for [compute] unit tests / docs only. */
     const val FLOOR_BYTES: Long = 500L * 1024L * 1024L
     const val CEILING_BYTES: Long = 2L * 1024L * 1024L * 1024L
+
+    /**
+     * Effectively unlimited for DiskLruCache size checks (`size > maxSize` never trips in practice).
+     * Avoid [Long.MAX_VALUE] in case of overflow when adding entry lengths.
+     */
+    const val NO_SIZE_EVICTION_BYTES: Long = Long.MAX_VALUE / 2L
 
     @Volatile
     private var memoized: Pair<String, Long>? = null
 
     /**
-     * Pure sizing rule: {@code min(CEILING, max(FLOOR, availableBytes / 4 + currentUsageBytes))}.
-     * Including current usage guarantees the cap never drops below what is already on disk, so
-     * opening the cache never evicts restored entries just because free space shrank.
+     * Legacy free-space formula (unused by [forDir] after durable-no-eviction policy).
+     * Kept so existing unit tests document the old rule.
      */
     @JvmStatic
     fun compute(availableBytes: Long, currentUsageBytes: Long): Long {
@@ -35,18 +42,12 @@ object ThumbnailDiskCacheSize {
         return target.coerceIn(FLOOR_BYTES, CEILING_BYTES)
     }
 
-    /** Memoized per process: the first call for a directory fixes the value for all later callers. */
+    /** Memoized per process: durable thumbs never size-evict. */
     @JvmStatic
     fun forDir(thumbnailsDir: File): Long {
         val path = thumbnailsDir.absolutePath
         memoized?.let { (cachedPath, size) ->
             if (cachedPath == path) {
-                FLog.d(
-                    TAG,
-                    "Thumbnail disk cache size memo hit size=%d MiB path=%s",
-                    size / (1024L * 1024L),
-                    path,
-                )
                 return size
             }
         }
@@ -56,8 +57,14 @@ object ThumbnailDiskCacheSize {
                     return size
                 }
             }
-            val size = computeForDir(thumbnailsDir)
+            val size = NO_SIZE_EVICTION_BYTES
             memoized = path to size
+            FLog.d(
+                TAG,
+                "Thumbnail disk cache size eviction disabled maxMiB=%d path=%s",
+                size / (1024L * 1024L),
+                path,
+            )
             return size
         }
     }
@@ -83,24 +90,5 @@ object ThumbnailDiskCacheSize {
     @JvmStatic
     internal fun clearMemoForTests() {
         memoized = null
-    }
-
-    private fun computeForDir(dir: File): Long {
-        return try {
-            val available = StatFs(dir.absolutePath).availableBytes
-            val usage = directoryUsageBytes(dir)
-            val size = compute(available, usage)
-            FLog.d(
-                TAG,
-                "Thumbnail disk cache size=%d MiB (available=%d MiB, usage=%d MiB) memoized=false",
-                size / (1024L * 1024L),
-                available / (1024L * 1024L),
-                usage / (1024L * 1024L),
-            )
-            size
-        } catch (e: Exception) {
-            FLog.w(TAG, "Failed to size thumbnail disk cache, using floor", e)
-            FLOOR_BYTES
-        }
     }
 }

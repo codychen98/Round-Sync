@@ -3,6 +3,7 @@ package ca.pkay.rcloneexplorer.util
 import android.content.Context
 import android.net.Uri
 import ca.pkay.rcloneexplorer.Glide.GlideDiskCacheHolder
+import ca.pkay.rcloneexplorer.Glide.PinnedVideoThumbnailStore
 import ca.pkay.rcloneexplorer.Glide.ThumbnailDiskCacheSize
 import ca.pkay.rcloneexplorer.Glide.ThumbnailRestoreDiag
 import java.io.BufferedInputStream
@@ -16,8 +17,10 @@ import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 
 /**
- * Restores thumbnail and media-cache blobs from a config export zip `cache/` tree into
- * [CanonicalCachePathResolver] locations. Missing `cache/` entries are ignored (older exports).
+ * Restores thumbnail assets from a config export zip:
+ * - `cache/thumbnails/` → durable [CanonicalCachePathResolver.thumbnailsDirOrNull]
+ * - `files/pinned_video_thumbnails/` → [PinnedVideoThumbnailStore.directory]
+ * Missing entries are ignored (older exports).
  */
 object CacheArchiveImporter {
 
@@ -162,9 +165,6 @@ object CacheArchiveImporter {
     @JvmStatic
     fun targetFileForEntry(context: Context, zipEntryName: String): File? {
         val normalized = normalizeEntryName(zipEntryName)
-        if (!normalized.startsWith(CacheArchiveExporter.ZIP_CACHE_PREFIX)) {
-            return null
-        }
         return when {
             normalized.startsWith(CacheArchiveExporter.ZIP_THUMBNAILS_PREFIX) -> {
                 val relative = normalized.removePrefix(CacheArchiveExporter.ZIP_THUMBNAILS_PREFIX)
@@ -183,6 +183,14 @@ object CacheArchiveImporter {
                 CanonicalCachePathResolver.mediaCacheDirOrNull(context)?.let { dir ->
                     File(dir, relative)
                 }
+            }
+            normalized.startsWith(CacheArchiveExporter.ZIP_PINNED_THUMBNAILS_PREFIX) -> {
+                val relative = normalized.removePrefix(CacheArchiveExporter.ZIP_PINNED_THUMBNAILS_PREFIX)
+                if (!isSafeRelativePath(relative) || relative.contains('/')) {
+                    // Pinned store is a flat directory of hashed JPG names.
+                    return null
+                }
+                File(PinnedVideoThumbnailStore.directory(context), relative)
             }
             else -> null
         }

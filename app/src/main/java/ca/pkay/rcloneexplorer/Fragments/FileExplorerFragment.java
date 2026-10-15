@@ -115,6 +115,7 @@ import ca.pkay.rcloneexplorer.util.RemotePathLock;
 import ca.pkay.rcloneexplorer.util.RemotePathUnlockSession;
 import ca.pkay.rcloneexplorer.util.LargeParcel;
 import ca.pkay.rcloneexplorer.util.ScrollAnchor;
+import ca.pkay.rcloneexplorer.util.ThumbnailLifecycle;
 import ca.pkay.rcloneexplorer.workmanager.EphemeralTaskManager;
 import ca.pkay.rcloneexplorer.workmanager.SyncManager;
 import de.felixnuesse.ui.BreadcrumbView;
@@ -2019,7 +2020,27 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                 .setPositiveButton(getResources().getString(R.string.delete), (dialog, which) -> {
                     recyclerViewAdapter.cancelSelection();
                     for (FileItem deleteItem : deleteList) {
-                        EphemeralTaskManager.Companion.queueDelete(this.context, remote, deleteItem, directoryObject.getCurrentPath());
+                        String[] extraPurge = new String[0];
+                        if (deleteItem.isDir()) {
+                            java.util.List<FileItem> knownChildren =
+                                    directoryObject.cachedFileItemsUnder(deleteItem.getPath());
+                            if (!knownChildren.isEmpty()) {
+                                java.util.ArrayList<String> paths = new java.util.ArrayList<>();
+                                for (FileItem child : knownChildren) {
+                                    if (child.getPath() != null && !child.getPath().isEmpty()) {
+                                        paths.add(child.getPath());
+                                    }
+                                }
+                                extraPurge = paths.toArray(new String[0]);
+                                directoryObject.removeCachedPathsUnder(deleteItem.getPath());
+                            }
+                        }
+                        EphemeralTaskManager.Companion.queueDelete(
+                                this.context,
+                                remote,
+                                deleteItem,
+                                directoryObject.getCurrentPath(),
+                                extraPurge);
                     }
                     Toasty.info(context, getString(R.string.deleting_info), Toast.LENGTH_SHORT, true).show();
                 });
@@ -2215,6 +2236,9 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                 fileItems = new ArrayList<>();
             }
 
+            java.util.List<FileItem> previousListing =
+                    directoryObject.getCachedContent(directoryObject.getCurrentPath());
+            ThumbnailLifecycle.purgeMissingFromListing(context, previousListing, fileItems);
             directoryObject.setContent(fileItems);
             sortDirectory();
             logStartupRowCandidates(silentFetch ? "freshListingSilent" : "freshListing",
@@ -2253,12 +2277,19 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             swipeRefreshLayout.setRefreshing(true);
         }
 
+        private String renameOldPath;
+        private String renameNewPath;
+
         @Override
         protected Boolean doInBackground(String... strings) {
-            String oldFileName = strings[0];
-            String newFileName = strings[1];
+            renameOldPath = strings[0];
+            renameNewPath = strings[1];
 
-            return rclone.moveTo(remote, oldFileName, newFileName);
+            boolean ok = rclone.moveTo(remote, renameOldPath, renameNewPath);
+            if (ok) {
+                ThumbnailLifecycle.carry(context, remoteName, renameOldPath, renameNewPath);
+            }
+            return ok;
         }
 
         @Override
