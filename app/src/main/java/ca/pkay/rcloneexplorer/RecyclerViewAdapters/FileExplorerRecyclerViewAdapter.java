@@ -29,8 +29,8 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.bumptech.glide.Glide;
 import com.bumptech.glide.Priority;
 import com.bumptech.glide.load.engine.DiskCacheStrategy;
-import com.bumptech.glide.request.FutureTarget;
 import com.bumptech.glide.request.RequestOptions;
+import com.bumptech.glide.request.target.Target;
 import com.bumptech.glide.signature.ObjectKey;
 
 import java.io.File;
@@ -123,7 +123,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     /** Approximate grid cell edge for preload; bind uses ImageView size. */
     private static final int FOLDER_OPEN_PRELOAD_PX = 320;
     private final AtomicLong folderOpenPreloadGeneration = new AtomicLong(0L);
-    private final List<FutureTarget<?>> folderOpenPreloadTargets =
+    private final List<Target<?>> folderOpenPreloadTargets =
             Collections.synchronizedList(new ArrayList<>());
     public interface OnClickListener {
         void onFileClicked(FileItem fileItem);
@@ -912,7 +912,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         }
         Context app = context.getApplicationContext();
         synchronized (folderOpenPreloadTargets) {
-            for (FutureTarget<?> target : folderOpenPreloadTargets) {
+            for (Target<?> target : folderOpenPreloadTargets) {
                 Glide.with(app).clear(target);
             }
             folderOpenPreloadTargets.clear();
@@ -952,7 +952,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             if (mimeType == null) {
                 continue;
             }
-            FutureTarget<Drawable> target;
+            Target<Drawable> target;
             if (mimeType.startsWith("image/")) {
                 if (item.getSize() > sizeLimit) {
                     continue;
