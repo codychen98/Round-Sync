@@ -108,7 +108,7 @@ object CacheArchiveImporter {
                     context,
                     header.fileName,
                     header.uncompressedSize,
-                    header.lastModifiedFileTime,
+                    header.lastModifiedTimeEpoch,
                     openStream = { zipFile.getInputStream(header) },
                     sharedZipInputStream = false,
                 )
