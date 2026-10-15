@@ -36,17 +36,40 @@ object CacheArchiveExporter {
     }
 
     @JvmStatic
-    fun appendCacheEntries(context: Context, zos: ZipOutputStream) {
+    fun appendCacheEntries(context: Context, sink: BackupZipArchive.EntrySink) {
         val app = context.applicationContext
         val exported = HashSet<String>()
         val thumbnailsDir = CanonicalCachePathResolver.thumbnailsDirOrNull(app)
         if (thumbnailsDir != null && isNonEmptyDirectory(thumbnailsDir)) {
-            exportDirectory(thumbnailsDir, ZIP_THUMBNAILS_PREFIX, zos, exported)
+            exportDirectory(thumbnailsDir, ZIP_THUMBNAILS_PREFIX, sink, exported)
         }
         val pinnedDir = PinnedVideoThumbnailStore.directory(app)
         if (isNonEmptyDirectory(pinnedDir)) {
-            exportDirectory(pinnedDir, ZIP_PINNED_THUMBNAILS_PREFIX, zos, exported)
+            exportDirectory(pinnedDir, ZIP_PINNED_THUMBNAILS_PREFIX, sink, exported)
         }
+    }
+
+    /** Legacy plain-zip path used by unit tests that build archives with [ZipOutputStream]. */
+    @JvmStatic
+    fun appendCacheEntries(context: Context, zos: ZipOutputStream) {
+        appendCacheEntries(
+            context,
+            object : BackupZipArchive.EntrySink {
+                override fun writeFile(entryName: String, file: File) {
+                    writeZipEntry(zos, file, entryName)
+                }
+
+                override fun writeBytes(entryName: String, bytes: ByteArray, lastModifiedMs: Long) {
+                    val entry = ZipEntry(entryName)
+                    if (lastModifiedMs > 0L) {
+                        entry.time = lastModifiedMs
+                    }
+                    zos.putNextEntry(entry)
+                    zos.write(bytes)
+                    zos.closeEntry()
+                }
+            },
+        )
     }
 
     @JvmStatic
@@ -75,7 +98,7 @@ object CacheArchiveExporter {
     private fun exportDirectory(
         sourceRoot: File,
         zipPrefix: String,
-        zos: ZipOutputStream,
+        sink: BackupZipArchive.EntrySink,
         exported: MutableSet<String>,
     ) {
         sourceRoot.walkTopDown()
@@ -83,7 +106,13 @@ object CacheArchiveExporter {
             .forEach { file ->
                 val entryName = zipEntryName(zipPrefix, relativePathWithinRoot(sourceRoot, file))
                 if (exported.add(entryName)) {
-                    writeZipEntry(zos, file, entryName)
+                    try {
+                        sink.writeFile(entryName, file)
+                    } catch (t: IOException) {
+                        FLog.w(TAG, "Failed to export cache entry %s", entryName, t)
+                    } catch (t: Throwable) {
+                        FLog.w(TAG, "Failed to export cache entry %s", entryName, t)
+                    }
                 }
             }
     }

@@ -106,6 +106,7 @@ public class MainActivity extends AppCompatActivity
     private static final int REQUEST_PERMISSION_CODE_POST_NOTIFICATIONS = 63;
     private static final int SETTINGS_CODE = 71; // code when coming back from settings
     private static final int WRITE_REQUEST_CODE = 81; // code when exporting config
+    private static final String TAG_BACKUP_ZIP_PASSWORD = "backup_zip_password";
     private static final String PREF_KEY_THUMBNAIL_PREFS_MIGRATION_V1_DONE =
             "thumbnail_prefs_migration_v1_done";
     private static final String[] LEGACY_THUMBNAIL_SUPPRESSION_KEYS = new String[]{
@@ -123,6 +124,8 @@ public class MainActivity extends AppCompatActivity
     private Context context;
     private HashMap<Integer, PinnedItem> drawerPinnedRemoteIds;
     private int availableDrawerPinnedRemoteId;
+    private Uri pendingBackupImportUri;
+    private String pendingBackupZipPassword;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -299,6 +302,8 @@ public class MainActivity extends AppCompatActivity
             Uri uri;
             if (data != null) {
                 uri = data.getData();
+                pendingBackupImportUri = uri;
+                pendingBackupZipPassword = null;
                 new CopyConfigFile().execute(uri);
             }
         } else if (requestCode == SETTINGS_CODE && resultCode == RESULT_OK) {
@@ -571,6 +576,8 @@ public class MainActivity extends AppCompatActivity
         builder.setMessage(context.getString(R.string.config_import_external_explain, uri.toString()));
         builder.setPositiveButton(R.string.continue_statement, (dialogInterface, i) -> {
             dialogInterface.cancel();
+            pendingBackupImportUri = uri;
+            pendingBackupZipPassword = null;
             new CopyConfigFile().execute(uri);
         });
         builder.setNegativeButton(R.string.cancel, (dialogInterface, i) -> {
@@ -588,7 +595,21 @@ public class MainActivity extends AppCompatActivity
                 .setNegativeButton(R.string.cancel)
                 .setPositiveButton(R.string.okay_confirmation)
                 .setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD)
+                .setTag("config_password")
                 .show(getSupportFragmentManager(), "input dialog");
+    }
+
+    private void askForBackupZipPassword(boolean wrongPassword) {
+        new InputDialog()
+                .setTitle(R.string.backup_zip_password_required_title)
+                .setMessage(wrongPassword
+                        ? R.string.backup_zip_password_wrong_message
+                        : R.string.backup_zip_password_required_message)
+                .setNegativeButton(R.string.cancel)
+                .setPositiveButton(R.string.okay_confirmation)
+                .setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD)
+                .setTag(TAG_BACKUP_ZIP_PASSWORD)
+                .show(getSupportFragmentManager(), TAG_BACKUP_ZIP_PASSWORD);
     }
 
     /*
@@ -596,6 +617,15 @@ public class MainActivity extends AppCompatActivity
      */
     @Override
     public void onPositive(String tag, String input) {
+        if (TAG_BACKUP_ZIP_PASSWORD.equals(tag)) {
+            if (pendingBackupImportUri == null) {
+                return;
+            }
+            // One-shot for this import only; not saved to settings.
+            pendingBackupZipPassword = input;
+            new CopyConfigFile().execute(pendingBackupImportUri);
+            return;
+        }
         new DecryptConfig().execute(input);
     }
 
@@ -785,6 +815,8 @@ public class MainActivity extends AppCompatActivity
         private final int FAILURE_ZIP_INVALID_JSON = 4;
         private final int FAILURE_ZIP_INVALID_CONF = 5;
         private final int FAILURE_ZIP_MISSING_CONF = 6;
+        private final int FAILURE_ZIP_PASSWORD_REQUIRED = 7;
+        private final int FAILURE_ZIP_PASSWORD_WRONG = 8;
 
         private int statusCode = FAILURE_UNSPECIFIED;
         private LoadingDialog loadingDialog;
@@ -808,7 +840,8 @@ public class MainActivity extends AppCompatActivity
         protected Boolean doInBackground(Uri... uris) {
             ContentResolver resolver = context.getContentResolver();
             String mime = resolver.getType(uris[0]);
-            ConfigImporter.Result result = ConfigImporter.importFromUri(context, uris[0], mime);
+            ConfigImporter.Result result = ConfigImporter.importFromUri(
+                    context, uris[0], mime, pendingBackupZipPassword);
             switch (result.getStatus()) {
                 case SUCCESS:
                     statusCode = SUCCESS_IMPORT;
@@ -822,6 +855,12 @@ public class MainActivity extends AppCompatActivity
                 case FAILURE_ZIP_MISSING_CONF:
                     statusCode = FAILURE_ZIP_MISSING_CONF;
                     return false;
+                case FAILURE_ZIP_PASSWORD_REQUIRED:
+                    statusCode = FAILURE_ZIP_PASSWORD_REQUIRED;
+                    return false;
+                case FAILURE_ZIP_PASSWORD_WRONG:
+                    statusCode = FAILURE_ZIP_PASSWORD_WRONG;
+                    return false;
                 default:
                     statusCode = FAILURE_UNSPECIFIED;
                     return false;
@@ -833,8 +872,16 @@ public class MainActivity extends AppCompatActivity
             super.onPostExecute(success);
             Dialogs.dismissSilently(loadingDialog);
 
-            String errorMessage = getString(R.string.copying_rclone_config_fail);
             if (!success) {
+                if (statusCode == FAILURE_ZIP_PASSWORD_REQUIRED) {
+                    askForBackupZipPassword(false);
+                    return;
+                }
+                if (statusCode == FAILURE_ZIP_PASSWORD_WRONG) {
+                    askForBackupZipPassword(true);
+                    return;
+                }
+                String errorMessage = getString(R.string.copying_rclone_config_fail);
                 switch (statusCode) {
                     case FAILURE_RCLONE_CONF_NOT_VALID:
                     case FAILURE_ZIP_INVALID_CONF:
@@ -851,6 +898,9 @@ public class MainActivity extends AppCompatActivity
                 Toasty.error(context, errorMessage, Toast.LENGTH_LONG, true).show();
                 return;
             }
+
+            pendingBackupImportUri = null;
+            pendingBackupZipPassword = null;
 
             if (rclone.isConfigEncrypted()) {
                 pinRemotesToDrawer(); // this will clear any previous pinned remotes

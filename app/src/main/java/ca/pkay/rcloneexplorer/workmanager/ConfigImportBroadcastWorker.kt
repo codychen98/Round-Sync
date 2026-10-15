@@ -103,6 +103,20 @@ class ConfigImportBroadcastWorker(
                 )
                 Result.failure()
             }
+            ConfigImporter.Status.FAILURE_ZIP_PASSWORD_REQUIRED,
+            ConfigImporter.Status.FAILURE_ZIP_PASSWORD_WRONG,
+            -> {
+                FLog.e(
+                    TAG,
+                    "Config import broadcast failed: encrypted backup at %s needs the password from Settings",
+                    sourceFile.absolutePath,
+                )
+                ConfigBroadcastNotifications.showImportFailure(
+                    applicationContext,
+                    applicationContext.getString(R.string.config_import_broadcast_failure_zip_password),
+                )
+                Result.failure()
+            }
             ConfigImporter.Status.FAILURE_UNSPECIFIED -> {
                 FLog.e(
                     TAG,

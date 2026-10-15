@@ -16,7 +16,6 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
@@ -40,18 +39,13 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
-import java.util.zip.ZipOutputStream;
-
-import ca.pkay.rcloneexplorer.Database.json.Exporter;
-import ca.pkay.rcloneexplorer.Database.json.SharedPreferencesBackup;
 import ca.pkay.rcloneexplorer.Items.FileItem;
 import ca.pkay.rcloneexplorer.Items.FilterEntry;
 import ca.pkay.rcloneexplorer.Items.RemoteItem;
 import ca.pkay.rcloneexplorer.Items.SyncDirectionObject;
 import ca.pkay.rcloneexplorer.rclone.Provider;
-import ca.pkay.rcloneexplorer.util.CacheArchiveExporter;
+import ca.pkay.rcloneexplorer.util.BackupConfigArchive;
+import ca.pkay.rcloneexplorer.util.BackupZipArchive;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.SyncLog;
 import es.dmoral.toasty.Toasty;
@@ -1336,80 +1330,76 @@ public class Rclone {
     }
 
     public File getFileFromZip(Uri uri, String target, File targetfile) throws IOException {
-        InputStream inputStream;
-        try {
-            inputStream = context.getContentResolver().openInputStream(uri);
-        } catch(NullPointerException e) {
-            throw new IOException(e);
-        }
-        if (inputStream == null) {
-            throw new IOException("Could not open zip file");
-        }
-        try (InputStream in = inputStream) {
-            return getFileFromZip(in, target, targetfile);
+        return getFileFromZip(uri, target, targetfile, null);
+    }
+
+    public File getFileFromZip(Uri uri, String target, File targetfile, @Nullable String password)
+            throws IOException {
+        try (BackupZipArchive.MaterializedZip materialized = BackupZipArchive.materialize(context, uri)) {
+            return getFileFromZip(materialized.getFile(), target, targetfile, password);
         }
     }
 
     public File getFileFromZip(File zipFile, String target, File targetfile) throws IOException {
-        try (InputStream inputStream = new FileInputStream(zipFile)) {
-            return getFileFromZip(inputStream, target, targetfile);
-        }
+        return getFileFromZip(zipFile, target, targetfile, null);
     }
 
-    private File getFileFromZip(InputStream inputStream, String target, File targetfile) throws IOException {
-        ZipInputStream zipInputStream = new ZipInputStream(new BufferedInputStream(inputStream));
-
-        ZipEntry zipEntry;
-        int count = 0;
-        byte[] buffer = new byte[1024];
-
-        while ((zipEntry = zipInputStream.getNextEntry()) != null) {
-            if(zipEntry.getName().equals(target)){
-                FileOutputStream fileOutputStream = new FileOutputStream(targetfile);
-                while ((count = zipInputStream.read(buffer)) != -1) {
-                    fileOutputStream.write(buffer, 0, count);
-                }
-                fileOutputStream.flush();
-                fileOutputStream.close();
-                zipInputStream.closeEntry();
-                zipInputStream.close();
-                return targetfile;
-            }
-            zipInputStream.closeEntry();
-        }
-        zipInputStream.close();
-        return null;
+    public File getFileFromZip(File zipFile, String target, File targetfile, @Nullable String password)
+            throws IOException {
+        return BackupZipArchive.extractEntryToFile(zipFile, target, targetfile, password);
     }
 
     public String readDatabaseJson(Uri uri) throws Exception {
-        return readTextfileFromZip(uri, "rcx.json-tmp", "rcx.json");
+        return readDatabaseJson(uri, null);
+    }
+
+    public String readDatabaseJson(Uri uri, @Nullable String password) throws Exception {
+        try (BackupZipArchive.MaterializedZip materialized = BackupZipArchive.materialize(context, uri)) {
+            return readDatabaseJson(materialized.getFile(), password);
+        }
     }
 
     public String readDatabaseJson(File zipFile) throws Exception {
-        return readTextfileFromZip(zipFile, "rcx.json-tmp", "rcx.json");
+        return readDatabaseJson(zipFile, null);
+    }
+
+    public String readDatabaseJson(File zipFile, @Nullable String password) throws Exception {
+        return readTextfileFromZip(zipFile, "rcx.json-tmp", "rcx.json", password);
     }
 
     public String readSharedPrefs(Uri uri) throws Exception {
-        return readTextfileFromZip(uri, "rcx.prefs-tmp", "rcx.prefs");
+        return readSharedPrefs(uri, null);
+    }
+
+    public String readSharedPrefs(Uri uri, @Nullable String password) throws Exception {
+        try (BackupZipArchive.MaterializedZip materialized = BackupZipArchive.materialize(context, uri)) {
+            return readSharedPrefs(materialized.getFile(), password);
+        }
     }
 
     public String readSharedPrefs(File zipFile) throws Exception {
-        return readTextfileFromZip(zipFile, "rcx.prefs-tmp", "rcx.prefs");
+        return readSharedPrefs(zipFile, null);
     }
 
-    public String readTextfileFromZip(Uri uri, String tempfile, String targetfile) throws Exception {
-        File temp = new File(context.getFilesDir().getPath(), tempfile);
-        temp = getFileFromZip(uri, targetfile, temp);
-        return readExtractedTextFile(temp);
+    public String readSharedPrefs(File zipFile, @Nullable String password) throws Exception {
+        return readTextfileFromZip(zipFile, "rcx.prefs-tmp", "rcx.prefs", password);
     }
 
     public String readTextfileFromZip(File zipFile, String tempfile, String targetfile) throws Exception {
+        return readTextfileFromZip(zipFile, tempfile, targetfile, null);
+    }
+
+    public String readTextfileFromZip(File zipFile, String tempfile, String targetfile,
+            @Nullable String password) throws Exception {
         File temp = new File(context.getFilesDir().getPath(), tempfile);
-        temp = getFileFromZip(zipFile, targetfile, temp);
+        temp = getFileFromZip(zipFile, targetfile, temp, password);
         return readExtractedTextFile(temp);
     }
 
     private String readExtractedTextFile(File temp) throws IOException {
+        if (temp == null) {
+            throw new IOException("Zip entry missing");
+        }
         char[] buffer = new char[4096];
         StringBuilder json = new StringBuilder();
         InputStream inputStream = new FileInputStream(temp);
@@ -1422,13 +1412,22 @@ public class Rclone {
     }
 
     public boolean copyConfigFileFromZip(Uri uri) throws Exception {
-        return copyConfigFileFromZipInternal(getFileFromZip(uri, "rclone.conf",
-                new File(context.getFilesDir().getPath(), "rclone.conf-tmp")));
+        return copyConfigFileFromZip(uri, null);
+    }
+
+    public boolean copyConfigFileFromZip(Uri uri, @Nullable String password) throws Exception {
+        try (BackupZipArchive.MaterializedZip materialized = BackupZipArchive.materialize(context, uri)) {
+            return copyConfigFileFromZip(materialized.getFile(), password);
+        }
     }
 
     public boolean copyConfigFileFromZip(File zipFile) throws Exception {
+        return copyConfigFileFromZip(zipFile, null);
+    }
+
+    public boolean copyConfigFileFromZip(File zipFile, @Nullable String password) throws Exception {
         return copyConfigFileFromZipInternal(getFileFromZip(zipFile, "rclone.conf",
-                new File(context.getFilesDir().getPath(), "rclone.conf-tmp")));
+                new File(context.getFilesDir().getPath(), "rclone.conf-tmp"), password));
     }
 
     private boolean copyConfigFileFromZipInternal(File tempFile) throws IOException {
@@ -1529,7 +1528,7 @@ public class Rclone {
             return;
         }
         try {
-            writeConfigZip(outputStream);
+            BackupConfigArchive.writeToStream(context, outputStream);
         } finally {
             outputStream.flush();
             outputStream.close();
@@ -1545,45 +1544,7 @@ public class Rclone {
             throw new IOException("Could not replace existing export file: " + outputFile);
         }
         try (FileOutputStream outputStream = new FileOutputStream(outputFile)) {
-            writeConfigZip(outputStream);
-        }
-    }
-
-    private void writeConfigZip(OutputStream outputStream) throws IOException {
-        File configFile = new File(rcloneConf);
-        Uri config = Uri.fromFile(configFile);
-        InputStream inputStream = context.getContentResolver().openInputStream(config);
-        if (inputStream == null) {
-            throw new IOException("Could not read config file");
-        }
-
-        char[] buffer = new char[4096];
-        StringBuilder out = new StringBuilder();
-        Reader in = new InputStreamReader(inputStream, StandardCharsets.UTF_8);
-        for (int numRead; (numRead = in.read(buffer, 0, buffer.length)) > 0; ) {
-            out.append(buffer, 0, numRead);
-        }
-
-        ZipOutputStream zos = new ZipOutputStream(outputStream);
-        try {
-            ZipEntry zipEntry = new ZipEntry("rcx.json");
-            zos.putNextEntry(zipEntry);
-            zos.write(Exporter.create(this.context).getBytes());
-            zos.closeEntry();
-            zipEntry = new ZipEntry("rcx.prefs");
-            zos.putNextEntry(zipEntry);
-            zos.write(SharedPreferencesBackup.export(context).getBytes());
-            zos.closeEntry();
-            zipEntry = new ZipEntry("rclone.conf");
-            zos.putNextEntry(zipEntry);
-            zos.write(out.toString().getBytes());
-            zos.closeEntry();
-            CacheArchiveExporter.appendCacheEntries(context, zos);
-        } catch (Exception e) {
-            throw new IOException("Unable to write config export zip", e);
-        } finally {
-            zos.close();
-            inputStream.close();
+            BackupConfigArchive.writeToStream(context, outputStream);
         }
     }
 

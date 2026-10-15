@@ -19,17 +19,23 @@ import ca.pkay.rcloneexplorer.Glide.DuplicateVideoThumbnailSweep
 import ca.pkay.rcloneexplorer.Items.RemoteItem
 import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Rclone
+import ca.pkay.rcloneexplorer.util.BackupZipPasswordStore
 import ca.pkay.rcloneexplorer.util.FLog
 import ca.pkay.rcloneexplorer.util.SelectedFolderMediaCacheClearance
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import de.felixnuesse.extract.extensions.TAG
 import de.felixnuesse.extract.settings.language.LanguagePicker
 import de.felixnuesse.extract.settings.preferences.FilesizePreference
 import es.dmoral.toasty.Toasty
+import android.widget.LinearLayout
 
 class GeneralPreferencesFragment : PreferenceFragmentCompat() {
 
 
     private lateinit var sharedPreferences: SharedPreferences
+    private var backupZipPasswordPreference: Preference? = null
+    private var backupZipPasswordClearPreference: Preference? = null
 
 
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
@@ -99,6 +105,129 @@ class GeneralPreferencesFragment : PreferenceFragmentCompat() {
             true
         }
 
+        backupZipPasswordPreference = findPreference("backupZipPasswordKey")
+        backupZipPasswordClearPreference = findPreference("backupZipPasswordClearKey")
+        backupZipPasswordPreference?.setOnPreferenceClickListener {
+            showBackupZipPasswordDialog()
+            true
+        }
+        backupZipPasswordClearPreference?.setOnPreferenceClickListener {
+            confirmClearBackupZipPassword()
+            true
+        }
+        refreshBackupZipPasswordPreferences()
+    }
+
+    private fun refreshBackupZipPasswordPreferences() {
+        val hasPassword = BackupZipPasswordStore.hasPassword(requireContext())
+        backupZipPasswordPreference?.setTitle(
+            if (hasPassword) {
+                R.string.pref_backup_zip_password_change_title
+            } else {
+                R.string.pref_backup_zip_password_set_title
+            },
+        )
+        backupZipPasswordPreference?.setSummary(
+            if (hasPassword) {
+                R.string.pref_backup_zip_password_summary_set
+            } else {
+                R.string.pref_backup_zip_password_summary_unset
+            },
+        )
+        backupZipPasswordClearPreference?.isEnabled = hasPassword
+    }
+
+    private fun showBackupZipPasswordDialog() {
+        val changing = BackupZipPasswordStore.hasPassword(requireContext())
+        val container = LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.VERTICAL
+            val pad = (16 * resources.displayMetrics.density).toInt()
+            setPadding(pad, pad / 2, pad, 0)
+        }
+        val passwordLayout = TextInputLayout(requireContext()).apply {
+            hint = getString(R.string.please_enter_password)
+        }
+        val passwordInput = TextInputEditText(requireContext()).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        passwordLayout.addView(passwordInput)
+        val confirmLayout = TextInputLayout(requireContext()).apply {
+            hint = getString(R.string.pref_backup_zip_password_confirm_hint)
+        }
+        val confirmInput = TextInputEditText(requireContext()).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        confirmLayout.addView(confirmInput)
+        container.addView(passwordLayout)
+        container.addView(confirmLayout)
+
+        AlertDialog.Builder(requireContext())
+            .setTitle(
+                if (changing) {
+                    R.string.pref_backup_zip_password_change_title
+                } else {
+                    R.string.pref_backup_zip_password_set_title
+                },
+            )
+            .setView(container)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.ok) { _: DialogInterface, _: Int ->
+                val password = passwordInput.text?.toString().orEmpty()
+                val confirm = confirmInput.text?.toString().orEmpty()
+                when {
+                    password.isBlank() -> Toasty.error(
+                        requireContext(),
+                        getString(R.string.pref_backup_zip_password_empty),
+                        Toast.LENGTH_SHORT,
+                        true,
+                    ).show()
+                    password != confirm -> Toasty.error(
+                        requireContext(),
+                        getString(R.string.pref_backup_zip_password_mismatch),
+                        Toast.LENGTH_SHORT,
+                        true,
+                    ).show()
+                    else -> {
+                        try {
+                            BackupZipPasswordStore.setPassword(requireContext(), password)
+                            refreshBackupZipPasswordPreferences()
+                            Toasty.success(
+                                requireContext(),
+                                getString(R.string.pref_backup_zip_password_saved),
+                                Toast.LENGTH_SHORT,
+                                true,
+                            ).show()
+                        } catch (t: Throwable) {
+                            FLog.e(TAG(), "Failed to save backup zip password", t)
+                            Toasty.error(
+                                requireContext(),
+                                getString(R.string.copying_rclone_config_fail),
+                                Toast.LENGTH_SHORT,
+                                true,
+                            ).show()
+                        }
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun confirmClearBackupZipPassword() {
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.pref_backup_zip_password_clear_title)
+            .setMessage(R.string.pref_backup_zip_password_clear_confirm)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.ok) { _: DialogInterface, _: Int ->
+                BackupZipPasswordStore.clearPassword(requireContext())
+                refreshBackupZipPasswordPreferences()
+                Toasty.info(
+                    requireContext(),
+                    getString(R.string.pref_backup_zip_password_cleared),
+                    Toast.LENGTH_SHORT,
+                    true,
+                ).show()
+            }
+            .show()
     }
 
     private fun runDuplicateThumbnailSweep() {

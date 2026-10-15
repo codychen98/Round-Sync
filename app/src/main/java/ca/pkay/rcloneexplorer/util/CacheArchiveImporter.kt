@@ -58,13 +58,31 @@ object CacheArchiveImporter {
     }
 
     @JvmStatic
-    fun extractFromZipFile(context: Context, file: File): Result {
+    fun extractFromZipFile(context: Context, file: File): Result =
+        extractFromZipFile(context, file, password = null)
+
+    /**
+     * Extracts cache entries. When [password] is set (or the zip is encrypted and the password
+     * unlocks it), uses zip4j. Plain zips keep the java.util.zip path.
+     */
+    @JvmStatic
+    fun extractFromZipFile(context: Context, file: File, password: String?): Result {
         val app = context.applicationContext
         prepareThumbnailCacheForImport(app)
         return try {
-            ZipFile(file).use { zipFile ->
-                logExtractResult(app, extractFromZipFileHandle(app, zipFile))
+            if (BackupZipArchive.isEncrypted(file) || !password.isNullOrEmpty()) {
+                BackupZipArchive.openZipFile(file, password).use { zip4jFile ->
+                    logExtractResult(app, extractFromZip4j(app, zip4jFile))
+                }
+            } else {
+                ZipFile(file).use { zipFile ->
+                    logExtractResult(app, extractFromZipFileHandle(app, zipFile))
+                }
             }
+        } catch (t: BackupZipWrongPasswordException) {
+            throw t
+        } catch (t: BackupZipPasswordRequiredException) {
+            throw t
         } catch (t: IOException) {
             FLog.w(TAG, "Could not open import file", t)
             Result(0, 0, 0)
@@ -72,6 +90,36 @@ object CacheArchiveImporter {
             FLog.w(TAG, "Cache import interrupted", t)
             Result(0, 0, 0)
         }
+    }
+
+    private fun extractFromZip4j(
+        context: Context,
+        zipFile: net.lingala.zip4j.ZipFile,
+    ): Result {
+        var extracted = 0
+        var skipped = 0
+        var failed = 0
+        for (header in zipFile.fileHeaders) {
+            if (header.isDirectory) {
+                continue
+            }
+            when (
+                processEntry(
+                    context,
+                    header.fileName,
+                    header.uncompressedSize,
+                    header.lastModifiedFileTime,
+                    openStream = { zipFile.getInputStream(header) },
+                    sharedZipInputStream = false,
+                )
+            ) {
+                Outcome.EXTRACTED -> extracted++
+                Outcome.SKIPPED -> skipped++
+                Outcome.FAILED -> failed++
+                Outcome.IGNORED -> {}
+            }
+        }
+        return Result(extracted, skipped, failed)
     }
 
     private fun prepareThumbnailCacheForImport(context: Context) {
