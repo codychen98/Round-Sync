@@ -3,6 +3,8 @@ package ca.pkay.rcloneexplorer.RecyclerViewAdapters;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
@@ -231,7 +233,10 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             String upcomingThumbKey = thumbBindKey(item);
             boolean warmSameKey = upcomingThumbKey.equals(holder.lastBoundThumbKey)
                     && hasNonPlaceholderThumbDrawable(holder);
+            // Do not clear when pin/Glide DATA is warm — clearing leaves a blank cell for hundreds
+            // of ms while Glide LOCAL/DATA decodes queue behind a large folder bind.
             if (!warmSameKey
+                    && !hasWarmDiskOrPinThumb(item)
                     && !ThumbnailReloadPriority.shouldDeferThumbnailLoad(
                     item.getRemote().getName(), item.getPath())) {
                 clearFileIcon(holder, "onBindViewHolder");
@@ -1353,9 +1358,31 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 context.getApplicationContext(),
                 item.getRemote().getName(),
                 item.getPath());
-        // Pin file is on disk — keep any existing drawable until Glide swaps (no placeholder flash).
         final long pinIssuedAt = SystemClock.elapsedRealtime();
         final String pinKey = item.getPath() + "|pin";
+        // Paint pin JPEG synchronously. Queuing Glide.LOCAL for every row in a large folder
+        // left cleared cells blank for ~800ms+ (white tiles) while decodes waited in line.
+        if (!warmKeep || !hasNonPlaceholderThumbDrawable(holder)) {
+            Bitmap pinBmp = decodePinnedThumbBitmap(pinned, FOLDER_OPEN_PRELOAD_PX);
+            if (pinBmp != null) {
+                cancelActiveRetryListener(holder);
+                holder.fileIcon.setImageTintList(null);
+                holder.fileIcon.setImageBitmap(pinBmp);
+                ThumbRootCauseLog.info(
+                        context,
+                        "thumbReady",
+                        "key=" + pinKey
+                                + " dataSource=LOCAL_SYNC"
+                                + " skipMemCache=false"
+                                + " reloadEpoch=0"
+                                + " latencyMs=" + (SystemClock.elapsedRealtime() - pinIssuedAt));
+                return true;
+            }
+        } else {
+            return true;
+        }
+        // Decode failed — fall back to Glide with an explicit resource stamp.
+        prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
         Glide.with(context.getApplicationContext())
                 .load(pinned)
                 .apply(new RequestOptions()
@@ -1395,6 +1422,31 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 })
                 .into(holder.fileIcon);
         return true;
+    }
+
+    @Nullable
+    private static Bitmap decodePinnedThumbBitmap(@NonNull File pinned, int maxEdgePx) {
+        if (!pinned.isFile() || pinned.length() <= 0L) {
+            return null;
+        }
+        try {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(pinned.getAbsolutePath(), bounds);
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+                return null;
+            }
+            int edge = Math.max(bounds.outWidth, bounds.outHeight);
+            int sample = 1;
+            while (edge / (sample * 2) >= maxEdgePx) {
+                sample *= 2;
+            }
+            BitmapFactory.Options opts = new BitmapFactory.Options();
+            opts.inSampleSize = sample;
+            return BitmapFactory.decodeFile(pinned.getAbsolutePath(), opts);
+        } catch (Exception | OutOfMemoryError e) {
+            return null;
+        }
     }
 
     /**
