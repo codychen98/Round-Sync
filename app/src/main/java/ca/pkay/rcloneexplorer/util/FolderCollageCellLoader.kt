@@ -72,23 +72,19 @@ object FolderCollageCellLoader {
                 return decodeFile(pinned, maxEdgePx)
             }
         }
+        val cache = GlideDiskCacheHolder.get(app) ?: return null
         val label = ThumbnailCacheIdentity.prefetchDiskCacheKeyLabel(
-            app,
+            cache,
             remoteName,
             path,
             mime,
         ) ?: return null
-        val file = diskCacheFile(app, label) ?: return null
-        return decodeFile(file, maxEdgePx)
-    }
-
-    private fun diskCacheFile(context: Context, label: String): File? {
-        val cache = GlideDiskCacheHolder.get(context) ?: return null
-        return try {
+        val file = try {
             cache.get(ObjectKey(label))
         } catch (_: Exception) {
             null
-        }
+        } ?: return null
+        return decodeFile(file, maxEdgePx)
     }
 
     private fun decodeFile(file: File, maxEdgePx: Int): Bitmap? {

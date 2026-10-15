@@ -580,7 +580,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 rowBindingGateFor(holder, debugLoadKey),
                                 false,
                                 0);
-                        if (!warmKeep && !hasWarmDiskOrPinThumb(item)) {
+                        if (!warmKeep && !hasNonPlaceholderThumbDrawable(holder)) {
                             prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
                             clearedDrawable = true;
                             placeholderStamped = true;
@@ -685,7 +685,10 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 rowBindingGateFor(holder, debugLoadKey),
                                 skipMemCache,
                                 reloadEpoch);
-                        if (!warmKeep && !hasWarmDiskOrPinThumb(item)) {
+                        // Stamp placeholder whenever the cell is empty — even if disk is "warm".
+                        // Skipping prepare after skipping clear left blank tiles for ~800ms while
+                        // Glide DATA_DISK_CACHE queued (unpinned Anime rows).
+                        if (!warmKeep && !hasNonPlaceholderThumbDrawable(holder)) {
                             prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
                             clearedDrawable = true;
                             placeholderStamped = true;
@@ -838,6 +841,14 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 item.getMimeType(),
                 FOLDER_OPEN_PRELOAD_PX);
         if (bmp == null) {
+            if (ThumbnailCacheIdentity.isPrefetchThumbnailCached(context, item)) {
+                ThumbRootCauseLog.info(
+                        context,
+                        "diskSyncMiss",
+                        "path=" + item.getPath()
+                                + " mime=" + item.getMimeType()
+                                + " cachedLabel=true decode=null");
+            }
             return false;
         }
         cancelActiveRetryListener(holder);
