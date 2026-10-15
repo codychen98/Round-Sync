@@ -13,6 +13,9 @@ import java.util.concurrent.Executors
 /**
  * Resolves folder-tile collages from **already available** file thumbnails only
  * (pinned JPEGs or Glide disk-cache files). Never triggers video regenerate / serve fetch.
+ *
+ * Successful collages are kept in a **process-scoped** memory map and persisted via
+ * [FolderCollageStore] so cold start / fragment recreate can bind immediately.
  */
 class FolderCoverResolveCoordinator(
     appContext: Context,
@@ -32,18 +35,29 @@ class FolderCoverResolveCoordinator(
     }
 
     private val appContext = appContext.applicationContext
-    private val cache = ConcurrentHashMap<String, Outcome>()
-    private val noneResolvedAtMs = ConcurrentHashMap<String, Long>()
-    private val inFlight = ConcurrentHashMap.newKeySet<String>()
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    /**
+     * Memory first, then durable collage JPEG. Disk hits are promoted into the process
+     * cache so subsequent peeks are free.
+     */
     fun peek(remoteName: String, folderPath: String): Outcome? {
-        val existing = cache[cacheKey(remoteName, folderPath)]
+        val key = cacheKey(remoteName, folderPath)
+        val existing = cache[key]
         if (existing is Outcome.Found && existing.collage.isRecycled) {
-            cache.remove(cacheKey(remoteName, folderPath))
-            return null
+            cache.remove(key)
+        } else if (existing != null) {
+            return existing
         }
-        return existing
+        val fromDisk = FolderCollageStore.loadBitmap(appContext, remoteName, folderPath) ?: return null
+        val found = Outcome.Found(fromDisk)
+        cache[key] = found
+        ThumbRootCauseLog.info(
+            appContext,
+            "folderCollageDiskHit",
+            "rowPath=$folderPath",
+        )
+        return found
     }
 
     fun request(remote: RemoteItem, folderPath: String) {
@@ -69,11 +83,16 @@ class FolderCoverResolveCoordinator(
         EXECUTOR.execute {
             try {
                 val outcome = resolveCollage(remote, folderPath)
-                cache[key] = outcome
-                if (outcome is Outcome.None) {
-                    noneResolvedAtMs[key] = System.currentTimeMillis()
-                } else {
-                    noneResolvedAtMs.remove(key)
+                when (outcome) {
+                    is Outcome.Found -> {
+                        FolderCollageStore.put(appContext, remote.name, folderPath, outcome.collage)
+                        cache[key] = outcome
+                        noneResolvedAtMs.remove(key)
+                    }
+                    is Outcome.None -> {
+                        cache[key] = outcome
+                        noneResolvedAtMs[key] = System.currentTimeMillis()
+                    }
                 }
                 mainHandler.post {
                     onResolvedMainThread.onFolderCoverResolved(remote.name, folderPath)
@@ -167,6 +186,11 @@ class FolderCoverResolveCoordinator(
 
     companion object {
         private const val NONE_RETRY_COOLDOWN_MS = 15_000L
+
+        /** Process-scoped so fragment recreate does not drop successful collages. */
+        private val cache = ConcurrentHashMap<String, Outcome>()
+        private val noneResolvedAtMs = ConcurrentHashMap<String, Long>()
+        private val inFlight = ConcurrentHashMap.newKeySet<String>()
 
         private val EXECUTOR: ExecutorService = Executors.newFixedThreadPool(2) { runnable ->
             Thread(runnable, "folder-cover-resolve").apply { isDaemon = true }

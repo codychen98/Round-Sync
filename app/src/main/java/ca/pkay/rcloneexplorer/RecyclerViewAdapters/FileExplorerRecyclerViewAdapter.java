@@ -188,17 +188,6 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         super.onDetachedFromRecyclerView(recyclerView);
     }
 
-    /**
-     * After a full list replacement (e.g. enter subdirectory), scrap from the old folder grid can
-     * sit in the pool still carrying folder-thumbnail drawables; clear the pool so holders are not
-     * rebound with stale Glide imagery.
-     */
-    private void clearRecycledViewPoolIfAttached() {
-        if (attachedRecyclerView != null) {
-            attachedRecyclerView.getRecycledViewPool().clear();
-        }
-    }
-
     @Override
     public int getItemViewType(int position) {
         return viewMode;
@@ -425,7 +414,9 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         boolean startupPolicyAllowed = false;
 
         if (item.isDir()) {
-            if (isNetworkFolderThumbnailCandidate(item) && serverReady) {
+            // Collages are cache-only (pins / Glide DATA / persisted JPEG) — do not wait for
+            // thumbnail server READY before peek/request.
+            if (isNetworkFolderThumbnailCandidate(item)) {
                 if (deferExclusiveUserReloadThumbnail(holder, item, null, null)) {
                     startupBranch = "deferredForUserReload";
                     startupPolicyAllowed = true;
@@ -494,9 +485,9 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 }
                 }
             } else {
-                startupBranch = serverReady ? "folderPolicySkip" : "folderPlaceholderNotReady";
+                startupBranch = "folderPolicySkip";
                 startupPolicyAllowed = isHttpThumbnailPolicyAllowedForNetworkThumbnail(item);
-                maybeLogThumbPipelineDbg(item, serverReady ? "folderPolicySkip" : "folderPlaceholderNotReady",
+                maybeLogThumbPipelineDbg(item, "folderPolicySkip",
                         isHttpThumbnailPolicyAllowedForNetworkThumbnail(item));
                 cancelActiveRetryListener(holder);
                 clearFileIcon(holder, "folderPlaceholder");
@@ -579,7 +570,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 rowBindingGateFor(holder, debugLoadKey),
                                 false,
                                 0);
-                        if (!warmKeep) {
+                        if (!warmKeep && !hasWarmDiskOrPinThumb(item)) {
                             prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
                             clearedDrawable = true;
                             placeholderStamped = true;
@@ -679,7 +670,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 rowBindingGateFor(holder, debugLoadKey),
                                 skipMemCache,
                                 reloadEpoch);
-                        if (!warmKeep) {
+                        if (!warmKeep && !hasWarmDiskOrPinThumb(item)) {
                             prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
                             clearedDrawable = true;
                             placeholderStamped = true;
@@ -789,6 +780,25 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         return d instanceof BitmapDrawable;
     }
 
+    /**
+     * True when a disk/pin hit is expected so we should not stamp a vector placeholder
+     * (which causes black/gray flash before Glide paints the cached decode).
+     */
+    private boolean hasWarmDiskOrPinThumb(@NonNull FileItem item) {
+        if (context == null || item.getRemote() == null || item.getPath() == null) {
+            return false;
+        }
+        String mime = item.getMimeType();
+        if (mime != null && mime.startsWith("video/")) {
+            String stable = ThumbnailCacheIdentity.stableServePath(
+                    item.getRemote().getName(), item.getPath());
+            if (PinnedVideoThumbnailStore.has(context.getApplicationContext(), stable)) {
+                return true;
+            }
+        }
+        return ThumbnailCacheIdentity.isPrefetchThumbnailCached(context, item);
+    }
+
     private void clearFileIcon(@NonNull ViewHolder holder, @NonNull String reason) {
         if (context == null) {
             return;
@@ -857,7 +867,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             return false;
         }
         maybeLogThumbPipelineDbg(item, kind + "CachedWhileServerStarting", true);
-        prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
+        // Disk hit expected — avoid vector placeholder flash before cache-only load paints.
         RequestOptions cacheOnly = new RequestOptions()
                 .apply(glideOption)
                 .onlyRetrieveFromCache(true)
@@ -1343,9 +1353,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 context.getApplicationContext(),
                 item.getRemote().getName(),
                 item.getPath());
-        if (!warmKeep) {
-            prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
-        }
+        // Pin file is on disk — keep any existing drawable until Glide swaps (no placeholder flash).
         final long pinIssuedAt = SystemClock.elapsedRealtime();
         final String pinKey = item.getPath() + "|pin";
         Glide.with(context.getApplicationContext())
@@ -1773,7 +1781,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         } else {
             notifyItemRangeInserted(0, files.size());
         }
-        clearRecycledViewPoolIfAttached();
+        // Do not clear the recycled view pool: cold bind already clears on key mismatch,
+        // and wiping the pool forces placeholder→re-decode on every folder enter.
         notifyThumbnailIdleIfNoTargets();
         schedulePinnedThumbnailMigration();
         if (serverReady) {
@@ -1874,7 +1883,6 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             SyncLog.info(context, "MediaPrepDbg", "event=adapterUpdateSortedData gen=" + gen + " loaded="
                     + thumbnailLoaded.get() + " total=" + thumbnailTotal + " listSize=" + files.size());
         }
-        clearRecycledViewPoolIfAttached();
         notifyThumbnailIdleIfNoTargets();
         schedulePinnedThumbnailMigration();
         if (serverReady) {
