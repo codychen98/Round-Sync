@@ -59,6 +59,8 @@ import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.MediaFolderPolicy;
 import ca.pkay.rcloneexplorer.util.PolicyType;
+import ca.pkay.rcloneexplorer.util.FolderCoverResolveCoordinator;
+import ca.pkay.rcloneexplorer.util.FolderCoverResolver;
 import ca.pkay.rcloneexplorer.util.SyncLog;
 import ca.pkay.rcloneexplorer.util.ThumbRootCauseLog;
 import ca.pkay.rcloneexplorer.util.ThumbnailDiagLog;
@@ -92,6 +94,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     private long sizeLimit;
     private int viewMode = VIEW_MODE_LIST;
     private ThumbnailProgressListener progressListener;
+    @Nullable
+    private FolderCoverResolveCoordinator folderCoverCoordinator;
     @Nullable
     private MultiFolderPickerDelegate multiFolderPickerDelegate;
     /** When {@link #multiFolderPickerDelegate} is set, directory checkboxes only show in this mode. */
@@ -419,55 +423,65 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                     startupBranch = "deferredForUserReload";
                     startupPolicyAllowed = true;
                 } else {
-                startupBranch = "folderThumb";
                 startupPolicyAllowed = true;
                 holder.fileIcon.setVisibility(View.VISIBLE);
                 holder.dirIcon.setVisibility(View.GONE);
-                RequestOptions folderGlideOption = new RequestOptions()
-                        .centerCrop()
-                        .diskCacheStrategy(DiskCacheStrategy.DATA)
-                        .dontAnimate()
-                        .placeholder(R.drawable.ic_folder)
-                        .error(R.drawable.ic_folder);
-                if (!warmKeep) {
-                    prepareFileIconForGlideThumbnail(holder, R.drawable.ic_folder);
-                    clearedDrawable = true;
-                    placeholderStamped = true;
-                }
-                maybeLogThumbPipelineDbg(item, "folderGlideIssued", true);
-                maybeLogStartupThumbIssued(item, holder, "folder");
-                boolean extendedThumbRetry = isExtendedThumbnailRetryPolicy(item);
-                RetryRequestListener.ThumbnailExtendedRetryScheduleGate extendedGate =
-                        extendedThumbRetry
-                                ? () -> thumbnailHostResumed && serverReady
+                FolderCoverResolveCoordinator.Outcome coverOutcome =
+                        folderCoverCoordinator != null && item.getRemote() != null
+                                ? folderCoverCoordinator.peek(item.getRemote().getName(), item.getPath())
                                 : null;
-                String debugLoadKey = item.getPath() + "|folder";
-                RetryRequestListener retryListener = new ProgressTrackingRetryListener(
-                        holder,
-                        ThumbnailServerManager.getInstance(),
-                        rl -> Glide.with(context.getApplicationContext())
-                                .load(new FolderThumbnailGlideUrl(buildThumbnailUrl(item)))
-                                .apply(folderGlideOption)
-                                .thumbnail(0.1f)
-                                .listener(rl)
-                                .into(holder.fileIcon),
-                        context.getApplicationContext(),
-                        debugLoadKey,
-                        () -> listener.getThumbnailUrlEpoch(),
-                        extendedThumbRetry,
-                        extendedGate,
-                        null,
-                        rowBindingGateFor(holder, debugLoadKey),
-                        false,
-                        0);
-                holder.activeRetryListener = retryListener;
-                holder.lastBoundThumbKey = thumbKey;
-                Glide.with(context.getApplicationContext())
-                        .load(new FolderThumbnailGlideUrl(buildThumbnailUrl(item)))
-                        .apply(folderGlideOption)
-                        .thumbnail(0.1f)
-                        .listener(retryListener)
-                        .into(holder.fileIcon);
+                if (coverOutcome == null) {
+                    startupBranch = "folderCoverPending";
+                    if (folderCoverCoordinator != null && item.getRemote() != null) {
+                        folderCoverCoordinator.request(item.getRemote(), item.getPath());
+                    }
+                    if (!warmKeep) {
+                        prepareFileIconForGlideThumbnail(holder, R.drawable.ic_folder);
+                        clearedDrawable = true;
+                        placeholderStamped = true;
+                    }
+                    holder.fileIcon.setImageTintList(holder.defaultIconTint);
+                    ThumbRootCauseLog.info(
+                            context,
+                            "folderCoverPending",
+                            "rowPath=" + item.getPath()
+                                    + " holderHash=" + System.identityHashCode(holder));
+                    holder.lastBoundThumbKey = null;
+                } else if (coverOutcome instanceof FolderCoverResolveCoordinator.Outcome.None) {
+                    startupBranch = "folderCoverEmpty";
+                    cancelActiveRetryListener(holder);
+                    clearFileIcon(holder, "folderCoverEmpty");
+                    clearedDrawable = true;
+                    holder.fileIcon.setImageTintList(holder.defaultIconTint);
+                    holder.fileIcon.setImageResource(R.drawable.ic_folder);
+                    holder.lastBoundThumbKey = null;
+                    ThumbRootCauseLog.info(
+                            context,
+                            "folderCoverEmpty",
+                            "rowPath=" + item.getPath());
+                } else {
+                    FolderCoverResolver.Cover cover =
+                            ((FolderCoverResolveCoordinator.Outcome.Found) coverOutcome).getCover();
+                    startupBranch = cover.getKind() == FolderCoverResolver.CoverKind.VIDEO
+                            ? "folderCoverVideo"
+                            : "folderCoverImage";
+                    issueFolderCoverGlideLoad(
+                            holder,
+                            item,
+                            cover,
+                            warmKeep,
+                            thumbKey);
+                    if (!warmKeep) {
+                        clearedDrawable = true;
+                        placeholderStamped = true;
+                    }
+                    ThumbRootCauseLog.info(
+                            context,
+                            "folderCoverIssued",
+                            "rowPath=" + item.getPath()
+                                    + " coverPath=" + cover.getPath()
+                                    + " kind=" + cover.getKind());
+                }
                 }
             } else {
                 startupBranch = serverReady ? "folderPolicySkip" : "folderPlaceholderNotReady";
@@ -737,6 +751,93 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         clearFileIcon(holder, "prepareFileIconForGlideThumbnail");
         holder.fileIcon.setImageTintList(null);
         holder.fileIcon.setImageResource(placeholderRes);
+    }
+
+    private void issueFolderCoverGlideLoad(
+            @NonNull ViewHolder holder,
+            @NonNull FileItem item,
+            @NonNull FolderCoverResolver.Cover cover,
+            boolean warmKeep,
+            @NonNull String thumbKey) {
+        RequestOptions folderGlideOption = new RequestOptions()
+                .centerCrop()
+                .diskCacheStrategy(DiskCacheStrategy.DATA)
+                .dontAnimate()
+                .placeholder(R.drawable.ic_folder)
+                .error(R.drawable.ic_folder);
+        if (!warmKeep) {
+            prepareFileIconForGlideThumbnail(holder, R.drawable.ic_folder);
+        }
+        maybeLogThumbPipelineDbg(item, "folderGlideIssued", true);
+        maybeLogStartupThumbIssued(item, holder, "folder");
+        boolean extendedThumbRetry = isExtendedThumbnailRetryPolicy(item);
+        RetryRequestListener.ThumbnailExtendedRetryScheduleGate extendedGate =
+                extendedThumbRetry
+                        ? () -> thumbnailHostResumed && serverReady
+                        : null;
+        String debugLoadKey = item.getPath() + "|folder";
+        final String coverHttpUrl = buildThumbnailUrlForPath(cover.getPath());
+        final boolean videoCover = cover.getKind() == FolderCoverResolver.CoverKind.VIDEO;
+        RetryRequestListener retryListener = new ProgressTrackingRetryListener(
+                holder,
+                ThumbnailServerManager.getInstance(),
+                rl -> {
+                    if (videoCover) {
+                        Glide.with(context.getApplicationContext())
+                                .load(new VideoThumbnailUrl(coverHttpUrl))
+                                .apply(folderGlideOption)
+                                .listener(rl)
+                                .into(holder.fileIcon);
+                    } else {
+                        Glide.with(context.getApplicationContext())
+                                .load(new FolderThumbnailGlideUrl(coverHttpUrl, item.getPath()))
+                                .apply(folderGlideOption)
+                                .thumbnail(0.1f)
+                                .listener(rl)
+                                .into(holder.fileIcon);
+                    }
+                },
+                context.getApplicationContext(),
+                debugLoadKey,
+                () -> listener.getThumbnailUrlEpoch(),
+                extendedThumbRetry,
+                extendedGate,
+                null,
+                rowBindingGateFor(holder, debugLoadKey),
+                false,
+                0);
+        holder.activeRetryListener = retryListener;
+        holder.lastBoundThumbKey = thumbKey;
+        if (videoCover) {
+            Glide.with(context.getApplicationContext())
+                    .load(new VideoThumbnailUrl(coverHttpUrl))
+                    .apply(folderGlideOption)
+                    .listener(retryListener)
+                    .into(holder.fileIcon);
+        } else {
+            Glide.with(context.getApplicationContext())
+                    .load(new FolderThumbnailGlideUrl(coverHttpUrl, item.getPath()))
+                    .apply(folderGlideOption)
+                    .thumbnail(0.1f)
+                    .listener(retryListener)
+                    .into(holder.fileIcon);
+        }
+    }
+
+    @NonNull
+    private String buildThumbnailUrlForPath(@NonNull String remoteFilePath) {
+        String[] serverParams = listener.getThumbnailServerParams();
+        String hiddenPath = serverParams[0];
+        int serverPort = Integer.parseInt(serverParams[1]);
+        Uri.Builder builder = Uri.parse("http://127.0.0.1:" + serverPort)
+                .buildUpon()
+                .appendEncodedPath(hiddenPath);
+        for (String seg : remoteFilePath.split("/")) {
+            if (!seg.isEmpty()) {
+                builder.appendPath(seg);
+            }
+        }
+        return builder.build().toString();
     }
 
     @NonNull
@@ -1097,18 +1198,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     }
 
     private String buildThumbnailUrl(FileItem item) {
-        String[] serverParams = listener.getThumbnailServerParams();
-        String hiddenPath = serverParams[0];
-        int serverPort = Integer.parseInt(serverParams[1]);
-        Uri.Builder builder = Uri.parse("http://127.0.0.1:" + serverPort)
-                .buildUpon()
-                .appendEncodedPath(hiddenPath);
-        for (String seg : item.getPath().split("/")) {
-            if (!seg.isEmpty()) {
-                builder.appendPath(seg);
-            }
-        }
-        return builder.build().toString();
+        return buildThumbnailUrlForPath(item.getPath());
     }
 
     private void bindSafFile(@NonNull ViewHolder holder, FileItem item, RequestOptions glideOption) {
@@ -1452,6 +1542,33 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
      */
     public void setThumbnailHostResumed(boolean resumed) {
         thumbnailHostResumed = resumed;
+    }
+
+    public void setFolderCoverCoordinator(@Nullable FolderCoverResolveCoordinator coordinator) {
+        folderCoverCoordinator = coordinator;
+    }
+
+    public long getThumbnailSizeLimitBytes() {
+        return sizeLimit;
+    }
+
+    /**
+     * Rebinds a folder row after async cover resolution completes.
+     */
+    public void onFolderCoverResolved(@NonNull String remoteName, @NonNull String folderPath) {
+        if (files == null) {
+            return;
+        }
+        for (int i = 0; i < files.size(); i++) {
+            FileItem item = files.get(i);
+            if (!item.isDir() || item.getRemote() == null) {
+                continue;
+            }
+            if (remoteName.equals(item.getRemote().getName()) && folderPath.equals(item.getPath())) {
+                notifyItemChanged(i, THUMBNAIL_PAYLOAD);
+                return;
+            }
+        }
     }
 
     /**

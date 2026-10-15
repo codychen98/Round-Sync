@@ -107,6 +107,7 @@ import ca.pkay.rcloneexplorer.util.LastFolderSnapshotStore;
 import ca.pkay.rcloneexplorer.util.VisitedThumbnailFolders;
 import ca.pkay.rcloneexplorer.util.MediaFolderPolicy;
 import ca.pkay.rcloneexplorer.util.PolicyType;
+import ca.pkay.rcloneexplorer.util.FolderCoverResolveCoordinator;
 import ca.pkay.rcloneexplorer.util.SyncLog;
 import ca.pkay.rcloneexplorer.workmanager.LastFolderThumbnailPrefetchWorker;
 import ca.pkay.rcloneexplorer.util.ServerReadinessChecker;
@@ -342,6 +343,16 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         recyclerViewAdapter = new FileExplorerRecyclerViewAdapter(context, emptyFolderView, noSearchResultsView, this);
         recyclerViewAdapter.showThumbnails(showThumbnails);
         recyclerViewAdapter.setWrapFileNames(wrapFilenames);
+        recyclerViewAdapter.setFolderCoverCoordinator(new FolderCoverResolveCoordinator(
+                () -> rclone,
+                () -> startAtRoot,
+                () -> recyclerViewAdapter.getThumbnailSizeLimitBytes(),
+                (remoteName, folderPath) -> {
+                    if (!isAdded() || recyclerViewAdapter == null) {
+                        return;
+                    }
+                    recyclerViewAdapter.onFolderCoverResolved(remoteName, folderPath);
+                }));
         recyclerViewAdapter.setThumbnailProgressListener(new FileExplorerRecyclerViewAdapter.ThumbnailProgressListener() {
             @Override
             public void onThumbnailProgress(int loaded, int total) {
