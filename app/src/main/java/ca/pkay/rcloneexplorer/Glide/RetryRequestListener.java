@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.drawable.Drawable;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -17,6 +18,7 @@ import com.bumptech.glide.request.target.Target;
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.SyncLog;
+import ca.pkay.rcloneexplorer.util.ThumbRootCauseLog;
 import ca.pkay.rcloneexplorer.util.ThumbnailDiagLog;
 
 import java.util.List;
@@ -38,6 +40,19 @@ public class RetryRequestListener implements RequestListener<Drawable> {
     @FunctionalInterface
     public interface ThumbnailExtendedRetryScheduleGate {
         boolean allowSchedule();
+    }
+
+    /**
+     * True while the ImageView this listener was created for is still bound to the same row
+     * that issued the load. Checked before scheduling and before re-issuing {@code into()}.
+     */
+    public interface ThumbnailRowBindingGate {
+        boolean stillBoundToRow();
+
+        @Nullable
+        String boundRowPathForDiag();
+
+        int boundPositionForDiag();
     }
 
     /**
@@ -66,6 +81,9 @@ public class RetryRequestListener implements RequestListener<Drawable> {
     // touched on the main thread. The first retry delay (>=500ms) orders eviction before the retry.
     private static final ExecutorService CACHE_EVICT_EXECUTOR = Executors.newSingleThreadExecutor();
 
+    /** Sentinel when no {@link HttpException} is present among Glide root causes. */
+    static final int NO_HTTP_STATUS = Integer.MIN_VALUE;
+
     private final ThumbnailServerManager serverManager;
     private final RetryLoadCallback loadCallback;
     @Nullable
@@ -79,9 +97,15 @@ public class RetryRequestListener implements RequestListener<Drawable> {
     private final ThumbnailExtendedRetryScheduleGate extendedScheduleGate;
     @Nullable
     private final DecodeFailureCacheEvictor decodeFailureCacheEvictor;
+    @Nullable
+    private final ThumbnailRowBindingGate rowBindingGate;
+    private final boolean skipMemoryCache;
+    private final int reloadEpochAtIssue;
+    private final long issuedAtElapsedMs;
     private int retryCount = 0;
     private Runnable pendingRunnable = null;
     private boolean cacheEvictedOnce = false;
+    private volatile boolean cancelled = false;
 
     public RetryRequestListener(
             @NonNull ThumbnailServerManager serverManager,
@@ -92,6 +116,32 @@ public class RetryRequestListener implements RequestListener<Drawable> {
             boolean policyExtendedRetries,
             @Nullable ThumbnailExtendedRetryScheduleGate extendedScheduleGate,
             @Nullable DecodeFailureCacheEvictor decodeFailureCacheEvictor) {
+        this(
+                serverManager,
+                loadCallback,
+                appContextForDiag,
+                debugLoadKey,
+                epochSource,
+                policyExtendedRetries,
+                extendedScheduleGate,
+                decodeFailureCacheEvictor,
+                null,
+                false,
+                0);
+    }
+
+    public RetryRequestListener(
+            @NonNull ThumbnailServerManager serverManager,
+            @NonNull RetryLoadCallback loadCallback,
+            @Nullable Context appContextForDiag,
+            @NonNull String debugLoadKey,
+            @NonNull ThumbnailRetryEpochSource epochSource,
+            boolean policyExtendedRetries,
+            @Nullable ThumbnailExtendedRetryScheduleGate extendedScheduleGate,
+            @Nullable DecodeFailureCacheEvictor decodeFailureCacheEvictor,
+            @Nullable ThumbnailRowBindingGate rowBindingGate,
+            boolean skipMemoryCache,
+            int reloadEpochAtIssue) {
         this.serverManager = serverManager;
         this.loadCallback = loadCallback;
         this.appContext = appContextForDiag != null ? appContextForDiag.getApplicationContext() : null;
@@ -100,6 +150,10 @@ public class RetryRequestListener implements RequestListener<Drawable> {
         this.policyExtendedRetries = policyExtendedRetries;
         this.extendedScheduleGate = extendedScheduleGate;
         this.decodeFailureCacheEvictor = decodeFailureCacheEvictor;
+        this.rowBindingGate = rowBindingGate;
+        this.skipMemoryCache = skipMemoryCache;
+        this.reloadEpochAtIssue = reloadEpochAtIssue;
+        this.issuedAtElapsedMs = SystemClock.elapsedRealtime();
     }
 
     @NonNull
@@ -122,10 +176,15 @@ public class RetryRequestListener implements RequestListener<Drawable> {
                             + " serveGen=" + serverManager.getServeGeneration());
             return true;
         }
+        int httpStatus = firstHttpStatusCode(e);
+        boolean terminalHttp = isTerminalHttpStatus(httpStatus);
         if (appContext != null) {
-            boolean willRetry = policyExtendedRetries
+            boolean willRetry = !cancelled
+                    && !terminalHttp
+                    && (policyExtendedRetries
                     ? extendedScheduleGate != null && extendedScheduleGate.allowSchedule()
-                    : retryCount < MAX_RETRIES;
+                    : retryCount < MAX_RETRIES)
+                    && (rowBindingGate == null || rowBindingGate.stillBoundToRow());
             ThumbnailDiagLog.info(
                     appContext,
                     "glideLoadFailed",
@@ -133,14 +192,17 @@ public class RetryRequestListener implements RequestListener<Drawable> {
                             + " attempt=" + (retryCount + 1)
                             + " willRetry=" + willRetry
                             + " policyExtended=" + policyExtendedRetries
+                            + " httpStatus=" + (httpStatus == NO_HTTP_STATUS ? "none" : httpStatus)
                             + " mgrState=" + serverManager.getSyncState()
                             + " serveGen=" + serverManager.getServeGeneration()
                             + " causes=" + formatGlideRootCauses(e));
         }
         if (appContext != null && debugLoadKey.endsWith("|vid")) {
-            boolean willRetry = policyExtendedRetries
+            boolean willRetry = !cancelled
+                    && !terminalHttp
+                    && (policyExtendedRetries
                     ? extendedScheduleGate != null && extendedScheduleGate.allowSchedule()
-                    : retryCount < MAX_RETRIES;
+                    : retryCount < MAX_RETRIES);
             VideoThumbnailFetcher.logThumbPipe(
                     appContext,
                     "glideLoadFailed",
@@ -162,8 +224,50 @@ public class RetryRequestListener implements RequestListener<Drawable> {
                     "key=" + debugLoadKey);
             CACHE_EVICT_EXECUTOR.execute(decodeFailureCacheEvictor::evict);
         }
+
+        if (cancelled) {
+            ThumbRootCauseLog.info(
+                    appContext,
+                    "retryCancelled",
+                    "key=" + debugLoadKey
+                            + " hadPending=" + (pendingRunnable != null)
+                            + " sticky=true phase=onLoadFailed");
+            // Suppress error drawable — this view may already show another row's content.
+            return true;
+        }
+        if (rowBindingGate != null && !rowBindingGate.stillBoundToRow()) {
+            ThumbRootCauseLog.info(
+                    appContext,
+                    "retryCancelled",
+                    "key=" + debugLoadKey
+                            + " hadPending=false sticky=false phase=onLoadFailedNotBound"
+                            + " boundRowPath=" + rowBindingGate.boundRowPathForDiag()
+                            + " boundPos=" + rowBindingGate.boundPositionForDiag());
+            return true;
+        }
+        if (terminalHttp) {
+            ThumbRootCauseLog.info(
+                    appContext,
+                    "loadFailTerminal",
+                    "key=" + debugLoadKey
+                            + " httpStatus=" + httpStatus
+                            + " terminal=true retryCount=" + retryCount
+                            + " pendingScheduled=false");
+            if (!policyExtendedRetries) {
+                logRetriesExhausted(e);
+            }
+            return false;
+        }
+
         if (!policyExtendedRetries) {
             if (retryCount >= MAX_RETRIES) {
+                ThumbRootCauseLog.info(
+                        appContext,
+                        "loadFailTerminal",
+                        "key=" + debugLoadKey
+                                + " httpStatus=" + (httpStatus == NO_HTTP_STATUS ? "none" : httpStatus)
+                                + " terminal=true retryCount=" + retryCount
+                                + " pendingScheduled=false reason=maxRetries");
                 logRetriesExhausted(e);
                 return false;
             }
@@ -199,13 +303,25 @@ public class RetryRequestListener implements RequestListener<Drawable> {
         }
         final int epochWhenScheduled = epochSource.getEpoch();
         pendingRunnable = () -> {
-            if (ThumbnailRetryEpochs.isStale(epochWhenScheduled, epochSource.getEpoch())) {
-                pendingRunnable = null;
+            pendingRunnable = null;
+            boolean stillBound = rowBindingGate == null || rowBindingGate.stillBoundToRow();
+            boolean epochStale = ThumbnailRetryEpochs.isStale(epochWhenScheduled, epochSource.getEpoch());
+            ThumbRootCauseLog.info(
+                    appContext,
+                    "retryReissue",
+                    "key=" + debugLoadKey
+                            + " boundRowPath="
+                            + (rowBindingGate != null ? rowBindingGate.boundRowPathForDiag() : "n/a")
+                            + " boundPos="
+                            + (rowBindingGate != null ? rowBindingGate.boundPositionForDiag() : -1)
+                            + " stillBound=" + stillBound
+                            + " cancelled=" + cancelled
+                            + " epochStale=" + epochStale);
+            if (cancelled || epochStale || !stillBound) {
                 return;
             }
             if (policyExtendedRetries
                     && (extendedScheduleGate == null || !extendedScheduleGate.allowSchedule())) {
-                pendingRunnable = null;
                 return;
             }
             loadCallback.load(this);
@@ -235,6 +351,15 @@ public class RetryRequestListener implements RequestListener<Drawable> {
             Target<Drawable> target,
             @NonNull DataSource dataSource,
             boolean isFirstResource) {
+        long latencyMs = SystemClock.elapsedRealtime() - issuedAtElapsedMs;
+        ThumbRootCauseLog.info(
+                appContext,
+                "thumbReady",
+                "key=" + debugLoadKey
+                        + " dataSource=" + dataSource
+                        + " skipMemCache=" + skipMemoryCache
+                        + " reloadEpoch=" + reloadEpochAtIssue
+                        + " latencyMs=" + latencyMs);
         if (appContext != null) {
             ThumbnailDiagLog.info(
                     appContext,
@@ -260,10 +385,39 @@ public class RetryRequestListener implements RequestListener<Drawable> {
     }
 
     public void cancel() {
+        boolean hadPending = pendingRunnable != null;
+        cancelled = true;
         if (pendingRunnable != null) {
             HANDLER.removeCallbacks(pendingRunnable);
             pendingRunnable = null;
         }
+        ThumbRootCauseLog.info(
+                appContext,
+                "retryCancelled",
+                "key=" + debugLoadKey
+                        + " hadPending=" + hadPending
+                        + " sticky=true");
+    }
+
+    /**
+     * First {@link HttpException#getStatusCode()} among Glide root causes, or
+     * {@link #NO_HTTP_STATUS} when none.
+     */
+    static int firstHttpStatusCode(@Nullable GlideException e) {
+        if (e == null) {
+            return NO_HTTP_STATUS;
+        }
+        for (Throwable root : e.getRootCauses()) {
+            if (root instanceof HttpException) {
+                return ((HttpException) root).getStatusCode();
+            }
+        }
+        return NO_HTTP_STATUS;
+    }
+
+    /** HTTP statuses that must not be retried (folder/missing thumb 404s). */
+    static boolean isTerminalHttpStatus(int statusCode) {
+        return statusCode == 404;
     }
 
     /**

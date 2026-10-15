@@ -4,8 +4,10 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
+import android.os.SystemClock;
 import android.text.TextUtils;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -58,6 +60,7 @@ import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.MediaFolderPolicy;
 import ca.pkay.rcloneexplorer.util.PolicyType;
 import ca.pkay.rcloneexplorer.util.SyncLog;
+import ca.pkay.rcloneexplorer.util.ThumbRootCauseLog;
 import ca.pkay.rcloneexplorer.util.ThumbnailDiagLog;
 import io.github.x0b.safdav.SafAccessProvider;
 import io.github.x0b.safdav.file.FileAccessError;
@@ -225,9 +228,13 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
         if (showThumbnails && context != null) {
             cancelActiveRetryListener(holder);
-            if (!ThumbnailReloadPriority.shouldDeferThumbnailLoad(
+            String upcomingThumbKey = thumbBindKey(item);
+            boolean warmSameKey = upcomingThumbKey.equals(holder.lastBoundThumbKey)
+                    && hasNonPlaceholderThumbDrawable(holder);
+            if (!warmSameKey
+                    && !ThumbnailReloadPriority.shouldDeferThumbnailLoad(
                     item.getRemote().getName(), item.getPath())) {
-                Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+                clearFileIcon(holder, "onBindViewHolder");
             }
         }
 
@@ -387,9 +394,22 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         if (deferExclusiveUserReloadThumbnail(holder, item, null, null)) {
             return;
         }
-        cancelActiveRetryListener(holder);
-        Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+        String thumbKey = thumbBindKey(item);
+        boolean hadDrawable = hasNonPlaceholderThumbDrawable(holder);
+        boolean sameKeyAsLast = thumbKey.equals(holder.lastBoundThumbKey);
+        boolean warmKeep = sameKeyAsLast && hadDrawable;
+        ThumbRootCauseLog.info(
+                context,
+                "bindEnter",
+                "rowPath=" + item.getPath()
+                        + " holderHash=" + System.identityHashCode(holder)
+                        + " hadDrawable=" + hadDrawable
+                        + " sameKeyAsLast=" + sameKeyAsLast);
 
+        cancelActiveRetryListener(holder);
+
+        boolean clearedDrawable = false;
+        boolean placeholderStamped = false;
         String startupBranch = item.isDir() ? "folderIcon" : "plainFileIcon";
         boolean startupPolicyAllowed = false;
 
@@ -403,13 +423,17 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 startupPolicyAllowed = true;
                 holder.fileIcon.setVisibility(View.VISIBLE);
                 holder.dirIcon.setVisibility(View.GONE);
-                prepareFileIconForGlideThumbnail(holder, R.drawable.ic_folder);
                 RequestOptions folderGlideOption = new RequestOptions()
                         .centerCrop()
                         .diskCacheStrategy(DiskCacheStrategy.DATA)
                         .dontAnimate()
                         .placeholder(R.drawable.ic_folder)
                         .error(R.drawable.ic_folder);
+                if (!warmKeep) {
+                    prepareFileIconForGlideThumbnail(holder, R.drawable.ic_folder);
+                    clearedDrawable = true;
+                    placeholderStamped = true;
+                }
                 maybeLogThumbPipelineDbg(item, "folderGlideIssued", true);
                 maybeLogStartupThumbIssued(item, holder, "folder");
                 boolean extendedThumbRetry = isExtendedThumbnailRetryPolicy(item);
@@ -417,6 +441,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         extendedThumbRetry
                                 ? () -> thumbnailHostResumed && serverReady
                                 : null;
+                String debugLoadKey = item.getPath() + "|folder";
                 RetryRequestListener retryListener = new ProgressTrackingRetryListener(
                         holder,
                         ThumbnailServerManager.getInstance(),
@@ -427,12 +452,16 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 .listener(rl)
                                 .into(holder.fileIcon),
                         context.getApplicationContext(),
-                        item.getPath() + "|folder",
+                        debugLoadKey,
                         () -> listener.getThumbnailUrlEpoch(),
                         extendedThumbRetry,
                         extendedGate,
-                        null);
+                        null,
+                        rowBindingGateFor(holder, debugLoadKey),
+                        false,
+                        0);
                 holder.activeRetryListener = retryListener;
+                holder.lastBoundThumbKey = thumbKey;
                 Glide.with(context.getApplicationContext())
                         .load(new FolderThumbnailGlideUrl(buildThumbnailUrl(item)))
                         .apply(folderGlideOption)
@@ -446,11 +475,13 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 maybeLogThumbPipelineDbg(item, serverReady ? "folderPolicySkip" : "folderPlaceholderNotReady",
                         isHttpThumbnailPolicyAllowedForNetworkThumbnail(item));
                 cancelActiveRetryListener(holder);
-                Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+                clearFileIcon(holder, "folderPlaceholder");
+                clearedDrawable = true;
                 holder.fileIcon.setImageTintList(holder.defaultIconTint);
                 holder.fileIcon.setImageResource(R.drawable.ic_file);
                 holder.fileIcon.setVisibility(View.GONE);
                 holder.dirIcon.setVisibility(View.VISIBLE);
+                holder.lastBoundThumbKey = null;
             }
         } else {
             boolean localLoad = item.getRemote().getType() == RemoteItem.SAFW;
@@ -469,16 +500,23 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 if (localLoad) {
                     startupBranch = "imageLocal";
                     startupPolicyAllowed = true;
-                    prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
+                    if (!warmKeep) {
+                        prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
+                        clearedDrawable = true;
+                        placeholderStamped = true;
+                    }
+                    holder.lastBoundThumbKey = thumbKey;
                     bindSafFile(holder, item, glideOption);
                 } else if (serverReady) {
                     if (!isHttpThumbnailPolicyAllowedForNetworkThumbnail(item)) {
                         startupBranch = "imagePolicySkip";
                         maybeLogThumbPipelineDbg(item, "imagePolicySkip", false);
                         cancelActiveRetryListener(holder);
-                        Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+                        clearFileIcon(holder, "imagePolicySkip");
+                        clearedDrawable = true;
                         holder.fileIcon.setImageTintList(holder.defaultIconTint);
                         holder.fileIcon.setImageResource(R.drawable.ic_file);
+                        holder.lastBoundThumbKey = null;
                     } else if (deferExclusiveUserReloadThumbnail(holder, item, glideOption, "image")) {
                         startupBranch = "deferredForUserReload";
                         startupPolicyAllowed = true;
@@ -503,6 +541,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                         new HttpServeThumbnailGlideUrl(
                                                 ThumbnailCacheIdentity.buildCacheProbeUrl(
                                                         evictorRemoteName, evictorItemPath)));
+                        String debugLoadKey = item.getPath() + "|img";
                         RetryRequestListener retryListener = new ProgressTrackingRetryListener(
                                 holder,
                                 ThumbnailServerManager.getInstance(),
@@ -513,13 +552,21 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                         .listener(rl)
                                         .into(holder.fileIcon),
                                 context.getApplicationContext(),
-                                item.getPath() + "|img",
+                                debugLoadKey,
                                 () -> listener.getThumbnailUrlEpoch(),
                                 extendedThumbRetry,
                                 extendedGate,
-                                decodeFailureCacheEvictor);
-                        prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
+                                decodeFailureCacheEvictor,
+                                rowBindingGateFor(holder, debugLoadKey),
+                                false,
+                                0);
+                        if (!warmKeep) {
+                            prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
+                            clearedDrawable = true;
+                            placeholderStamped = true;
+                        }
                         holder.activeRetryListener = retryListener;
+                        holder.lastBoundThumbKey = thumbKey;
                         Glide.with(context.getApplicationContext())
                                 .load(new HttpServeThumbnailGlideUrl(buildThumbnailUrl(item)))
                                 .apply(glideOption)
@@ -534,21 +581,25 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                     } else if (bindCachedNetworkThumbnailIfPresent(holder, item, glideOption, "image")) {
                         startupBranch = "imageCachedWhileServerStarting";
                         startupPolicyAllowed = true;
+                        holder.lastBoundThumbKey = thumbKey;
                     } else {
                         startupBranch = "imagePlaceholderNotReady";
                         startupPolicyAllowed = isHttpThumbnailPolicyAllowedForNetworkThumbnail(item);
                         maybeLogThumbPipelineDbg(item, "imagePlaceholderNotReady",
                                 isHttpThumbnailPolicyAllowedForNetworkThumbnail(item));
                         cancelActiveRetryListener(holder);
-                        Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+                        clearFileIcon(holder, "imagePlaceholderNotReady");
+                        clearedDrawable = true;
                         holder.fileIcon.setImageTintList(holder.defaultIconTint);
                         holder.fileIcon.setImageResource(R.drawable.ic_file);
+                        holder.lastBoundThumbKey = null;
                     }
                 }
             } else if (mimeType.startsWith("video/")
-                    && bindPinnedVideoThumbnailIfPresent(holder, item)) {
+                    && bindPinnedVideoThumbnailIfPresent(holder, item, warmKeep)) {
                 startupBranch = "videoPinned";
                 startupPolicyAllowed = true;
+                holder.lastBoundThumbKey = thumbKey;
             } else if (mimeType.startsWith("video/") && !localLoad) {
                 startupBranch = "videoCandidate";
                 String stablePath = ThumbnailCacheIdentity.stableServePath(
@@ -564,10 +615,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                     maybeLogThumbPipelineDbg(item, "videoUserReload", true);
                 }
                 int reloadEpoch = ThumbnailReloadEpoch.get(stablePath);
+                final boolean skipMemCache = userReload;
                 final RequestOptions glideOption;
-                if (userReload || reloadEpoch > 0) {
+                if (userReload) {
                     glideOption = baseVideoGlideOption
-                            .priority(userReload ? Priority.IMMEDIATE : Priority.NORMAL)
+                            .priority(Priority.IMMEDIATE)
                             .skipMemoryCache(true);
                 } else {
                     glideOption = baseVideoGlideOption;
@@ -577,9 +629,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         startupBranch = "videoPolicySkip";
                         maybeLogThumbPipelineDbg(item, "videoPolicySkip", false);
                         cancelActiveRetryListener(holder);
-                        Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+                        clearFileIcon(holder, "videoPolicySkip");
+                        clearedDrawable = true;
                         holder.fileIcon.setImageTintList(holder.defaultIconTint);
                         holder.fileIcon.setImageResource(R.drawable.ic_file);
+                        holder.lastBoundThumbKey = null;
                     } else if (deferExclusiveUserReloadThumbnail(holder, item, glideOption, "video")) {
                         startupBranch = "deferredForUserReload";
                         startupPolicyAllowed = true;
@@ -593,6 +647,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                 extendedThumbRetry
                                         ? () -> thumbnailHostResumed && serverReady
                                         : null;
+                        String debugLoadKey = item.getPath() + "|vid";
                         RetryRequestListener retryListener = new ProgressTrackingRetryListener(
                                 holder,
                                 ThumbnailServerManager.getInstance(),
@@ -602,13 +657,21 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                                         .listener(rl)
                                         .into(holder.fileIcon),
                                 context.getApplicationContext(),
-                                item.getPath() + "|vid",
+                                debugLoadKey,
                                 () -> listener.getThumbnailUrlEpoch(),
                                 extendedThumbRetry,
                                 extendedGate,
-                                null);
-                        prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
+                                null,
+                                rowBindingGateFor(holder, debugLoadKey),
+                                skipMemCache,
+                                reloadEpoch);
+                        if (!warmKeep) {
+                            prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
+                            clearedDrawable = true;
+                            placeholderStamped = true;
+                        }
                         holder.activeRetryListener = retryListener;
+                        holder.lastBoundThumbKey = thumbKey;
                         Glide.with(context.getApplicationContext())
                                 .load(new VideoThumbnailUrl(buildThumbnailUrl(item)))
                                 .apply(glideOption)
@@ -622,24 +685,36 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                     } else if (bindCachedNetworkThumbnailIfPresent(holder, item, glideOption, "video")) {
                         startupBranch = "videoCachedWhileServerStarting";
                         startupPolicyAllowed = true;
+                        holder.lastBoundThumbKey = thumbKey;
                     } else {
                         startupBranch = "videoPlaceholderNotReady";
                         startupPolicyAllowed = isHttpThumbnailPolicyAllowedForNetworkThumbnail(item);
                         maybeLogThumbPipelineDbg(item, "videoPlaceholderNotReady",
                                 isHttpThumbnailPolicyAllowedForNetworkThumbnail(item));
                         cancelActiveRetryListener(holder);
-                        Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+                        clearFileIcon(holder, "videoPlaceholderNotReady");
+                        clearedDrawable = true;
                         holder.fileIcon.setImageTintList(holder.defaultIconTint);
                         holder.fileIcon.setImageResource(R.drawable.ic_file);
+                        holder.lastBoundThumbKey = null;
                     }
                 }
             } else {
                 startupBranch = "plainFileIcon";
-                Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+                clearFileIcon(holder, "plainFileIcon");
+                clearedDrawable = true;
                 holder.fileIcon.setImageTintList(holder.defaultIconTint);
                 holder.fileIcon.setImageResource(R.drawable.ic_file);
+                holder.lastBoundThumbKey = null;
             }
         }
+        ThumbRootCauseLog.info(
+                context,
+                "bindExit",
+                "rowPath=" + item.getPath()
+                        + " branch=" + startupBranch
+                        + " clearedDrawable=" + clearedDrawable
+                        + " placeholderStamped=" + placeholderStamped);
         maybeLogStartupBind(item, holder, position, startupBranch, startupPolicyAllowed);
     }
 
@@ -659,9 +734,77 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         if (context == null) {
             return;
         }
-        Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+        clearFileIcon(holder, "prepareFileIconForGlideThumbnail");
         holder.fileIcon.setImageTintList(null);
         holder.fileIcon.setImageResource(placeholderRes);
+    }
+
+    @NonNull
+    private static String thumbBindKey(@NonNull FileItem item) {
+        if (item.isDir()) {
+            return item.getPath() + "|folder";
+        }
+        String mimeType = item.getMimeType();
+        if (mimeType != null && mimeType.startsWith("image/")) {
+            return item.getPath() + "|img";
+        }
+        if (mimeType != null && mimeType.startsWith("video/")) {
+            return item.getPath() + "|vid";
+        }
+        return item.getPath() + "|plain";
+    }
+
+    private static boolean hasNonPlaceholderThumbDrawable(@NonNull ViewHolder holder) {
+        Drawable d = holder.fileIcon.getDrawable();
+        return d instanceof BitmapDrawable;
+    }
+
+    private void clearFileIcon(@NonNull ViewHolder holder, @NonNull String reason) {
+        if (context == null) {
+            return;
+        }
+        String rowPath = holder.fileItem != null ? holder.fileItem.getPath() : null;
+        ThumbRootCauseLog.beginIntentionalClear(reason);
+        try {
+            ThumbRootCauseLog.logIconDrawableCleared(
+                    context,
+                    rowPath,
+                    System.identityHashCode(holder),
+                    "via=" + reason);
+            Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+        } finally {
+            ThumbRootCauseLog.endIntentionalClear();
+        }
+    }
+
+    @NonNull
+    private RetryRequestListener.ThumbnailRowBindingGate rowBindingGateFor(
+            @NonNull ViewHolder holder,
+            @NonNull String debugLoadKey) {
+        return new RetryRequestListener.ThumbnailRowBindingGate() {
+            @Override
+            public boolean stillBoundToRow() {
+                if (holder.getBindingAdapterPosition() == RecyclerView.NO_POSITION) {
+                    return false;
+                }
+                FileItem bound = holder.fileItem;
+                if (bound == null) {
+                    return false;
+                }
+                return debugLoadKey.startsWith(bound.getPath() + "|");
+            }
+
+            @Override
+            @Nullable
+            public String boundRowPathForDiag() {
+                return holder.fileItem != null ? holder.fileItem.getPath() : null;
+            }
+
+            @Override
+            public int boundPositionForDiag() {
+                return holder.getBindingAdapterPosition();
+            }
+        };
     }
 
     /**
@@ -701,7 +844,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         if (context == null) {
             return;
         }
-        Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+        clearFileIcon(holder, "resetRecycledFileIcon");
+        holder.lastBoundThumbKey = null;
         holder.fileIcon.setImageTintList(holder.defaultIconTint);
         holder.fileIcon.setImageResource(R.drawable.ic_file);
     }
@@ -1060,7 +1204,10 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
      * Shows a user-chosen video frame when one has been saved from the player.
      * Returns false when this row should use the automatic thumbnail path.
      */
-    private boolean bindPinnedVideoThumbnailIfPresent(@NonNull ViewHolder holder, @NonNull FileItem item) {
+    private boolean bindPinnedVideoThumbnailIfPresent(
+            @NonNull ViewHolder holder,
+            @NonNull FileItem item,
+            boolean warmKeep) {
         if (context == null || item.getRemote() == null || item.getPath() == null) {
             return false;
         }
@@ -1074,7 +1221,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 context.getApplicationContext(),
                 item.getRemote().getName(),
                 item.getPath());
-        prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
+        if (!warmKeep) {
+            prepareFileIconForGlideThumbnail(holder, R.drawable.ic_file);
+        }
+        final long pinIssuedAt = SystemClock.elapsedRealtime();
+        final String pinKey = item.getPath() + "|pin";
         Glide.with(context.getApplicationContext())
                 .load(pinned)
                 .apply(new RequestOptions()
@@ -1084,6 +1235,34 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                         .signature(new ObjectKey(pinned.lastModified() + ":" + pinned.length()))
                         .placeholder(R.drawable.ic_file)
                         .error(R.drawable.ic_file))
+                .listener(new com.bumptech.glide.request.RequestListener<Drawable>() {
+                    @Override
+                    public boolean onLoadFailed(
+                            @Nullable com.bumptech.glide.load.engine.GlideException e,
+                            Object model,
+                            @NonNull com.bumptech.glide.request.target.Target<Drawable> target,
+                            boolean isFirstResource) {
+                        return false;
+                    }
+
+                    @Override
+                    public boolean onResourceReady(
+                            @NonNull Drawable resource,
+                            @NonNull Object model,
+                            com.bumptech.glide.request.target.Target<Drawable> target,
+                            @NonNull com.bumptech.glide.load.DataSource dataSource,
+                            boolean isFirstResource) {
+                        ThumbRootCauseLog.info(
+                                context,
+                                "thumbReady",
+                                "key=" + pinKey
+                                        + " dataSource=" + dataSource
+                                        + " skipMemCache=false"
+                                        + " reloadEpoch=0"
+                                        + " latencyMs=" + (SystemClock.elapsedRealtime() - pinIssuedAt));
+                        return false;
+                    }
+                })
                 .into(holder.fileIcon);
         return true;
     }
@@ -1142,10 +1321,10 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         if (rv != null) {
             RecyclerView.ViewHolder holder = rv.findViewHolderForAdapterPosition(position);
             if (holder instanceof ViewHolder) {
-                cancelActiveRetryListener((ViewHolder) holder);
-                if (context != null) {
-                    Glide.with(context.getApplicationContext()).clear(((ViewHolder) holder).fileIcon);
-                }
+                ViewHolder vh = (ViewHolder) holder;
+                cancelActiveRetryListener(vh);
+                clearFileIcon(vh, "reloadThumbnailAt");
+                vh.lastBoundThumbKey = null;
             }
         }
         if (context != null) {
@@ -1249,7 +1428,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             return false;
         }
         cancelActiveRetryListener(viewHolder);
-        Glide.with(context.getApplicationContext()).clear(viewHolder.fileIcon);
+        clearFileIcon(viewHolder, "applyReloadedVideoThumbnail");
+        viewHolder.lastBoundThumbKey = item.getPath() + "|vid";
         Glide.with(context.getApplicationContext())
                 .load(jpegBytes)
                 .apply(new RequestOptions()
@@ -1299,7 +1479,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 continue;
             }
             cancelActiveRetryListener(holder);
-            Glide.with(context.getApplicationContext()).clear(holder.fileIcon);
+            clearFileIcon(holder, "clearVisibleThumbnailGlideRequestsOnStop");
+            holder.lastBoundThumbKey = null;
             holder.fileIcon.setImageTintList(holder.defaultIconTint);
             holder.fileIcon.setImageResource(item.isDir() ? R.drawable.ic_folder : R.drawable.ic_file);
             holder.fileIcon.setVisibility(item.isDir() ? View.GONE : View.VISIBLE);
@@ -1728,7 +1909,10 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 @NonNull RetryRequestListener.ThumbnailRetryEpochSource epochSource,
                 boolean policyExtendedRetries,
                 @Nullable RetryRequestListener.ThumbnailExtendedRetryScheduleGate extendedScheduleGate,
-                @Nullable RetryRequestListener.DecodeFailureCacheEvictor decodeFailureCacheEvictor) {
+                @Nullable RetryRequestListener.DecodeFailureCacheEvictor decodeFailureCacheEvictor,
+                @Nullable RetryRequestListener.ThumbnailRowBindingGate rowBindingGate,
+                boolean skipMemoryCache,
+                int reloadEpochAtIssue) {
             super(
                     serverManager,
                     loadCallback,
@@ -1737,7 +1921,10 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                     epochSource,
                     policyExtendedRetries,
                     extendedScheduleGate,
-                    decodeFailureCacheEvictor);
+                    decodeFailureCacheEvictor,
+                    rowBindingGate,
+                    skipMemoryCache,
+                    reloadEpochAtIssue);
             this.boundHolder = boundHolder;
         }
 
@@ -1791,6 +1978,9 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             }
             boolean retrying = super.onLoadFailed(e, model, target, isFirstResource);
             if (!retrying) {
+                if (getDebugLoadKey().endsWith("|folder")) {
+                    boundHolder.fileIcon.setImageTintList(boundHolder.defaultIconTint);
+                }
                 notifyProgress();
             }
             return retrying;
@@ -1835,6 +2025,9 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         public FileItem fileItem;
         public final ColorStateList defaultIconTint;
         public RetryRequestListener activeRetryListener = null;
+        /** Last thumbnail bind key ({@code path|kind}) issued for this holder; cleared on recycle. */
+        @Nullable
+        public String lastBoundThumbKey = null;
 
         ViewHolder(View itemView) {
             super(itemView);
