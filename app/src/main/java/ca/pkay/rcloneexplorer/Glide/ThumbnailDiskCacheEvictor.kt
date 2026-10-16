@@ -5,6 +5,7 @@ import ca.pkay.rcloneexplorer.util.FLog
 import com.bumptech.glide.load.Key
 import com.bumptech.glide.signature.ObjectKey
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 
 /**
  * Probe / evict / store helpers over the shared thumbnail disk cache
@@ -20,6 +21,8 @@ object ThumbnailDiskCacheEvictor {
     private const val TAG = "ThumbDiskEvictor"
     private val shownVideoDiskEntryRetained = ConcurrentHashMap.newKeySet<String>()
     private val pinnedVideoDiskEntryCleared = ConcurrentHashMap.newKeySet<String>()
+    private val evictionExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "thumb-disk-evict").apply { isDaemon = true } }
 
     @JvmStatic
     fun store(context: Context, key: Key, jpegBytes: ByteArray) {
@@ -91,7 +94,8 @@ object ThumbnailDiskCacheEvictor {
         if (!pinnedVideoDiskEntryCleared.add(stable)) {
             return
         }
-        clearGlideEntriesForPinnedVideo(context, remoteName, remoteFilePath)
+        val app = context.applicationContext
+        evictionExecutor.execute { clearGlideEntriesForPinnedVideo(app, remoteName, remoteFilePath) }
     }
 
     /**

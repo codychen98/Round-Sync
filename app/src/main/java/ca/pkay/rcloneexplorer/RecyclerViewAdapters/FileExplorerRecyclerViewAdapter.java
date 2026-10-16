@@ -839,7 +839,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 item.getRemote().getName(),
                 item.getPath(),
                 item.getMimeType(),
-                FOLDER_OPEN_PRELOAD_PX);
+                FOLDER_OPEN_PRELOAD_PX,
+                true);
         if (bmp == null) {
             if (ThumbnailCacheIdentity.isPrefetchThumbnailCached(context, item)) {
                 ThumbRootCauseLog.info(
@@ -1435,7 +1436,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 item.getRemote().getName(),
                 item.getPath(),
                 item.getMimeType(),
-                FOLDER_OPEN_PRELOAD_PX);
+                FOLDER_OPEN_PRELOAD_PX,
+                true);
         if (pinBmp != null) {
             cancelActiveRetryListener(holder);
             holder.fileIcon.setImageTintList(null);
@@ -1792,6 +1794,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 thumbnailLoaded.incrementAndGet();
             }
         }
+        for (FileItem item : data) {
+            if (!item.isDir() || !isThumbnailProgressTarget(item)) continue;
+            if (!hasWarmFolderCollage(item)) continue;
+            if (thumbnailCountedPaths.add(item.getPath())) thumbnailLoaded.incrementAndGet();
+        }
         ThumbnailDiskCacheEvictor.withOpenCache(context, cache -> {
             for (FileItem item : data) {
                 if (!isThumbnailProgressTarget(item)) {
@@ -1816,6 +1823,15 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                     + " total=" + thumbnailTotal + " listSize=" + data.size());
         }
         emitInitialThumbnailProgress(loaded);
+    }
+
+    private boolean hasWarmFolderCollage(@NonNull FileItem item) {
+        RemoteItem r = item.getRemote();
+        if (r == null || item.getPath() == null) return false;
+        if (folderCoverCoordinator != null)
+            return folderCoverCoordinator.hasWarmCollage(r.getName(), item.getPath());
+        return ca.pkay.rcloneexplorer.util.FolderCollageStore.fileIfPresent(
+                context.getApplicationContext(), r.getName(), item.getPath()) != null;
     }
 
     private boolean isPinnedVideoThumbnailPresent(@NonNull FileItem item) {

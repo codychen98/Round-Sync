@@ -173,23 +173,30 @@ public class SyncLog {
         return jsons;
     }
 
+    private static final java.util.concurrent.ExecutorService LOG_WRITER =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "sync-log-writer"); t.setDaemon(true); return t; });
+
     private static void appendLog(Context c, String entry){
-        if (!isFileLoggingEnabled(c.getApplicationContext())) {
-            return;
-        }
-        File log = getLogFile(c);
-        if (log == null) {
-            return;
-        }
-        try {
-            FileWriter writer = new FileWriter(log, true);
-            writer.append(System.lineSeparator());
-            writer.append(entry);
-            writer.flush();
-            writer.close();
-        } catch (Exception e){
-            e.printStackTrace();
-        }
+        final Context app = c.getApplicationContext();
+        LOG_WRITER.execute(() -> {
+            if (!isFileLoggingEnabled(app)) {
+                return;
+            }
+            File log = getLogFile(app);
+            if (log == null) {
+                return;
+            }
+            try {
+                FileWriter writer = new FileWriter(log, true);
+                writer.append(System.lineSeparator());
+                writer.append(entry);
+                writer.flush();
+                writer.close();
+            } catch (Exception e){
+                e.printStackTrace();
+            }
+        });
     }
 
     public static long log(Context c, String title, String content, int type){

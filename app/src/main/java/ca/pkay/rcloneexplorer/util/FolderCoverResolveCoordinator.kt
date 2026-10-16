@@ -60,6 +60,12 @@ class FolderCoverResolveCoordinator(
         return found
     }
 
+    fun hasWarmCollage(remoteName: String, folderPath: String): Boolean {
+        val e = cache[cacheKey(remoteName, folderPath)]
+        if (e is Outcome.Found && !e.collage.isRecycled) return true
+        return FolderCollageStore.fileIfPresent(appContext, remoteName, folderPath) != null
+    }
+
     fun request(remote: RemoteItem, folderPath: String) {
         val key = cacheKey(remote.name, folderPath)
         val existing = cache[key]

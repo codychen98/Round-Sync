@@ -3,6 +3,7 @@ package ca.pkay.rcloneexplorer.util
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.util.LruCache
 import ca.pkay.rcloneexplorer.Glide.GlideDiskCacheHolder
 import ca.pkay.rcloneexplorer.Glide.PinnedVideoThumbnailStore
 import ca.pkay.rcloneexplorer.Glide.ThumbnailCacheIdentity
@@ -56,12 +57,14 @@ object FolderCollageCellLoader {
      * Avoids queuing Glide LOCAL/DATA work that leaves blank tiles under large folders.
      */
     @JvmStatic
+    @JvmOverloads
     fun loadPrefetchCachedBitmap(
         context: Context,
         remoteName: String,
         path: String,
         mimeType: String?,
         maxEdgePx: Int,
+        memoize: Boolean = false,
     ): Bitmap? {
         val app = context.applicationContext
         val mime = mimeType ?: return null
@@ -69,7 +72,7 @@ object FolderCollageCellLoader {
             val stable = ThumbnailCacheIdentity.stableServePath(remoteName, path)
             val pinned = PinnedVideoThumbnailStore.fileIfPresent(app, stable)
             if (pinned != null) {
-                return decodeFile(pinned, maxEdgePx)
+                return decodeFileMemoized(pinned, maxEdgePx, memoize)
             }
         }
         val cache = GlideDiskCacheHolder.get(app) ?: return null
@@ -84,7 +87,23 @@ object FolderCollageCellLoader {
         } catch (_: Exception) {
             null
         } ?: return null
-        return decodeFile(file, maxEdgePx)
+        return decodeFileMemoized(file, maxEdgePx, memoize)
+    }
+
+    private val decodedBitmapCache = object : LruCache<String, Bitmap>(
+        (Runtime.getRuntime().maxMemory() / 8L).coerceIn(8L * 1024 * 1024, 48L * 1024 * 1024).toInt()) {
+        override fun sizeOf(key: String, value: Bitmap) = value.byteCount
+    }
+
+    private fun decodeFileMemoized(file: File, maxEdgePx: Int, memoize: Boolean): Bitmap? {
+        if (!memoize) return decodeFile(file, maxEdgePx)
+        val key = "${file.absolutePath}|${file.lastModified()}|${file.length()}|$maxEdgePx"
+        decodedBitmapCache.get(key)?.let {
+            if (!it.isRecycled) return it else decodedBitmapCache.remove(key)
+        }
+        val d = decodeFile(file, maxEdgePx) ?: return null
+        decodedBitmapCache.put(key, d)
+        return d
     }
 
     private fun decodeFile(file: File, maxEdgePx: Int): Bitmap? {
