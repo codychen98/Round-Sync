@@ -168,10 +168,10 @@ class DatabaseHandler(context: Context?) :
         task.direction = cursor.getInt(6)
         task.md5sum = getBoolean(cursor, 7)
         task.wifionly = getBoolean(cursor, 8)
-        task.filterId = cursor.getLong(9)
+        task.filterId = getNullableLong(cursor, 9)?.takeIf { it > 0L }
         task.deleteExcluded = getBoolean(cursor, 10)
-        task.onFailFollowup = cursor.getLong(11)
-        task.onSuccessFollowup = cursor.getLong(12)
+        task.onFailFollowup = Task.effectiveFollowupId(getNullableLong(cursor, 11))
+        task.onSuccessFollowup = Task.effectiveFollowupId(getNullableLong(cursor, 12))
         task.onSuccessCommand = cursor.getString(13) ?: ""
         task.onFailureCommand = cursor.getString(14) ?: ""
         return task
@@ -202,10 +202,10 @@ class DatabaseHandler(context: Context?) :
         values.put(Task.COLUMN_NAME_SYNC_DIRECTION, task.direction)
         values.put(Task.COLUMN_NAME_MD5SUM, task.md5sum)
         values.put(Task.COLUMN_NAME_WIFI_ONLY, task.wifionly)
-        values.put(Task.COLUMN_NAME_FILTER_ID, task.filterId)
+        putNullableLong(values, Task.COLUMN_NAME_FILTER_ID, task.filterId?.takeIf { it > 0L })
         values.put(Task.COLUMN_NAME_DELETE_EXCLUDED, task.deleteExcluded)
-        values.put(Task.COLUMN_NAME_ONFAIL_FOLLOWUP, task.onFailFollowup)
-        values.put(Task.COLUMN_NAME_ONSUCCESS_FOLLOWUP, task.onSuccessFollowup)
+        putNullableLong(values, Task.COLUMN_NAME_ONFAIL_FOLLOWUP, Task.effectiveFollowupId(task.onFailFollowup))
+        putNullableLong(values, Task.COLUMN_NAME_ONSUCCESS_FOLLOWUP, Task.effectiveFollowupId(task.onSuccessFollowup))
         values.put(Task.COLUMN_NAME_ON_SUCCESS_COMMAND, task.onSuccessCommand)
         values.put(Task.COLUMN_NAME_ON_FAILURE_COMMAND, task.onFailureCommand)
         return values
@@ -456,6 +456,21 @@ class DatabaseHandler(context: Context?) :
             0 -> false
             1 -> true
             else -> true
+        }
+    }
+
+    private fun getNullableLong(cursor: Cursor, index: Int): Long? {
+        if (cursor.isNull(index)) {
+            return null
+        }
+        return cursor.getLong(index)
+    }
+
+    private fun putNullableLong(values: ContentValues, key: String, value: Long?) {
+        if (value == null) {
+            values.putNull(key)
+        } else {
+            values.put(key, value)
         }
     }
 }

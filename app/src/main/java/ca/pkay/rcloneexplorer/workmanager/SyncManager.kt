@@ -19,6 +19,9 @@ class SyncManager(private var mContext: Context) {
 
         fun isActiveWorkState(state: WorkInfo.State): Boolean =
             state == WorkInfo.State.RUNNING || state == WorkInfo.State.ENQUEUED
+
+        /** Row ids start at 1; 0 is Cursor NULL coercion / never a real task. */
+        fun isQueueableTaskId(taskId: Long): Boolean = taskId > 0L
     }
     fun queue(trigger: Trigger) {
         queue(trigger.triggerTarget)
@@ -29,6 +32,10 @@ class SyncManager(private var mContext: Context) {
     }
 
     fun queue(taskID: Long) {
+        if (!isQueueableTaskId(taskID)) {
+            Log.w("SyncManager", "Refusing to queue invalid task id=$taskID")
+            return
+        }
         val uploadWorkRequest = OneTimeWorkRequestBuilder<SyncWorker>()
 
         val data = Data.Builder()

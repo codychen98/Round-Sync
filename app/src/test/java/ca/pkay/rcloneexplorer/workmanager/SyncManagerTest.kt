@@ -22,4 +22,12 @@ class SyncManagerTest {
         assertFalse(SyncManager.isActiveWorkState(WorkInfo.State.FAILED))
         assertFalse(SyncManager.isActiveWorkState(WorkInfo.State.CANCELLED))
     }
+
+    @Test
+    fun isQueueableTaskId_rejectsZeroAndNegative() {
+        assertFalse(SyncManager.isQueueableTaskId(0L))
+        assertFalse(SyncManager.isQueueableTaskId(-1L))
+        assertTrue(SyncManager.isQueueableTaskId(1L))
+        assertTrue(SyncManager.isQueueableTaskId(99L))
+    }
 }

@@ -49,6 +49,21 @@ data class Task(var id: Long) {
         const val TASK_MD5SUM_DEFAULT = false
         const val TASK_WIFIONLY_DEFAULT = false
 
+        /** UI / DB sentinel for "no follow-up task". */
+        const val FOLLOWUP_NONE_ID = -1L
+
+        /**
+         * Returns a queueable follow-up task id, or null when none is configured.
+         * Treats null, [FOLLOWUP_NONE_ID], and <= 0 as none: Android
+         * [android.database.Cursor.getLong] coerces SQL NULL to 0.
+         */
+        fun effectiveFollowupId(id: Long?): Long? {
+            if (id == null || id == FOLLOWUP_NONE_ID || id <= 0L) {
+                return null
+            }
+            return id
+        }
+
         fun fromString(json: String): Task {
             return Json.decodeFromString(json)
         }

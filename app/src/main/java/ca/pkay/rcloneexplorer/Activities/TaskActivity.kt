@@ -204,7 +204,7 @@ class TaskActivity : AppCompatActivity(), FolderSelectorCallback{
         get() {
             val tasks = dbHandler.allTasks
             val list = ArrayList<TaskNameIdPair>()
-            list.add(TaskNameIdPair(-1, "None"))
+            list.add(TaskNameIdPair(Task.FOLLOWUP_NONE_ID, "None"))
             tasks.forEach{
                 list.add(TaskNameIdPair(it.id, it.title))
             }
@@ -368,7 +368,7 @@ class TaskActivity : AppCompatActivity(), FolderSelectorCallback{
         var i = 0
         var found = 0
         taskListWithNone.forEach{
-            if(it.id == (existingTask?.onFailFollowup ?: -1)) {
+            if(it.id == (existingTask?.onFailFollowup ?: Task.FOLLOWUP_NONE_ID)) {
                 found = i
             }
             i++
@@ -390,7 +390,7 @@ class TaskActivity : AppCompatActivity(), FolderSelectorCallback{
         var i = 0
         var found = 0
         taskListWithNone.forEach{
-            if(it.id == (existingTask?.onSuccessFollowup ?: -1)) {
+            if(it.id == (existingTask?.onSuccessFollowup ?: Task.FOLLOWUP_NONE_ID)) {
                 found = i
             }
             i++

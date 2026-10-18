@@ -326,7 +326,11 @@ class EphemeralWorker (private var mContext: Context, workerParams: WorkerParame
                 return
             }
             FAILURE_REASON.NO_TASK -> {
-                content = getString(R.string.operation_failed_notask)
+                // Invalid/missing work payload — not a user-facing sync failure.
+                FLog.w(tag(), "Skipping work: ${getString(R.string.operation_failed_notask)}")
+                endNotificationAlreadyPosted = true
+                finishWork()
+                return
             }
             FAILURE_REASON.CONNECTIVITY_CHANGED -> {
                 content = mContext.getString(R.string.operation_failed_data_change, mTitle)

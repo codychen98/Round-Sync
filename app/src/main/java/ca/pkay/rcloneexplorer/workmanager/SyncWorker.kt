@@ -283,7 +283,12 @@ class SyncWorker (private var mContext: Context, workerParams: WorkerParameters)
                 return
             }
             FAILURE_REASON.NO_TASK -> {
-                content = getString(R.string.operation_failed_notask)
+                // Invalid/missing task id (e.g. Cursor NULL coerced to 0, or deleted follow-up).
+                // Not a real sync failure — do not notify the user.
+                FLog.w(TAG, "Skipping sync: ${getString(R.string.operation_failed_notask)}")
+                endNotificationAlreadyPosted = true
+                finishWork()
+                return
             }
             FAILURE_REASON.CONNECTIVITY_CHANGED -> {
                 content = mContext.getString(R.string.operation_failed_data_change, mTitle)
@@ -298,7 +303,6 @@ class SyncWorker (private var mContext: Context, workerParams: WorkerParameters)
                 content = mContext.getString(R.string.operation_failed_unknown_rclone_error, mTitle)
             }
         }
-        // mTask is never initialized on the NO_TASK path (task deleted / unknown id).
         if (this::mTask.isInitialized) {
             runOnFailureCommand()
             followupTask(mTask.onFailFollowup)
@@ -509,10 +513,12 @@ class SyncWorker (private var mContext: Context, workerParams: WorkerParameters)
     }
 
     private fun followupTask(followUpTaskID: Long?) {
-        if (followUpTaskID == null || followUpTaskID == -1L) {
+        val id = Task.effectiveFollowupId(followUpTaskID) ?: return
+        if (mDatabase.getTask(id) == null) {
+            FLog.w(TAG, "Skipping missing follow-up task id=$id")
             return
         }
         Thread.sleep(1000)
-        SyncManager(mContext).queue(followUpTaskID)
+        SyncManager(mContext).queue(id)
     }
 }
