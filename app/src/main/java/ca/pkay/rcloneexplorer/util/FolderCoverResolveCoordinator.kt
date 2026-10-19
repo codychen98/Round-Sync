@@ -166,6 +166,56 @@ class FolderCoverResolveCoordinator(
                 ) ?: continue
                 cellBitmaps.add(bmp)
             }
+            // Dirs-only (or no cached direct files): build cells from child folders.
+            if (cellBitmaps.isEmpty()) {
+                var listedChildren = 0
+                val childDirs = entries.filter { it.isDir }.sortedBy { it.name }
+                for (child in childDirs) {
+                    if (cellBitmaps.size >= 4) break
+                    // 1) Child's own stored collage JPEG (fresh decode; safe to recycle in finally).
+                    val childCollage = FolderCollageStore.loadBitmap(appContext, remote.name, child.path)
+                    if (childCollage != null) {
+                        cellBitmaps.add(childCollage)
+                        continue
+                    }
+                    // 2) One-level peek into the child for an already-cached media thumb.
+                    if (listedChildren >= MAX_CHILD_LISTINGS) continue
+                    listedChildren++
+                    val childListing = rclone.getDirectoryContent(remote, child.path, startAtRootSupplier())
+                        ?: continue
+                    val childEntries = childListing.map { item ->
+                        PrefetchListingEntry(
+                            path = item.path,
+                            name = item.name,
+                            size = item.size,
+                            mimeType = item.mimeType ?: "",
+                            isDir = item.isDir,
+                        )
+                    }
+                    val childCands = FolderCoverResolver.pickCollageCandidates(
+                        childEntries,
+                        sizeLimitBytesSupplier(),
+                    )
+                    for (cc in childCands) {
+                        if (!FolderCollageCellLoader.isAvailable(appContext, remote.name, cc)) continue
+                        val b = FolderCollageCellLoader.loadBitmap(
+                            appContext,
+                            remote.name,
+                            cc,
+                            cellSize,
+                        ) ?: continue
+                        cellBitmaps.add(b)
+                        break // one cell per child
+                    }
+                }
+                if (cellBitmaps.isNotEmpty()) {
+                    ThumbRootCauseLog.info(
+                        appContext,
+                        "folderCollageChildCells",
+                        "rowPath=$folderPath cells=${cellBitmaps.size}",
+                    )
+                }
+            }
             if (cellBitmaps.isEmpty()) {
                 ThumbRootCauseLog.info(
                     appContext,
@@ -192,6 +242,7 @@ class FolderCoverResolveCoordinator(
 
     companion object {
         private const val NONE_RETRY_COOLDOWN_MS = 15_000L
+        private const val MAX_CHILD_LISTINGS = 6
 
         /** Process-scoped so fragment recreate does not drop successful collages. */
         private val cache = ConcurrentHashMap<String, Outcome>()

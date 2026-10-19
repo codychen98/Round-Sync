@@ -23,6 +23,7 @@ import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Rclone
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerManager
 import ca.pkay.rcloneexplorer.Services.ThumbnailServerService
+import ca.pkay.rcloneexplorer.util.BackgroundMediaPrepWorkTracker
 import ca.pkay.rcloneexplorer.util.MediaFolderPolicyPrefetchFolders
 import ca.pkay.rcloneexplorer.util.PolicyType
 import ca.pkay.rcloneexplorer.util.SelectedFolderMediaCacheLayout
@@ -96,15 +97,28 @@ class MediaFolderPolicyCachePrefetchWorker(
                 "event=policyCachePrefetchFolderStart index=$folderIndex/${folders.size} " +
                     "path=${folder.explorerDirectoryPath} videos=${videos.size}",
             )
-            prefetchFolderVideos(
-                app = app,
-                remote = remote,
-                directoryPath = folder.explorerDirectoryPath,
-                videos = videos,
-                factory = factory,
-                cache = cache,
-                maxBytes = maxBytes,
-            )
+            var attempt = 0
+            while (attempt < FOLDER_ATTEMPTS && !isStopped) {
+                attempt++
+                waitWhileThumbPrefetchActive(app)
+                waitWhileExplorerBrowsing(app)
+                if (isStopped) break
+                val completed = prefetchFolderVideos(
+                    app = app,
+                    remote = remote,
+                    directoryPath = folder.explorerDirectoryPath,
+                    videos = videos,
+                    factory = factory,
+                    cache = cache,
+                    maxBytes = maxBytes,
+                )
+                if (completed) break
+                SyncLog.info(
+                    app,
+                    TAG,
+                    "event=policyCachePrefetchRetry path=${folder.explorerDirectoryPath} attempt=$attempt",
+                )
+            }
             SyncLog.info(
                 app,
                 TAG,
@@ -117,6 +131,10 @@ class MediaFolderPolicyCachePrefetchWorker(
         Result.success()
     }
 
+    /**
+     * @return true if the folder finished without yielding (or failed in a non-retryable way);
+     * false if the explorer took the serve / lease was stolen and the folder should be retried.
+     */
     private suspend fun prefetchFolderVideos(
         app: Context,
         remote: RemoteItem,
@@ -125,7 +143,7 @@ class MediaFolderPolicyCachePrefetchWorker(
         factory: CacheDataSource.Factory,
         cache: Cache,
         maxBytes: Long,
-    ) {
+    ): Boolean {
         var serveLeaseId = 0
         val auth = randomAuthToken()
         val port = allocatePort(CACHE_PORT_PREFERRED)
@@ -133,17 +151,23 @@ class MediaFolderPolicyCachePrefetchWorker(
             serveLeaseId = ThumbnailServerManager.getInstance().acquireServeLease(app, remote, port, auth)
             if (serveLeaseId == 0) {
                 SyncLog.info(app, TAG, "event=policyCachePrefetchLeaseFailed path=$directoryPath")
-                return
+                return true
             }
             ThumbnailServerService.startServing(app, remote, port, auth, directoryPath, true)
             if (!waitForThumbnailServerReady()) {
                 SyncLog.info(app, TAG, "event=policyCachePrefetchServerTimeout path=$directoryPath")
-                return
+                return true
             }
             val hidden = ThumbnailPrefetchTargets.hiddenServePath(auth, remote.name)
             for (item in videos) {
                 if (isStopped) {
                     break
+                }
+                if (BackgroundMediaPrepWorkTracker.hasExplorerForegroundServeLease()
+                    || !ThumbnailServerManager.getInstance().isServeLeaseActive(serveLeaseId)
+                ) {
+                    SyncLog.info(app, TAG, "event=policyCachePrefetchYield path=$directoryPath")
+                    return false
                 }
                 val key = remote.name + "|" + item.path
                 if (item.size > maxBytes / 2) {
@@ -162,10 +186,25 @@ class MediaFolderPolicyCachePrefetchWorker(
                     ).cache()
                 }
             }
+            return true
         } finally {
             if (serveLeaseId != 0) {
                 ThumbnailServerManager.getInstance().releaseServeLease(serveLeaseId)
             }
+        }
+    }
+
+    private suspend fun waitWhileExplorerBrowsing(app: Context) {
+        if (!BackgroundMediaPrepWorkTracker.hasExplorerForegroundServeLease()) return
+        SyncLog.info(app, TAG, "event=policyCachePrefetchWaitExplorer")
+        while (BackgroundMediaPrepWorkTracker.hasExplorerForegroundServeLease() && !isStopped) {
+            delay(YIELD_POLL_MS)
+        }
+    }
+
+    private suspend fun waitWhileThumbPrefetchActive(app: Context) {
+        while (BackgroundMediaPrepWorkTracker.isThumbnailPrefetchActive() && !isStopped) {
+            delay(YIELD_POLL_MS)
         }
     }
 
@@ -222,6 +261,8 @@ class MediaFolderPolicyCachePrefetchWorker(
         private const val CACHE_PORT_PREFERRED = 29_181
         private const val SERVER_READY_TIMEOUT_MS = 45_000L
         private const val POLL_MS = 100L
+        private const val YIELD_POLL_MS = 500L
+        private const val FOLDER_ATTEMPTS = 3
 
         @JvmStatic
         fun enqueue(context: Context) {
