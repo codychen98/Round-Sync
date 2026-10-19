@@ -58,6 +58,33 @@ class MediaFolderPolicyPrefetchFoldersTest {
     }
 
     @Test
+    fun enumerate_filtersByCacheType() {
+        val prefs = MemorySharedPreferences()
+        val editor = prefs.edit()
+        MediaFolderPolicy.writePolicyRows(
+            editor,
+            "s3remote",
+            listOf(
+                MediaFolderPolicyRow(path = "/Photos", thumbnail = true, cache = false),
+                MediaFolderPolicyRow(path = "/Videos", thumbnail = false, cache = true),
+                MediaFolderPolicyRow(path = "/Both", thumbnail = true, cache = true),
+            ),
+        )
+        editor.commit()
+
+        val remotes = listOf(RemoteItem("s3remote", "s3"))
+        val cacheFolders = MediaFolderPolicyPrefetchFolders.enumerate(
+            remotes,
+            prefs,
+            PolicyType.CACHE,
+        )
+
+        assertEquals(2, cacheFolders.size)
+        assertEquals("/Both", cacheFolders[0].policyRelativePath)
+        assertEquals("/Videos", cacheFolders[1].policyRelativePath)
+    }
+
+    @Test
     fun enumerate_sortsByRemoteThenPath() {
         val prefs = MemorySharedPreferences()
         val editor = prefs.edit()

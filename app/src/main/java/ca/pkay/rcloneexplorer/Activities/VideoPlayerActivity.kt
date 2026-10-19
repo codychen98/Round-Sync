@@ -153,10 +153,17 @@ class VideoPlayerActivity : AppCompatActivity() {
         val names = intent.getStringArrayExtra("video_names") ?: return finish()
         val startIndex = intent.getIntExtra("start_index", 0)
 
-        initializePlayer(uris, names, startIndex)
+        // EXTRA_VIDEO_REMOTE_NAMES / EXTRA_VIDEO_PATHS already loaded into fields above.
+        initializePlayer(uris, names, startIndex, videoRemoteNames, videoPaths)
     }
 
-    private fun initializePlayer(uris: Array<String>, names: Array<String>, startIndex: Int) {
+    private fun initializePlayer(
+        uris: Array<String>,
+        names: Array<String>,
+        startIndex: Int,
+        remoteNames: Array<String>?,
+        paths: Array<String>?,
+    ) {
         val cacheFlags = intent.getBooleanArrayExtra(EXTRA_VIDEO_CACHE_ENABLED)?.let { arr ->
             if (arr.size == uris.size) {
                 arr
@@ -189,7 +196,14 @@ class VideoPlayerActivity : AppCompatActivity() {
         val progressiveNoCache = ProgressiveMediaSource.Factory(upstreamFactory)
 
         val sources: List<MediaSource> = uris.indices.map { i ->
-            val item = MediaItem.fromUri(uris[i])
+            val key = if (remoteNames?.size == uris.size && paths?.size == uris.size &&
+                remoteNames[i].isNotEmpty() && paths[i].isNotEmpty()
+            ) {
+                remoteNames[i] + "|" + paths[i]
+            } else {
+                null
+            }
+            val item = MediaItem.Builder().setUri(uris[i]).setCustomCacheKey(key).build()
             if (cacheFlags[i] && progressiveWithCache != null) {
                 progressiveWithCache.createMediaSource(item)
             } else {

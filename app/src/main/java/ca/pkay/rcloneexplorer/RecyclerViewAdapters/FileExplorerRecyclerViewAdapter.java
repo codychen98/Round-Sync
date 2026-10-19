@@ -1083,25 +1083,12 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     }
 
     /**
-     * When false, skip HTTP thumbnail loads (no request, no new Glide disk cache) for this file.
-     * SAFW and other bypass remotes always return true.
+     * Policy list is prefetch-only, not a browse gate: always allow thumbnail loads on bind.
+     * Call sites that skip on false remain for structure; this never returns false.
      */
     private boolean isHttpThumbnailPolicyAllowedForNetworkThumbnail(@NonNull FileItem item) {
-        RemoteItem remote = item.getRemote();
-        if (remote == null) {
-            return true;
-        }
-        if (remote.getType() == RemoteItem.SAFW) {
-            return true;
-        }
-        if (!MediaFolderPolicy.INSTANCE.shouldApplyAllowListGating(remote)) {
-            return true;
-        }
-        Set<String> allowed = getThumbAllowedFolders(remote.getName());
-        String pathForPolicy = MediaFolderPolicy.INSTANCE.explorerPathForPolicyCheck(
-                remote.getName(),
-                item.getPath());
-        return MediaFolderPolicy.INSTANCE.isPathAllowed(remote, remote.getName(), pathForPolicy, allowed);
+        // Policy list is prefetch-only, not a browse gate: always allow thumbnail loads on bind.
+        return true;
     }
 
     /**
@@ -1116,7 +1103,11 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         if (!MediaFolderPolicy.INSTANCE.shouldApplyAllowListGating(remote)) {
             return false;
         }
-        return isHttpThumbnailPolicyAllowedForNetworkThumbnail(item);
+        Set<String> allowed = getThumbAllowedFolders(remote.getName());
+        String pathForPolicy = MediaFolderPolicy.INSTANCE.explorerPathForPolicyCheck(
+                remote.getName(),
+                item.getPath());
+        return MediaFolderPolicy.INSTANCE.isPathAllowed(remote, remote.getName(), pathForPolicy, allowed);
     }
 
     /**

@@ -64,6 +64,7 @@ import java.io.IOException;
 import java.net.ServerSocket;
 import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -105,8 +106,6 @@ import ca.pkay.rcloneexplorer.util.BackgroundMediaPrepWorkTracker;
 import ca.pkay.rcloneexplorer.util.FLog;
 import ca.pkay.rcloneexplorer.util.LastFolderSnapshotStore;
 import ca.pkay.rcloneexplorer.util.VisitedThumbnailFolders;
-import ca.pkay.rcloneexplorer.util.MediaFolderPolicy;
-import ca.pkay.rcloneexplorer.util.PolicyType;
 import ca.pkay.rcloneexplorer.util.FolderCoverResolveCoordinator;
 import ca.pkay.rcloneexplorer.util.SyncLog;
 import ca.pkay.rcloneexplorer.workmanager.LastFolderThumbnailPrefetchWorker;
@@ -2507,16 +2506,9 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     }
 
     private boolean[] buildCacheEnabledForFiles(List<FileItem> files) {
+        // Policy list is prefetch-only; on-demand playback/viewer caching stays enabled for all files.
         boolean[] out = new boolean[files.size()];
-        if (context == null || remote == null || remoteName == null) {
-            return out;
-        }
-        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
-        Set<String> allowed = MediaFolderPolicy.INSTANCE.readAllowedFolders(prefs, remoteName, PolicyType.CACHE);
-        for (int i = 0; i < files.size(); i++) {
-            String p = MediaFolderPolicy.INSTANCE.explorerPathForPolicyCheck(remoteName, files.get(i).getPath());
-            out[i] = MediaFolderPolicy.INSTANCE.isPathAllowed(remote, remoteName, p, allowed);
-        }
+        Arrays.fill(out, true);
         return out;
     }
 

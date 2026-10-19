@@ -551,8 +551,8 @@
     <string name="media_folder_policy_add_n_folders">Add %1$d folders</string>
     <string name="media_folder_policy_selection_mode">Selection mode: tap folders to include or exclude.</string>
     <string name="remote_folder_picker_fab_select_here">Select here</string>
-    <string name="media_folder_policy_safw_notice">This remote is SAF WebDAV. Folder rules are not enforced for thumbnails or cache on SAF remotes.</string>
-    <string name="pref_media_folder_policy_summary">Limit thumbnail generation and media cache to selected folders per remote.</string>
+    <string name="media_folder_policy_safw_notice">This remote is SAF WebDAV. Prefetch folder selection does not apply to SAF remotes.</string>
+    <string name="pref_media_folder_policy_summary">Prefetch thumbnails and media cache for selected folders at app start. Browsing and playback are never restricted.</string>
     <string name="pref_clear_selected_folder_media_cache_title">Clear selected-folder media cache</string>
     <string name="pref_clear_selected_folder_media_cache_summary">Remove on-device cached streamed video and in-app image data for allowed folders. Thumbnail cache is separate.</string>
     <string name="clear_selected_folder_media_cache_dialog_title">Clear media cache?</string>

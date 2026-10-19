@@ -86,6 +86,7 @@ import ca.pkay.rcloneexplorer.util.PermissionManager;
 import ca.pkay.rcloneexplorer.util.RemotePathUnlockSession;
 import ca.pkay.rcloneexplorer.util.SharedPreferencesUtil;
 import ca.pkay.rcloneexplorer.util.SyncLog;
+import ca.pkay.rcloneexplorer.workmanager.MediaFolderPolicyCachePrefetchWorker;
 import ca.pkay.rcloneexplorer.workmanager.MediaFolderPolicyThumbnailPrefetchWorker;
 import de.felixnuesse.extract.updates.UpdateChecker;
 import es.dmoral.toasty.Toasty;
@@ -243,6 +244,7 @@ public class MainActivity extends AppCompatActivity
 
         if (allPermissionsGranted && completedIntroOnce) {
             MediaFolderPolicyThumbnailPrefetchWorker.enqueueOnAppStartIfNeeded(context, rclone);
+            MediaFolderPolicyCachePrefetchWorker.enqueueOnAppStartIfNeeded(context, rclone);
         }
     }
 
