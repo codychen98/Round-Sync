@@ -281,7 +281,7 @@ public class RemotesFragment extends Fragment implements RemotesRecyclerViewAdap
             if(itemID == R.id.action_remote_properties) {
                 showRemotePropertiesDialog(remoteItem);
             } else if (itemID == R.id.action_remote_path_lock) {
-                RemotePathLockEditor.show(RemotesFragment.this, remoteItem);
+                RemotePathLockEditor.showGated(RemotesFragment.this, remoteItem);
             } else if (itemID == R.id.action_edit_remote) {
                 Intent intent = new Intent(context, RemoteConfig.class);
                 intent.putExtra(CONFIG_EDIT_TARGET, remoteItem.getName());

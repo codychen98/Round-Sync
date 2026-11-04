@@ -2,6 +2,7 @@ package ca.pkay.rcloneexplorer.util
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.preference.PreferenceManager
 import ca.pkay.rcloneexplorer.R
 import java.nio.charset.StandardCharsets
 
@@ -35,6 +36,14 @@ object RemotePathLock {
     fun prefixesPrefsKey(context: Context, remoteName: String): String {
         return context.getString(R.string.pref_key_remote_path_lock_prefixes_prefix) +
             hexEncodeRemote(remoteName)
+    }
+
+    /** True when any remote has path lock switched on (scans the enabled-key prefix; works before remotes are decrypted). */
+    @JvmStatic
+    fun anyRemoteLocked(context: Context): Boolean {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+        val prefix = context.getString(R.string.pref_key_remote_path_lock_enabled_prefix)
+        return prefs.all.any { (key, value) -> key.startsWith(prefix) && value == true }
     }
 
     /**

@@ -8,9 +8,7 @@ import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 import android.view.LayoutInflater
-import android.view.MotionEvent
 import android.view.ViewGroup
-import android.widget.ImageView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.recyclerview.widget.RecyclerView
@@ -25,13 +23,13 @@ import com.bumptech.glide.Priority
 import com.bumptech.glide.load.engine.DiskCacheStrategy
 import com.bumptech.glide.load.model.GlideUrl
 import com.bumptech.glide.request.RequestOptions
+import com.github.chrisbanes.photoview.PhotoView
 import com.google.android.material.appbar.MaterialToolbar
 import okhttp3.OkHttpClient
 import java.util.concurrent.Executors
 
 class ImageViewerActivity : AppCompatActivity() {
 
-    private lateinit var swipeDismissRoot: VideoSwipeBackInterceptFrameLayout
     private lateinit var toolbar: MaterialToolbar
     private lateinit var pager: ViewPager2
     private lateinit var connectivityManager: ConnectivityManager
@@ -51,35 +49,6 @@ class ImageViewerActivity : AppCompatActivity() {
 
         toolbar = findViewById(R.id.image_viewer_toolbar)
         pager = findViewById(R.id.image_viewer_pager)
-
-        swipeDismissRoot = findViewById(R.id.image_viewer_swipe_root)
-        swipeDismissRoot.swipeDismissDelegate =
-            object : VideoSwipeBackInterceptFrameLayout.SwipeDismissDelegate {
-                override fun shouldObserveCenterSwipeFromDown(ev: MotionEvent): Boolean {
-                    return VideoSwipeBackQualifiers.rawMotionHitsView(ev, pager) &&
-                        !VideoSwipeBackQualifiers.rawMotionHitsView(ev, toolbar)
-                }
-
-                override fun maybeFinishFromSwipeGesture(
-                    down: MotionEvent,
-                    up: MotionEvent,
-                    velocityX: Float,
-                    velocityY: Float,
-                ): Boolean {
-                    val qualifies = VideoSwipeBackQualifiers.qualifiesVerticalSwipeBackDismiss(
-                        resources,
-                        down,
-                        up,
-                        velocityY,
-                        { false },
-                    )
-                    if (!qualifies) {
-                        return false
-                    }
-                    onBackPressedDispatcher.onBackPressed()
-                    return true
-                }
-            }
 
         val urls = intent.getStringArrayExtra(EXTRA_IMAGE_URLS) ?: run {
             finish()
@@ -118,9 +87,21 @@ class ImageViewerActivity : AppCompatActivity() {
             override fun onPageSelected(position: Int) {
                 toolbar.title = names.getOrElse(position) { "" }
                 toolbar.subtitle = "${position + 1} / ${urls.size}"
+                resetZoomOnOtherPages(position)
             }
         })
         toolbar.subtitle = "${startIndex + 1} / ${urls.size}"
+    }
+
+    /** Pages kept alive by offscreenPageLimit stay bound; return them to 1x when they leave the screen. */
+    private fun resetZoomOnOtherPages(current: Int) {
+        val recycler = pager.getChildAt(0) as? RecyclerView ?: return
+        for (i in 0 until recycler.childCount) {
+            val child = recycler.getChildAt(i)
+            if (recycler.getChildAdapterPosition(child) != current) {
+                (child as? PhotoView)?.setScale(1f, false)
+            }
+        }
     }
 
     override fun onStart() {
@@ -192,20 +173,23 @@ class ImageViewerActivity : AppCompatActivity() {
         private val cachedHttpClient: OkHttpClient?,
     ) : RecyclerView.Adapter<ImagePagerAdapter.PageHolder>() {
 
-        inner class PageHolder(val imageView: ImageView) : RecyclerView.ViewHolder(imageView) {
+        inner class PageHolder(val imageView: PhotoView) : RecyclerView.ViewHolder(imageView) {
             @Volatile
             var loadToken: Long = 0L
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): PageHolder {
             val view = LayoutInflater.from(parent.context)
-                .inflate(R.layout.item_image_viewer_page, parent, false) as ImageView
+                .inflate(R.layout.item_image_viewer_page, parent, false) as PhotoView
+            view.maximumScale = MAX_ZOOM
+            view.mediumScale = MEDIUM_ZOOM
             return PageHolder(view)
         }
 
         override fun onBindViewHolder(holder: PageHolder, position: Int) {
             Glide.with(this@ImageViewerActivity).clear(holder.imageView)
             holder.imageView.setImageDrawable(null)
+            holder.imageView.setScale(1f, false)
             holder.loadToken++
             val token = holder.loadToken
             val url = urls[position]
@@ -244,5 +228,7 @@ class ImageViewerActivity : AppCompatActivity() {
         const val EXTRA_IMAGE_NAMES = "image_names"
         const val EXTRA_START_INDEX = "start_index"
         const val EXTRA_IMAGE_CACHE_ENABLED = "image_cache_enabled"
+        private const val MAX_ZOOM = 5f
+        private const val MEDIUM_ZOOM = 2.5f
     }
 }

@@ -26,8 +26,11 @@ object ConfigImporter {
         FAILURE_ZIP_PASSWORD_WRONG,
     }
 
+    enum class PasswordOutcome { NONE, SAVED, KEPT_EXISTING, SAVE_FAILED }
+
     data class Result(
         val status: Status,
+        val passwordOutcome: PasswordOutcome = PasswordOutcome.NONE,
     )
 
     @JvmStatic
@@ -128,7 +131,7 @@ object ConfigImporter {
 
             importOptionalZipEntries(context, rclone, file, password)
             applyPostImportSideEffects(context, rclone)
-            Result(Status.SUCCESS)
+            Result(Status.SUCCESS, rememberTypedPassword(context, encrypted, zipPassword))
         } catch (e: BackupZipPasswordRequiredException) {
             Result(Status.FAILURE_ZIP_PASSWORD_REQUIRED)
         } catch (e: BackupZipWrongPasswordException) {
@@ -140,8 +143,8 @@ object ConfigImporter {
     }
 
     /**
-     * Saved settings password is used automatically. A one-shot [providedPassword] from an import
-     * prompt is used only for that import and is not persisted here.
+     * Saved settings password is used automatically. A [providedPassword] from an import prompt is
+     * used for decryption; persistence after success is handled by [rememberTypedPassword].
      */
     private fun resolveZipPassword(
         context: Context,
@@ -155,6 +158,33 @@ object ConfigImporter {
             return providedPassword
         }
         return BackupZipPasswordStore.getPasswordOrNull(context)
+    }
+
+    /**
+     * A password typed at the import prompt just decrypted this backup, so it is known-good. Save it
+     * when Settings has none; never overwrite a different saved password silently.
+     */
+    private fun rememberTypedPassword(
+        context: Context,
+        encrypted: Boolean,
+        typedPassword: String?,
+    ): PasswordOutcome {
+        if (!encrypted || typedPassword.isNullOrBlank()) {
+            return PasswordOutcome.NONE
+        }
+        val typed = typedPassword.trim()
+        val stored = BackupZipPasswordStore.getPasswordOrNull(context)
+        return when {
+            stored == null -> try {
+                BackupZipPasswordStore.setPassword(context, typed)
+                PasswordOutcome.SAVED
+            } catch (t: Throwable) {
+                FLog.e(TAG, "Could not save typed backup zip password", t)
+                PasswordOutcome.SAVE_FAILED
+            }
+            stored == typed -> PasswordOutcome.NONE
+            else -> PasswordOutcome.KEPT_EXISTING
+        }
     }
 
     private fun importConf(context: Context, rclone: Rclone, uri: Uri): Result {

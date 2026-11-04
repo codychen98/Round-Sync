@@ -82,7 +82,9 @@ import ca.pkay.rcloneexplorer.util.CacheArchiveExporter;
 import ca.pkay.rcloneexplorer.util.ConfigImporter;
 import ca.pkay.rcloneexplorer.util.DrawerPinnedUi;
 import ca.pkay.rcloneexplorer.util.FLog;
+import ca.pkay.rcloneexplorer.util.PathLockScreenLockGuard;
 import ca.pkay.rcloneexplorer.util.PermissionManager;
+import ca.pkay.rcloneexplorer.util.RemotePathLock;
 import ca.pkay.rcloneexplorer.util.RemotePathUnlockSession;
 import ca.pkay.rcloneexplorer.util.SharedPreferencesUtil;
 import ca.pkay.rcloneexplorer.util.SyncLog;
@@ -623,7 +625,7 @@ public class MainActivity extends AppCompatActivity
             if (pendingBackupImportUri == null) {
                 return;
             }
-            // One-shot for this import only; not saved to settings.
+            // Saved to Settings after a successful import when no password is stored yet (see ConfigImporter).
             pendingBackupZipPassword = input;
             new CopyConfigFile().execute(pendingBackupImportUri);
             return;
@@ -822,6 +824,7 @@ public class MainActivity extends AppCompatActivity
 
         private int statusCode = FAILURE_UNSPECIFIED;
         private LoadingDialog loadingDialog;
+        private ConfigImporter.PasswordOutcome passwordOutcome = ConfigImporter.PasswordOutcome.NONE;
 
 
         @Override
@@ -844,6 +847,7 @@ public class MainActivity extends AppCompatActivity
             String mime = resolver.getType(uris[0]);
             ConfigImporter.Result result = ConfigImporter.importFromUri(
                     context, uris[0], mime, pendingBackupZipPassword);
+            passwordOutcome = result.getPasswordOutcome();
             switch (result.getStatus()) {
                 case SUCCESS:
                     statusCode = SUCCESS_IMPORT;
@@ -903,6 +907,26 @@ public class MainActivity extends AppCompatActivity
 
             pendingBackupImportUri = null;
             pendingBackupZipPassword = null;
+
+            switch (passwordOutcome) {
+                case SAVED:
+                    Toasty.success(context, getString(R.string.pref_backup_zip_password_saved), Toast.LENGTH_LONG, true).show();
+                    break;
+                case KEPT_EXISTING:
+                    Toasty.info(context, getString(R.string.backup_zip_password_kept_existing), Toast.LENGTH_LONG, true).show();
+                    break;
+                case SAVE_FAILED:
+                    Toasty.warning(context, getString(R.string.backup_zip_password_save_failed), Toast.LENGTH_LONG, true).show();
+                    break;
+                default:
+                    break;
+            }
+
+            if (RemotePathLock.anyRemoteLocked(context)
+                    && !PathLockScreenLockGuard.isScreenLockAvailable(MainActivity.this)) {
+                PathLockScreenLockGuard.showScreenLockRequiredDialog(
+                        MainActivity.this, null, PathLockScreenLockGuard.Reason.RESTORED);
+            }
 
             if (rclone.isConfigEncrypted()) {
                 pinRemotesToDrawer(); // this will clear any previous pinned remotes

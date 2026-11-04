@@ -32,6 +32,14 @@ object PathLockBiometricHelper {
                     }
 
                     override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                        if (PathLockScreenLockGuard.isNoCredentialError(errorCode)) {
+                            PathLockScreenLockGuard.showScreenLockRequiredDialog(
+                                activity,
+                                remoteLabel,
+                                PathLockScreenLockGuard.Reason.UNLOCK,
+                            )
+                            return
+                        }
                         if (errorCode != BiometricPrompt.ERROR_USER_CANCELED &&
                             errorCode != BiometricPrompt.ERROR_NEGATIVE_BUTTON
                         ) {
@@ -99,6 +107,14 @@ object PathLockBiometricHelper {
                 return@post
             }
             if (!host.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                return@post
+            }
+            if (!PathLockScreenLockGuard.isScreenLockAvailable(host)) {
+                PathLockScreenLockGuard.showScreenLockRequiredDialog(
+                    host,
+                    remoteLabel,
+                    PathLockScreenLockGuard.Reason.UNLOCK,
+                )
                 return@post
             }
             try {

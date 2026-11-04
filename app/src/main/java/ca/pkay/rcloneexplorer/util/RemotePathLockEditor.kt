@@ -70,8 +70,37 @@ object RemotePathLockEditor {
             .setNegativeButton(android.R.string.cancel, null)
             .setPositiveButton(R.string.path_lock_save) { _, _ ->
                 applyEdits(context, prefs, name, enableSwitch.isChecked, edit.text?.toString() ?: "")
+                if (enableSwitch.isChecked && !PathLockScreenLockGuard.isScreenLockAvailable(context)) {
+                    fragment.activity?.let {
+                        PathLockScreenLockGuard.showScreenLockRequiredDialog(
+                            it,
+                            name,
+                            PathLockScreenLockGuard.Reason.ENABLED_WITHOUT_LOCK,
+                        )
+                    }
+                }
             }
             .show()
+    }
+
+    /** Opens the editor; when the lock is already enabled, authenticate first so it cannot simply be switched off. */
+    @JvmStatic
+    fun showGated(fragment: Fragment, remote: RemoteItem) {
+        val context = fragment.context ?: return
+        val activity = fragment.activity ?: return
+        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+        val locked = prefs.getBoolean(RemotePathLock.enabledPrefsKey(context, remote.name), false)
+        if (!locked || RemotePathUnlockSession.isUnlocked(remote.name)) {
+            show(fragment, remote)
+            return
+        }
+        PathLockBiometricHelper.requestUnlock(activity, remote.name) {
+            if (!fragment.isAdded) {
+                return@requestUnlock
+            }
+            RemotePathUnlockSession.markUnlocked(remote.name)
+            show(fragment, remote)
+        }
     }
 
     private fun applyEdits(

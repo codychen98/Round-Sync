@@ -19,6 +19,7 @@ import androidx.appcompat.widget.PopupMenu
 import androidx.appcompat.widget.Toolbar
 import androidx.fragment.app.Fragment
 import ca.pkay.rcloneexplorer.Database.DatabaseHandler
+import ca.pkay.rcloneexplorer.Dialogs.SubfolderPickerDialog
 import ca.pkay.rcloneexplorer.FilePicker
 import ca.pkay.rcloneexplorer.Fragments.FolderSelectorCallback
 import ca.pkay.rcloneexplorer.Fragments.RemoteFolderPickerFragment
@@ -30,6 +31,7 @@ import ca.pkay.rcloneexplorer.R
 import ca.pkay.rcloneexplorer.Rclone
 import ca.pkay.rcloneexplorer.SpinnerAdapters.FilterSpinnerAdapter
 import ca.pkay.rcloneexplorer.util.ActivityHelper
+import ca.pkay.rcloneexplorer.util.SubfolderFilterRules
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import es.dmoral.toasty.Toasty
 import java.io.UnsupportedEncodingException
@@ -54,6 +56,7 @@ class TaskActivity : AppCompatActivity(), FolderSelectorCallback{
 
     private lateinit var filterDropdown: Spinner
     private lateinit var createNewFilterButton: Button
+    private lateinit var subfoldersButton: Button
     private lateinit var switchDeleteExcluded: Switch
 
 
@@ -176,6 +179,8 @@ class TaskActivity : AppCompatActivity(), FolderSelectorCallback{
         createNewFilterButton.setOnClickListener {
             openFilterActivity()
         }
+        subfoldersButton = findViewById(R.id.task_subfolders_button)
+        subfoldersButton.setOnClickListener { openSubfolderPicker() }
 
         findViewById<TextView>(R.id.task_title_textfield).text = existingTask?.title
         switchWifi.isChecked = existingTask?.wifionly ?: false
@@ -309,6 +314,50 @@ class TaskActivity : AppCompatActivity(), FolderSelectorCallback{
                 filterDropdown.setSelection(i + 1)
             }
         }
+    }
+
+    private fun openSubfolderPicker() {
+        val remoteName = remoteDropdown.selectedItem?.toString()
+        val remote = if (remoteName == null) null else rcloneInstance.getRemoteItemFromName(remoteName)
+        val path = remotePath.text.toString()
+        if (remote == null || path.isBlank()) {
+            Toasty.error(this, getString(R.string.task_subfolders_need_remote_path), Toast.LENGTH_SHORT, true).show()
+            return
+        }
+        val current = currentFilterOrNull()
+        val preselected = SubfolderFilterRules.parseSelectedFolders(current) ?: emptySet()
+        SubfolderPickerDialog(this, rcloneInstance, remote, path, preselected) { names ->
+            applySubfolderPick(path, current, names)
+        }.show()
+    }
+
+    private fun currentFilterOrNull(): Filter? {
+        if (filterDropdown.visibility != View.VISIBLE) {
+            return null
+        }
+        val position = filterDropdown.selectedItemPosition
+        val items = filterItems
+        return if (position > 0 && position - 1 < items.size) items[position - 1] else null
+    }
+
+    private fun applySubfolderPick(path: String, current: Filter?, names: List<String>) {
+        if (names.isEmpty()) {
+            Toasty.info(this, getString(R.string.task_subfolders_none_selected), Toast.LENGTH_SHORT, true).show()
+            return
+        }
+        val rules = SubfolderFilterRules.buildRules(names)
+        val target = if (current != null && SubfolderFilterRules.isGenerated(current)) {
+            current.setFilters(rules)
+            dbHandler.updateFilter(current)
+            current
+        } else {
+            val created = Filter(0)
+            created.title = SubfolderFilterRules.titleFor(path)
+            created.setFilters(rules)
+            dbHandler.createFilter(created)
+        }
+        selectFilter(target.id)
+        selectedFilter = target
     }
 
     private fun prepareLocal() {

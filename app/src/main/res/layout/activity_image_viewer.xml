@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ca.pkay.rcloneexplorer.Activities.VideoSwipeBackInterceptFrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:id="@+id/image_viewer_swipe_root"
+    android:id="@+id/image_viewer_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@android:color/black">
@@ -13,22 +13,22 @@
         android:fitsSystemWindows="true"
         android:orientation="vertical">
 
-    <com.google.android.material.appbar.MaterialToolbar
-        android:id="@+id/image_viewer_toolbar"
-        android:layout_width="match_parent"
-        android:layout_height="?attr/actionBarSize"
-        android:background="@color/video_overlay_bg"
-        app:navigationIcon="?attr/homeAsUpIndicator"
-        app:navigationIconTint="@android:color/white"
-        app:titleTextColor="@android:color/white"
-        app:subtitleTextColor="@android:color/white" />
+        <com.google.android.material.appbar.MaterialToolbar
+            android:id="@+id/image_viewer_toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="?attr/actionBarSize"
+            android:background="@color/video_overlay_bg"
+            app:navigationIcon="?attr/homeAsUpIndicator"
+            app:navigationIconTint="@android:color/white"
+            app:titleTextColor="@android:color/white"
+            app:subtitleTextColor="@android:color/white" />
 
-    <androidx.viewpager2.widget.ViewPager2
-        android:id="@+id/image_viewer_pager"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1" />
+        <androidx.viewpager2.widget.ViewPager2
+            android:id="@+id/image_viewer_pager"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
 
     </LinearLayout>
 
-</ca.pkay.rcloneexplorer.Activities.VideoSwipeBackInterceptFrameLayout>
+</FrameLayout>
