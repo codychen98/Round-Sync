@@ -26,6 +26,7 @@ import ca.pkay.rcloneexplorer.notifications.SyncServiceNotifications
 import ca.pkay.rcloneexplorer.notifications.SyncServiceNotifications.Companion.GROUP_ID
 import ca.pkay.rcloneexplorer.notifications.support.StatusObject
 import ca.pkay.rcloneexplorer.util.FLog
+import ca.pkay.rcloneexplorer.util.LocalMediaScanner
 import ca.pkay.rcloneexplorer.util.NotificationUtils
 import ca.pkay.rcloneexplorer.util.SyncLog
 import ca.pkay.rcloneexplorer.util.WifiConnectivitiyUtil
@@ -272,6 +273,7 @@ class SyncWorker (private var mContext: Context, workerParams: WorkerParameters)
         var content = mContext.getString(R.string.operation_failed_unknown, mTitle)
         when (failureReason) {
             FAILURE_REASON.NO_FAILURE -> {
+                maybeScanLocalMedia()
                 showSuccessNotification(notificationId)
                 runOnSuccessCommand()
                 followupTask(mTask.onSuccessFollowup)
@@ -489,6 +491,17 @@ class SyncWorker (private var mContext: Context, workerParams: WorkerParameters)
                 failureReason = FAILURE_REASON.CONNECTIVITY_CHANGED
             }
         }
+
+    /** Indexes the task local path after remote-to-local sync/copy so Photos/Gallery see new files. */
+    private fun maybeScanLocalMedia() {
+        if (!this::mTask.isInitialized) {
+            return
+        }
+        if (!LocalMediaScanner.writesToLocal(mTask.direction)) {
+            return
+        }
+        LocalMediaScanner.scanDestination(mContext, mTask.localPath)
+    }
 
     private fun runOnSuccessCommand() {
         val action = mTask.onSuccessCommand
