@@ -4,7 +4,6 @@ import android.content.Context
 import android.media.MediaScannerConnection
 import ca.pkay.rcloneexplorer.Items.SyncDirectionObject
 import java.io.File
-import kotlin.io.OnErrorAction
 
 /**
  * Asks Android to index files under a local destination so Gallery / Google Photos see rclone writes
@@ -69,10 +68,14 @@ object LocalMediaScanner {
         val rootPath = root.absolutePath
         val files = ArrayList<String>()
         files.add(rootPath)
-        root.walkTopDown().onFail { _, _ -> OnErrorAction.SKIP_SUBTREE }.forEach { file ->
-            if (file.isFile) {
-                files.add(file.absolutePath)
+        try {
+            root.walkTopDown().forEach { file ->
+                if (file.isFile) {
+                    files.add(file.absolutePath)
+                }
             }
+        } catch (t: Throwable) {
+            // Partial tree is still useful for MediaStore; caller logs scan-level failures.
         }
         return files
     }
