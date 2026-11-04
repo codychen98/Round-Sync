@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:minHeight="48dp"
+    android:orientation="horizontal"
+    android:paddingEnd="12dp"
+    android:paddingTop="4dp"
+    android:paddingBottom="4dp">
+
+    <View
+        android:id="@+id/subfolder_tree_indent"
+        android:layout_width="0dp"
+        android:layout_height="1dp" />
+
+    <ImageButton
+        android:id="@+id/subfolder_tree_expand"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="@string/task_subfolders_expand"
+        android:padding="8dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/ic_arrow_right"
+        android:tint="?android:attr/colorControlNormal" />
+
+    <CheckBox
+        android:id="@+id/subfolder_tree_check"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:minWidth="48dp"
+        android:minHeight="48dp" />
+
+    <TextView
+        android:id="@+id/subfolder_tree_name"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:ellipsize="middle"
+        android:maxLines="2"
+        android:textAppearance="?attr/textAppearanceBody1" />
+
+    <ProgressBar
+        android:id="@+id/subfolder_tree_loading"
+        style="?android:attr/progressBarStyleSmall"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:layout_marginStart="4dp"
+        android:visibility="gone" />
+
+</LinearLayout>

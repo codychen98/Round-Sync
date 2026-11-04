@@ -33,6 +33,31 @@ class SubfolderFilterRulesTest {
     }
 
     @Test
+    fun nestedRelativePathsRoundTripThroughBuildAndParse() {
+        val selected = listOf("(Hobbies)/Cameras", "(Life)")
+        val filter = Filter(1)
+        filter.setFilters(SubfolderFilterRules.buildRules(selected))
+        assertEquals(
+            setOf("(Hobbies)/Cameras", "(Life)"),
+            SubfolderFilterRules.parseSelectedFolders(filter),
+        )
+        assertEquals("/(Hobbies)/Cameras/**", filter.getFilters()[0].filter)
+        assertEquals("/(Life)/**", filter.getFilters()[1].filter)
+        assertEquals("**", filter.getFilters()[2].filter)
+    }
+
+    @Test
+    fun pruneRedundantDropsDescendantsOfSelectedParents() {
+        val rules = SubfolderFilterRules.buildRules(
+            listOf("(Hobbies)", "(Hobbies)/Cameras", "(Life)"),
+        )
+        assertEquals(3, rules.size)
+        assertEquals("/(Hobbies)/**", rules[0].filter)
+        assertEquals("/(Life)/**", rules[1].filter)
+        assertEquals("**", rules[2].filter)
+    }
+
+    @Test
     fun parseSelectedFoldersRejectsNonGeneratedShapes() {
         assertNull(SubfolderFilterRules.parseSelectedFolders(null))
 
@@ -45,15 +70,6 @@ class SubfolderFilterRulesTest {
             listOf(FilterEntry(FilterEntry.FILTER_INCLUDE, "/(Life)/**")),
         )
         assertNull(SubfolderFilterRules.parseSelectedFolders(missingExclude))
-
-        val nested = Filter(3)
-        nested.setFilters(
-            listOf(
-                FilterEntry(FilterEntry.FILTER_INCLUDE, "/a/b/**"),
-                FilterEntry(FilterEntry.FILTER_EXCLUDE, "**"),
-            ),
-        )
-        assertNull(SubfolderFilterRules.parseSelectedFolders(nested))
 
         val emptyName = Filter(4)
         emptyName.setFilters(
@@ -76,5 +92,22 @@ class SubfolderFilterRulesTest {
     @Test
     fun buildRulesEmptyInputReturnsEmptyList() {
         assertTrue(SubfolderFilterRules.buildRules(emptyList()).isEmpty())
+    }
+
+    @Test
+    fun ancestorPathsListsParentsShortestFirst() {
+        assertEquals(
+            listOf("(Hobbies)", "(Hobbies)/Cameras"),
+            SubfolderFilterRules.ancestorPaths("(Hobbies)/Cameras/2024"),
+        )
+        assertTrue(SubfolderFilterRules.ancestorPaths("(Life)").isEmpty())
+    }
+
+    @Test
+    fun escapeRelativePathEscapesEachSegment() {
+        assertEquals(
+            "\\[2024\\]/a\\*b",
+            SubfolderFilterRules.escapeRelativePath("[2024]/a*b"),
+        )
     }
 }
