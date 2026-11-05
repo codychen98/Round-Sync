@@ -11,11 +11,12 @@ import androidx.recyclerview.widget.RecyclerView
 import ca.pkay.rcloneexplorer.R
 
 /**
- * Flat visible list of tree rows: expand toggles children; checkbox edits [selectedPaths] only
- * (no auto-check of descendants).
+ * Flat visible list of tree rows. Checking/unchecking is handled by [onCheckedChange] so the
+ * dialog can cascade to loaded descendants.
  */
 class SubfolderTreeAdapter(
-    private val selectedPaths: MutableSet<String>,
+    private val isSelected: (String) -> Boolean,
+    private val onCheckedChange: (Node, Boolean) -> Unit,
     private val onExpandClick: (Node) -> Unit,
 ) : RecyclerView.Adapter<SubfolderTreeAdapter.Holder>() {
 
@@ -60,13 +61,9 @@ class SubfolderTreeAdapter(
 
         holder.name.text = node.name
         holder.check.setOnCheckedChangeListener(null)
-        holder.check.isChecked = node.relativePath in selectedPaths
+        holder.check.isChecked = isSelected(node.relativePath)
         holder.check.setOnCheckedChangeListener { _, isChecked ->
-            if (isChecked) {
-                selectedPaths.add(node.relativePath)
-            } else {
-                selectedPaths.remove(node.relativePath)
-            }
+            onCheckedChange(node, isChecked)
         }
 
         holder.loading.visibility = if (node.loading) View.VISIBLE else View.GONE

@@ -13,20 +13,25 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import es.dmoral.toasty.Toasty
 
 /**
- * Expandable multi-select of folders under [remotePath]. Children load lazily on expand.
- * Selected values are relative paths (may contain `/`); recursive sync is encoded by the filter rules.
+ * Expandable multi-select of folders under [remotePath]. Checking a folder also checks all
+ * currently loaded descendants; unchecking clears that subtree (and records an exclude when an
+ * ancestor stays selected). Children load lazily on expand.
  */
 class SubfolderPickerDialog(
     private val activity: AppCompatActivity,
     private val rclone: Rclone,
     private val remote: RemoteItem,
     private val remotePath: String,
-    private val preselected: Set<String>,
-    private val onPicked: (List<String>) -> Unit,
+    preselectedRoots: Set<String>,
+    preExcluded: Set<String>,
+    private val onPicked: (selected: List<String>, known: List<String>) -> Unit,
 ) {
 
     private val selectedPaths = LinkedHashSet(
-        preselected.map { SubfolderFilterRules.normalizeRelativePath(it) }.filter { it.isNotEmpty() },
+        preselectedRoots.map { SubfolderFilterRules.normalizeRelativePath(it) }.filter { it.isNotEmpty() },
+    )
+    private val excludedPaths = LinkedHashSet(
+        preExcluded.map { SubfolderFilterRules.normalizeRelativePath(it) }.filter { it.isNotEmpty() },
     )
     private val childrenCache = HashMap<String, List<SubfolderTreeAdapter.Node>>()
     private lateinit var roots: List<SubfolderTreeAdapter.Node>
@@ -40,7 +45,8 @@ class SubfolderPickerDialog(
             if (rootListing != null && rootListing.isNotEmpty()) {
                 roots = rootListing
                 childrenCache[""] = roots
-                prefetchAncestorsForPreselection()
+                prefetchForPreselection()
+                applySelectionToLoadedTree()
             }
             activity.runOnUiThread {
                 Dialogs.dismissSilently(loading)
@@ -66,21 +72,38 @@ class SubfolderPickerDialog(
         }.start()
     }
 
-    /** Loads and expands ancestors of preselected nested paths (call on a worker thread). */
-    private fun prefetchAncestorsForPreselection() {
-        val ancestors = selectedPaths
-            .flatMap { SubfolderFilterRules.ancestorPaths(it) }
-            .distinct()
-            .sortedBy { it.length }
-        for (ancestor in ancestors) {
-            val node = findNode(roots, ancestor) ?: continue
-            if (!node.childrenLoaded) {
-                val kids = listChildFolders(ancestor) ?: continue
-                node.children = kids
-                node.childrenLoaded = true
-                childrenCache[ancestor] = kids
+    /** Prefetches and expands ancestors of include roots and excludes so nested checks are visible. */
+    private fun prefetchForPreselection() {
+        for (path in selectedPaths + excludedPaths) {
+            for (ancestor in SubfolderFilterRules.ancestorPaths(path)) {
+                val node = findNode(roots, ancestor) ?: break
+                ensureChildrenLoaded(node)
+                node.expanded = true
             }
-            node.expanded = true
+        }
+    }
+
+    private fun ensureChildrenLoaded(node: SubfolderTreeAdapter.Node) {
+        if (node.childrenLoaded) {
+            return
+        }
+        val kids = listChildFolders(node.relativePath) ?: return
+        node.children = kids
+        node.childrenLoaded = true
+        childrenCache[node.relativePath] = kids
+    }
+
+    /** After prefetch, mark selected roots and cascade to loaded children except excludes. */
+    private fun applySelectionToLoadedTree() {
+        val rootsToSelect = selectedPaths.toList()
+        selectedPaths.clear()
+        for (rootPath in rootsToSelect) {
+            val node = findNode(roots, rootPath)
+            if (node != null) {
+                selectCascade(node)
+            } else {
+                selectedPaths.add(rootPath)
+            }
         }
     }
 
@@ -89,7 +112,11 @@ class SubfolderPickerDialog(
         val list = content.findViewById<RecyclerView>(R.id.subfolder_tree_list)
         val maxHeight = (activity.resources.displayMetrics.heightPixels * 0.55f).toInt()
         list.layoutParams = list.layoutParams.apply { height = maxHeight }
-        adapter = SubfolderTreeAdapter(selectedPaths) { node -> toggleExpand(node) }
+        adapter = SubfolderTreeAdapter(
+            isSelected = { path -> path in selectedPaths },
+            onCheckedChange = { node, checked -> onNodeChecked(node, checked) },
+            onExpandClick = { node -> toggleExpand(node) },
+        )
         list.layoutManager = LinearLayoutManager(activity)
         list.adapter = adapter
         adapter.rebuildVisibleFromRoots(roots)
@@ -99,9 +126,43 @@ class SubfolderPickerDialog(
             .setView(content)
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.ok) { _, _ ->
-                onPicked(selectedPaths.toList())
+                onPicked(selectedPaths.toList(), collectKnownPaths(roots).toList())
             }
             .show()
+    }
+
+    private fun onNodeChecked(node: SubfolderTreeAdapter.Node, checked: Boolean) {
+        if (checked) {
+            selectCascade(node)
+        } else {
+            deselectCascade(node)
+        }
+        adapter.rebuildVisibleFromRoots(roots)
+    }
+
+    private fun selectCascade(node: SubfolderTreeAdapter.Node) {
+        selectedPaths.add(node.relativePath)
+        excludedPaths.removeAll { SubfolderFilterRules.isUnderOrEqual(it, node.relativePath) }
+        for (child in node.children) {
+            if (!isUnderExcluded(child.relativePath)) {
+                selectCascade(child)
+            }
+        }
+    }
+
+    private fun deselectCascade(node: SubfolderTreeAdapter.Node) {
+        selectedPaths.removeAll { SubfolderFilterRules.isUnderOrEqual(it, node.relativePath) }
+        val hasSelectedAncestor = selectedPaths.any { ancestor ->
+            node.relativePath.startsWith("$ancestor/")
+        }
+        excludedPaths.removeAll { SubfolderFilterRules.isUnderOrEqual(it, node.relativePath) }
+        if (hasSelectedAncestor) {
+            excludedPaths.add(node.relativePath)
+        }
+    }
+
+    private fun isUnderExcluded(path: String): Boolean {
+        return excludedPaths.any { SubfolderFilterRules.isUnderOrEqual(path, it) }
     }
 
     private fun toggleExpand(node: SubfolderTreeAdapter.Node) {
@@ -115,6 +176,7 @@ class SubfolderPickerDialog(
         }
         if (node.childrenLoaded) {
             node.expanded = true
+            autoSelectNewChildrenIfParentSelected(node)
             adapter.rebuildVisibleFromRoots(roots)
             return
         }
@@ -141,6 +203,7 @@ class SubfolderPickerDialog(
                 node.childrenLoaded = true
                 childrenCache[node.relativePath] = kids
                 node.expanded = true
+                autoSelectNewChildrenIfParentSelected(node)
                 if (kids.isEmpty()) {
                     Toasty.info(
                         activity,
@@ -152,6 +215,31 @@ class SubfolderPickerDialog(
                 adapter.rebuildVisibleFromRoots(roots)
             }
         }.start()
+    }
+
+    private fun autoSelectNewChildrenIfParentSelected(node: SubfolderTreeAdapter.Node) {
+        if (node.relativePath !in selectedPaths) {
+            return
+        }
+        for (child in node.children) {
+            if (!isUnderExcluded(child.relativePath)) {
+                selectCascade(child)
+            }
+        }
+    }
+
+    private fun collectKnownPaths(nodes: List<SubfolderTreeAdapter.Node>): Set<String> {
+        val out = LinkedHashSet<String>()
+        fun walk(node: SubfolderTreeAdapter.Node) {
+            out.add(node.relativePath)
+            for (child in node.children) {
+                walk(child)
+            }
+        }
+        for (node in nodes) {
+            walk(node)
+        }
+        return out
     }
 
     /**

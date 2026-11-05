@@ -58,6 +58,33 @@ class SubfolderFilterRulesTest {
     }
 
     @Test
+    fun buildRulesEmitsExcludeBeforeIncludeWhenChildUncheckedUnderParent() {
+        val selected = setOf("A", "A/B", "A/D")
+        val known = setOf("A", "A/B", "A/C", "A/D")
+        val rules = SubfolderFilterRules.buildRules(selected, known)
+        assertEquals(3, rules.size)
+        assertEquals(FilterEntry.FILTER_EXCLUDE, rules[0].filterType)
+        assertEquals("/A/C/**", rules[0].filter)
+        assertEquals(FilterEntry.FILTER_INCLUDE, rules[1].filterType)
+        assertEquals("/A/**", rules[1].filter)
+        assertEquals(FilterEntry.FILTER_EXCLUDE, rules[2].filterType)
+        assertEquals("**", rules[2].filter)
+    }
+
+    @Test
+    fun parseFolderSelectionRoundTripsExcludesAndIncludes() {
+        val rules = SubfolderFilterRules.buildRules(
+            selectedPaths = setOf("A", "A/B", "A/D"),
+            knownPaths = setOf("A", "A/B", "A/C", "A/D"),
+        )
+        val filter = Filter(1)
+        filter.setFilters(rules)
+        val parsed = SubfolderFilterRules.parseFolderSelection(filter)!!
+        assertEquals(setOf("A"), parsed.selectedRoots)
+        assertEquals(setOf("A/C"), parsed.excluded)
+    }
+
+    @Test
     fun parseSelectedFoldersRejectsNonGeneratedShapes() {
         assertNull(SubfolderFilterRules.parseSelectedFolders(null))
 

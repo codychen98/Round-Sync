@@ -325,9 +325,16 @@ class TaskActivity : AppCompatActivity(), FolderSelectorCallback{
             return
         }
         val current = currentFilterOrNull()
-        val preselected = SubfolderFilterRules.parseSelectedFolders(current) ?: emptySet()
-        SubfolderPickerDialog(this, rcloneInstance, remote, path, preselected) { names ->
-            applySubfolderPick(path, current, names)
+        val parsed = SubfolderFilterRules.parseFolderSelection(current)
+        SubfolderPickerDialog(
+            this,
+            rcloneInstance,
+            remote,
+            path,
+            parsed?.selectedRoots ?: emptySet(),
+            parsed?.excluded ?: emptySet(),
+        ) { selected, known ->
+            applySubfolderPick(path, current, selected, known)
         }.show()
     }
 
@@ -340,12 +347,17 @@ class TaskActivity : AppCompatActivity(), FolderSelectorCallback{
         return if (position > 0 && position - 1 < items.size) items[position - 1] else null
     }
 
-    private fun applySubfolderPick(path: String, current: Filter?, names: List<String>) {
-        if (names.isEmpty()) {
+    private fun applySubfolderPick(
+        path: String,
+        current: Filter?,
+        selected: List<String>,
+        known: List<String>,
+    ) {
+        if (selected.isEmpty()) {
             Toasty.info(this, getString(R.string.task_subfolders_none_selected), Toast.LENGTH_SHORT, true).show()
             return
         }
-        val rules = SubfolderFilterRules.buildRules(names)
+        val rules = SubfolderFilterRules.buildRules(selected, known)
         val target = if (current != null && SubfolderFilterRules.isGenerated(current)) {
             current.setFilters(rules)
             dbHandler.updateFilter(current)

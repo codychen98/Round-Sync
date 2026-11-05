@@ -401,7 +401,7 @@
     <string name="task_edit_hint_remote">Remote Path</string>
     <string name="task_edit_label_filter">Filter</string>
     <string name="task_subfolders_button">Choose folders…</string>
-    <string name="task_subfolders_hint">Choose folders under the remote path to sync (nested picks allowed; each selection includes its contents). Keep \"delete excluded\" off unless other local files should be removed. Use Filter below for extra hand-made rules.</string>
+    <string name="task_subfolders_hint">Choose folders under the remote path. Checking a folder also checks its subfolders; uncheck any you want left out. Keep \"delete excluded\" off unless other local files should be removed. Use Filter below for extra hand-made rules.</string>
     <string name="task_subfolders_dialog_title">Choose folders to sync</string>
     <string name="task_subfolders_need_remote_path">Select a remote and a remote path first</string>
     <string name="task_subfolders_list_failed">Could not list the remote path</string>
