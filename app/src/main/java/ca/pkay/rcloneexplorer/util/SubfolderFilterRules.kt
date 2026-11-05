@@ -6,9 +6,9 @@ import ca.pkay.rcloneexplorer.Items.FilterEntry
 /**
  * Builds and recognizes rclone filter rules from the task editor's folder picker.
  *
- * Shape: optional `- /path/**` excludes (deselected under a selected ancestor), then
- * `+ /path/**` includes, then a final `- **`. Excludes are listed first so rclone matches them
- * before a broader parent include.
+ * Shape: optional path excludes (deselected under a selected ancestor), then path includes,
+ * then a final exclude-all. Excludes are listed first so rclone matches them before a broader
+ * parent include.
  */
 object SubfolderFilterRules {
 
@@ -84,7 +84,7 @@ object SubfolderFilterRules {
      *
      * [knownPaths] should include every folder node the picker has listed. Known paths that sit
      * under a selected include root but are not themselves selected become exclude rules
-     * (so unchecking subfolder C under checked A yields `- /A/C/**` then `+ /A/**`).
+     * (uncheck C under checked A yields exclude C, then include A, then exclude-all).
      */
     fun buildRules(
         selectedPaths: Collection<String>,
