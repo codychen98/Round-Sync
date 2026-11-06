@@ -936,6 +936,35 @@ public class Rclone {
         return process;
     }
 
+    public Process copyTo(RemoteItem remote, FileItem copyItem, String newLocation, String newName) {
+        String remoteName = remote.getName();
+        String[] command;
+        String oldFilePath;
+        String newFilePath;
+        Process process = null;
+        String localRemotePath;
+
+        if (remote.isRemoteType(RemoteItem.LOCAL) && (!remote.isAlias() && !remote.isCrypt() && !remote.isCache())) {
+            localRemotePath = getLocalRemotePathPrefix(remote, context) + "/";
+        } else {
+            localRemotePath = "";
+        }
+
+        oldFilePath = remoteName + ":" + localRemotePath + copyItem.getPath();
+        newFilePath = (newLocation.compareTo("//" + remoteName) == 0)
+                ? remoteName + ":" + localRemotePath + newName
+                : remoteName + ":" + localRemotePath + newLocation + "/" + newName;
+        command = createCommandWithOptions("copyto", oldFilePath, newFilePath);
+        String[] env = getRcloneEnv();
+        try {
+            process = getRuntimeProcess(command, env);
+        } catch (IOException e) {
+            FLog.e(TAG, "copyTo: error starting rclone", e);
+        }
+
+        return process;
+    }
+
     public Boolean moveTo(RemoteItem remote, String oldFile, String newFile) {
         String remoteName = remote.getName();
         String localRemotePath;

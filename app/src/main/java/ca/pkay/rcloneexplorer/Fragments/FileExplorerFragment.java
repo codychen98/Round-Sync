@@ -31,6 +31,7 @@ import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -67,6 +68,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -155,6 +157,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     private final String SAVED_RENAME_ITEM = "ca.pkay.rcexplorer.FILE_EXPLORER_FRAG_RENAME_ITEM";
     private final String SAVED_SELECTED_ITEMS = "ca.pkay.rcexplorer.FILE_EXPLORER_FRAG_SELECTED_ITEMS";
     private final String SAVED_IS_IN_MOVE_MODE = "ca.pkay.rcexplorer.FILE_EXPLORER_FRAG_IS_IN_MOVE_MODE";
+    private final String SAVED_IS_IN_COPY_MODE = "ca.pkay.rcexplorer.FILE_EXPLORER_FRAG_IS_IN_COPY_MODE";
     private final String SAVED_START_AT_BOOT = "ca.pkay.rcexplorer.FILE_EXPLORER_FRAG_START_AT_BOOT";
     private final String SAVED_DOWNLOAD_LIST = "ca.pkay.rcexplorer.FILE_EXPLORER_FRAG_DOWNLOAD_LIST";
     private final String SAVED_MOVE_START_PATH = "ca.pkay.rcexplorer.FILE_EXPLORER_FRAG_MOVE_START_PATH";
@@ -188,6 +191,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     private boolean isRunning;
     private int sortOrder;
     private boolean isInMoveMode;
+    private boolean isCopyMode;
     private SpeedDialView fab;
     private MenuItem menuSelectAll;
     private MenuItem menuGoTo;
@@ -314,6 +318,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
 
         isSearchMode = false;
         isInMoveMode = false;
+        isCopyMode = false;
         is720dp = getResources().getBoolean(R.bool.is720dp);
     }
 
@@ -521,6 +526,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         }
         if (isInMoveMode) {
             outState.putBoolean(SAVED_IS_IN_MOVE_MODE, true);
+            outState.putBoolean(SAVED_IS_IN_COPY_MODE, isCopyMode);
             outState.putParcelableArrayList(SAVED_SELECTED_ITEMS, new ArrayList<>(moveList));
         }
         if (downloadList != null && !downloadList.isEmpty()) {
@@ -555,10 +561,15 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
 
         if (moveMode) {
             isInMoveMode = true;
+            isCopyMode = savedInstanceState.getBoolean(SAVED_IS_IN_COPY_MODE, false);
             moveList = savedInstanceState.getParcelableArrayList(SAVED_SELECTED_ITEMS);
             recyclerViewAdapter.setMoveMode(true);
             ((FragmentActivity) context).setTitle(getString(R.string.select_destination));
             ((FragmentActivity) context).findViewById(R.id.move_bar).setVisibility(View.VISIBLE);
+            TextView selectMove = ((FragmentActivity) context).findViewById(R.id.select_move);
+            if (selectMove != null) {
+                selectMove.setText(isCopyMode ? R.string.copy_here : R.string.move_here);
+            }
             fab.hide();
             fab.setVisibility(View.INVISIBLE);
             setFabBehaviour(false);
@@ -1312,6 +1323,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                     new DownloadAndOpen(DownloadAndOpen.OPEN_AS_IMAGE, true).execute(item));
         });
 
+        view.findViewById(R.id.file_copy).setOnClickListener(v -> copyFiles(recyclerViewAdapter.getSelectedItems()));
         view.findViewById(R.id.file_move).setOnClickListener(v -> moveFiles(recyclerViewAdapter.getSelectedItems()));
 
         view.findViewById(R.id.file_rename).setOnClickListener(v -> {
@@ -1374,6 +1386,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         setTitle();
         recyclerViewAdapter.setMoveMode(false);
         isInMoveMode = false;
+        isCopyMode = false;
         hideMoveBar();
         fab.show();
         fab.setVisibility(View.VISIBLE);
@@ -1405,6 +1418,13 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     }
 
     private void moveLocationSelected() {
+        String destination = directoryObject.getCurrentPath();
+        if (moveStartPath != null && moveStartPath.equals(destination) && !isCopyMode) {
+            Toasty.info(context, getString(R.string.already_in_this_folder), Toast.LENGTH_SHORT, true).show();
+            cancelMoveClicked();
+            return;
+        }
+
         setTitle();
         hideMoveBar();
         fab.show();
@@ -1419,6 +1439,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             Toasty.error(context, getString(R.string.error_moving_file), Toast.LENGTH_SHORT, true).show();
             moveList.clear();
             moveStartPath = null;
+            isCopyMode = false;
             return;
         }
         String oldPath = moveList.get(0).getPath();
@@ -1429,12 +1450,116 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         } else {
             path2 = "//" + remoteName;
         }
+
+        HashSet<String> existing = new HashSet<>();
+        List<FileItem> dirContent = directoryObject.getDirectoryContent();
+        if (dirContent != null) {
+            for (FileItem existingItem : dirContent) {
+                existing.add(existingItem.getName());
+            }
+        }
+
+        if (isCopyMode) {
+            for (FileItem copyItem : moveList) {
+                String newName = nextAvailableCopyName(copyItem.getName(), existing);
+                existing.add(newName);
+                EphemeralTaskManager.Companion.queueCopy(
+                        this.context, remote, destination, copyItem, newName);
+            }
+            Toasty.info(context, getString(R.string.copying_info), Toast.LENGTH_SHORT, true).show();
+            moveList.clear();
+            moveStartPath = null;
+            isCopyMode = false;
+            return;
+        }
+
+        List<FileItem> toMove = new ArrayList<>();
         for (FileItem moveItem : moveList) {
-            EphemeralTaskManager.Companion.queueMove(this.context, remote, directoryObject.getCurrentPath(), moveItem, path2);
+            if (moveItem.isDir()) {
+                String itemPath = moveItem.getPath();
+                if (destination.equals(itemPath)
+                        || destination.startsWith(itemPath + "/")) {
+                    continue;
+                }
+            }
+            toMove.add(moveItem);
+        }
+        if (toMove.isEmpty()) {
+            Toasty.error(context, getString(R.string.error_moving_file), Toast.LENGTH_SHORT, true).show();
+            moveList.clear();
+            moveStartPath = null;
+            isCopyMode = false;
+            return;
+        }
+
+        int collisionCount = 0;
+        for (FileItem moveItem : toMove) {
+            if (existing.contains(moveItem.getName())) {
+                collisionCount++;
+            }
+        }
+
+        if (collisionCount > 0) {
+            final List<FileItem> queued = new ArrayList<>(toMove);
+            final String readablePath = path2;
+            AlertDialog.Builder overwriteDialog = new AlertDialog.Builder(context)
+                    .setTitle(R.string.move_overwrite_confirm_title)
+                    .setMessage(getString(R.string.move_overwrite_confirm_message, collisionCount))
+                    .setCancelable(false)
+                    .setNegativeButton(R.string.cancel, (dialog, which) -> restoreMoveModeAfterOverwritePrompt())
+                    .setPositiveButton(R.string.okay_confirmation, (dialog, which) -> {
+                        for (FileItem moveItem : queued) {
+                            EphemeralTaskManager.Companion.queueMove(
+                                    this.context, remote, destination, moveItem, readablePath);
+                        }
+                        Toasty.info(context, getString(R.string.moving_info), Toast.LENGTH_SHORT, true).show();
+                        moveList.clear();
+                        moveStartPath = null;
+                        isCopyMode = false;
+                    });
+            overwriteDialog.show();
+            return;
+        }
+
+        for (FileItem moveItem : toMove) {
+            EphemeralTaskManager.Companion.queueMove(this.context, remote, destination, moveItem, path2);
         }
         Toasty.info(context, getString(R.string.moving_info), Toast.LENGTH_SHORT, true).show();
         moveList.clear();
         moveStartPath = null;
+        isCopyMode = false;
+    }
+
+    private void restoreMoveModeAfterOverwritePrompt() {
+        isInMoveMode = true;
+        isCopyMode = false;
+        recyclerViewAdapter.setMoveMode(true);
+        recyclerViewAdapter.refreshData();
+        ((FragmentActivity) context).setTitle(getString(R.string.select_destination));
+        ((FragmentActivity) context).findViewById(R.id.move_bar).setVisibility(View.VISIBLE);
+        TextView selectMove = ((FragmentActivity) context).findViewById(R.id.select_move);
+        if (selectMove != null) {
+            selectMove.setText(R.string.move_here);
+        }
+        fab.hide();
+        fab.setVisibility(View.INVISIBLE);
+        setFabBehaviour(false);
+        setOptionsMenuVisibility(false);
+        showCancelButtonInToolbar();
+    }
+
+    @NonNull
+    private static String nextAvailableCopyName(@NonNull String name, @NonNull Set<String> existing) {
+        String newName = name;
+        while (existing.contains(newName)) {
+            int dot = newName.lastIndexOf('.');
+            if (dot > 0) {
+                newName = newName.substring(0, dot) + " (copy)" + newName.substring(dot);
+            } else {
+                newName = newName + " (copy)";
+            }
+        }
+        return newName;
     }
 
     private void showCancelButtonInToolbar() {
@@ -1629,6 +1754,9 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         } else if (fab.isOpen()) {
             fab.close(true);
             return true;
+        } else if (isInMoveMode) {
+            cancelMoveClicked();
+            return true;
         } else if (pathStack.isEmpty()) {
             return false;
         }
@@ -1749,6 +1877,12 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                 ((FragmentActivity) context).findViewById(R.id.file_rename).setAlpha(1f);
                 ((FragmentActivity) context).findViewById(R.id.file_rename).setClickable(true);
             }
+            View download = ((FragmentActivity) context).findViewById(R.id.file_download);
+            if (download != null) {
+                boolean hideDownload = remote.isRemoteType(RemoteItem.LOCAL, RemoteItem.SAFW)
+                        || remote.isPathAlias();
+                download.setVisibility(hideDownload ? View.GONE : View.VISIBLE);
+            }
             View openWith = ((FragmentActivity) context).findViewById(R.id.file_open_with);
             if (openWith != null) {
                 boolean singleImage = numOfSelected == 1;
@@ -1835,6 +1969,9 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                     downloadList.add(fileItem);
                     downloadFiles();
                     break;
+                case R.id.action_copy:
+                    copyFiles(Collections.singletonList(fileItem));
+                    break;
                 case R.id.action_move:
                     moveFiles(Collections.singletonList(fileItem));
                     break;
@@ -1884,7 +2021,6 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             popupMenu.getMenu().findItem(R.id.action_link).setVisible(false);
         }
         if (remote.isRemoteType(RemoteItem.LOCAL, RemoteItem.SAFW) || remote.isPathAlias()) {
-            // TODO: replace with .setTitle(copy) once destination copy is added
             popupMenu.getMenu().findItem(R.id.action_download).setVisible(false);
         }
     }
@@ -2084,21 +2220,44 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     }
 
     private void moveFiles(List<FileItem> moveItems) {
-        if (moveItems.size() < 1) {
+        enterDestinationMode(moveItems, false);
+    }
+
+    private void copyFiles(List<FileItem> copyItems) {
+        enterDestinationMode(copyItems, true);
+    }
+
+    private void enterDestinationMode(List<FileItem> items, boolean copyMode) {
+        if (items == null || items.size() < 1) {
+            Toasty.error(context, getString(R.string.error_no_items_selected), Toast.LENGTH_SHORT, true).show();
             return;
         }
+        // Set move mode on the fragment before cancelSelection so onFileDeselected
+        // does not briefly restore fab / bottom bar / options menu.
+        isInMoveMode = true;
+        isCopyMode = copyMode;
         moveStartPath = directoryObject.getCurrentPath();
-        moveList = new ArrayList<>(moveItems);
+        moveList = new ArrayList<>(items);
         recyclerViewAdapter.cancelSelection();
         recyclerViewAdapter.setMoveMode(true);
-        isInMoveMode = true;
+        recyclerViewAdapter.refreshData();
         showCancelButtonInToolbar();
         ((FragmentActivity) context).setTitle(getString(R.string.select_destination));
         ((FragmentActivity) context).findViewById(R.id.move_bar).setVisibility(View.VISIBLE);
+        TextView selectMove = ((FragmentActivity) context).findViewById(R.id.select_move);
+        if (selectMove != null) {
+            selectMove.setText(copyMode ? R.string.copy_here : R.string.move_here);
+        }
         setOptionsMenuVisibility(false);
         fab.hide();
         fab.setVisibility(View.INVISIBLE);
         setFabBehaviour(false);
+        Toasty.info(
+                context,
+                getString(copyMode ? R.string.copy_navigate_hint : R.string.move_navigate_hint),
+                Toast.LENGTH_LONG,
+                true
+        ).show();
     }
 
     private void onCreateNewDirectory() {

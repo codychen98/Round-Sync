@@ -18,6 +18,11 @@
         app:showAsAction="never" />
 
     <item
+        android:id="@+id/action_copy"
+        android:title="@string/copy"
+        app:showAsAction="never" />
+
+    <item
         android:id="@+id/action_move"
         android:title="@string/move"
         app:showAsAction="never" />

@@ -8,6 +8,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import ca.pkay.rcloneexplorer.Items.FileItem
 import ca.pkay.rcloneexplorer.Items.RemoteItem
+import de.felixnuesse.extract.notifications.implementations.CopyWorkerNotification
 import de.felixnuesse.extract.notifications.implementations.DeleteWorkerNotification
 import de.felixnuesse.extract.notifications.implementations.DownloadWorkerNotification
 import de.felixnuesse.extract.notifications.implementations.MoveWorkerNotification
@@ -69,6 +70,25 @@ class EphemeralTaskManager(private var mContext: Context) {
 
             addFileItemToData(EphemeralWorker.MOVE_FILE, file, data)
             data.putString(EphemeralWorker.MOVE_TARGETPATH, currentPath)
+            EphemeralTaskManager(context).work(data.build(), "")
+        }
+
+        fun queueCopy(
+            context: Context,
+            remote: RemoteItem,
+            targetPath: String,
+            file: FileItem,
+            newName: String
+        ) {
+            CopyWorkerNotification(context).generateChannels()
+
+            val data = Data.Builder()
+            data.putString(EphemeralWorker.EPHEMERAL_TYPE, Type.COPY.name)
+            addRemoteItemToData(EphemeralWorker.REMOTE, remote, data)
+
+            addFileItemToData(EphemeralWorker.COPY_FILE, file, data)
+            data.putString(EphemeralWorker.COPY_TARGETPATH, targetPath)
+            data.putString(EphemeralWorker.COPY_NEWNAME, newName)
             EphemeralTaskManager(context).work(data.build(), "")
         }
 

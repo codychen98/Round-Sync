@@ -37,6 +37,7 @@ import java.io.InterruptedIOException
 import kotlin.random.Random
 import android.util.Log
 import de.felixnuesse.extract.notifications.implementations.DeleteWorkerNotification
+import de.felixnuesse.extract.notifications.implementations.CopyWorkerNotification
 import de.felixnuesse.extract.notifications.implementations.MoveWorkerNotification
 import de.felixnuesse.extract.notifications.implementations.UploadWorkerNotification
 
@@ -56,6 +57,10 @@ class EphemeralWorker (private var mContext: Context, workerParams: WorkerParame
 
         const val MOVE_FILE = "MOVE_FILE"
         const val MOVE_TARGETPATH = "MOVE_TARGETPATH"
+
+        const val COPY_FILE = "COPY_FILE"
+        const val COPY_TARGETPATH = "COPY_TARGETPATH"
+        const val COPY_NEWNAME = "COPY_NEWNAME"
 
         const val DELETE_FILE = "DELETE_FILE"
         /** Extra remote paths to purge thumbnails for (e.g. known children of a deleted folder). */
@@ -155,6 +160,22 @@ class EphemeralWorker (private var mContext: Context, workerParams: WorkerParame
                             target
                         )
                     }
+                    Type.COPY -> {
+                        val target = inputData.getString(COPY_TARGETPATH)
+                        val fileItem = getFileitemFromParcel(COPY_FILE)
+
+                        if(fileItem == null){
+                            log("$COPY_FILE: No valid target was passed!")
+                            return Result.failure()
+                        }
+
+                        sRcloneProcess = Rclone(mContext).copyTo(
+                            remoteItem,
+                            fileItem,
+                            target,
+                            inputData.getString(COPY_NEWNAME) ?: fileItem.name
+                        )
+                    }
                     Type.DELETE -> {
                         val fileItem = getFileitemFromParcel(DELETE_FILE)
 
@@ -205,6 +226,7 @@ class EphemeralWorker (private var mContext: Context, workerParams: WorkerParame
             Type.UPLOAD -> UploadWorkerNotification(mContext)
             Type.DELETE -> DeleteWorkerNotification(mContext)
             Type.MOVE -> MoveWorkerNotification(mContext)
+            Type.COPY -> CopyWorkerNotification(mContext)
         }
     }
 
@@ -251,6 +273,9 @@ class EphemeralWorker (private var mContext: Context, workerParams: WorkerParame
                     fileItem.name,
                 )
                 ThumbnailLifecycle.carry(mContext, remoteItem.name, fileItem.path, newPath)
+            }
+            Type.COPY -> {
+                // Source keeps its thumbnails; destination will generate on demand.
             }
             else -> {}
         }
@@ -522,6 +547,9 @@ class EphemeralWorker (private var mContext: Context, workerParams: WorkerParame
             }
             Type.MOVE -> {
                 getFileitemFromParcel(MOVE_FILE)
+            }
+            Type.COPY -> {
+                getFileitemFromParcel(COPY_FILE)
             }
             Type.DELETE -> {
                 getFileitemFromParcel(DELETE_FILE)

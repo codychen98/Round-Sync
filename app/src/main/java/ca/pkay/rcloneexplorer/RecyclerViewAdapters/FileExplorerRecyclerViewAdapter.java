@@ -24,6 +24,7 @@ import androidx.annotation.Nullable;
 import androidx.core.widget.ImageViewCompat;
 import androidx.preference.PreferenceManager;
 import androidx.recyclerview.widget.DiffUtil;
+import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -76,6 +77,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     public static final int VIEW_MODE_GRID = 1;
     /** Partial-bind payload: re-run thumbnail Glide bind only (preserves scroll position). */
     public static final String THUMBNAIL_PAYLOAD = "thumbnail_payload";
+    /** Partial-bind payload: selection / move-mode chrome only (no thumbnail rebind). */
+    public static final String SELECTION_PAYLOAD = "selection_payload";
 
     private List<FileItem> files;
     private View emptyView;
@@ -202,6 +205,24 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
                 ? R.layout.fragment_file_explorer_grid_item
                 : R.layout.fragment_file_explorer_item;
         View view = LayoutInflater.from(parent.getContext()).inflate(layoutRes, parent, false);
+        if (viewType == VIEW_MODE_GRID) {
+            View gridThumb = view.findViewById(R.id.grid_thumbnail_container);
+            if (gridThumb != null) {
+                int spanCount = 2;
+                if (parent instanceof RecyclerView) {
+                    RecyclerView.LayoutManager lm = ((RecyclerView) parent).getLayoutManager();
+                    if (lm instanceof GridLayoutManager) {
+                        spanCount = Math.max(1, ((GridLayoutManager) lm).getSpanCount());
+                    }
+                }
+                int parentWidth = parent.getWidth();
+                if (parentWidth > 0) {
+                    ViewGroup.LayoutParams lp = gridThumb.getLayoutParams();
+                    lp.height = parentWidth / spanCount;
+                    gridThumb.setLayoutParams(lp);
+                }
+            }
+        }
         return new ViewHolder(view);
     }
 
@@ -215,6 +236,12 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             if (THUMBNAIL_PAYLOAD.equals(payload)) {
                 if (position >= 0 && position < files.size()) {
                     bindThumbnails(holder, files.get(position), position);
+                }
+                return;
+            }
+            if (SELECTION_PAYLOAD.equals(payload)) {
+                if (position >= 0 && position < files.size()) {
+                    bindSelectionChrome(holder, files.get(position));
                 }
                 return;
             }
@@ -285,34 +312,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         
         holder.fileName.setText(item.getName());
 
-        if (isInSelectMode) {
-            if (selectedItems.contains(item)) {
-                holder.view.setBackgroundColor(getSelectionBackgroundColor());
-            } else {
-                holder.view.setBackgroundColor(Color.TRANSPARENT);
-            }
-        } else {
-            holder.view.setBackgroundColor(Color.TRANSPARENT);
-        }
-
-        if (isInMoveMode) {
-            if (item.isDir()) {
-                holder.view.setAlpha(1f);
-            } else {
-                holder.view.setAlpha(.5f);
-            }
-        } else if (holder.view.getAlpha() == .5f) {
-            holder.view.setAlpha(1f);
-        }
-
-        if ((isInSelectMode || isInMoveMode) && !optionsDisabled) {
-            holder.fileOptions.setVisibility(View.INVISIBLE);
-        } else if (optionsDisabled) {
-            holder.fileOptions.setVisibility(View.GONE);
-        } else {
-            holder.fileOptions.setVisibility(View.VISIBLE);
-            holder.fileOptions.setOnClickListener(v -> listener.onFileOptionsClicked(v, item));
-        }
+        bindSelectionChrome(holder, item);
 
         if (wrapFileNames) {
             holder.fileName.setEllipsize(TextUtils.TruncateAt.MIDDLE);
@@ -1997,7 +1997,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
     public void refreshData() {
         invalidateThumbPolicyCache();
-        notifyDataSetChanged();
+        notifySelectionChanged();
     }
 
     public void setMoveMode(Boolean mode) {
@@ -2011,7 +2011,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
     public void setSelectedItems(List<FileItem> selectedItems) {
         this.selectedItems = new ArrayList<>(selectedItems);
         this.isInSelectMode = true;
-        notifyDataSetChanged();
+        notifySelectionChanged();
     }
 
     public Boolean isInSelectMode() {
@@ -2041,7 +2041,8 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
 
     public void setWrapFileNames(boolean wrapFileNames) {
         this.wrapFileNames = wrapFileNames;
-        refreshData();
+        // Full rebind required so ellipsize / single-line update; not a selection-only change.
+        notifyDataSetChanged();
     }
 
     public void setThumbnailProgressListener(ThumbnailProgressListener listener) {
@@ -2107,14 +2108,14 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             selectedItems.addAll(files);
             listener.onFilesSelected();
         }
-        notifyDataSetChanged();
+        notifySelectionChanged();
     }
 
     public void cancelSelection() {
         isInSelectMode = false;
         selectedItems.clear();
         listener.onFileDeselected();
-        notifyDataSetChanged();
+        notifySelectionChanged();
     }
 
     public void setCanSelect(Boolean canSelect) {
@@ -2125,13 +2126,46 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
         return context.getColor(R.color.selectedItem);
     }
 
+    private void notifySelectionChanged() {
+        if (files == null || files.isEmpty()) {
+            return;
+        }
+        notifyItemRangeChanged(0, files.size(), SELECTION_PAYLOAD);
+    }
+
+    private void bindSelectionChrome(@NonNull ViewHolder holder, @NonNull FileItem item) {
+        if (isInSelectMode && selectedItems.contains(item)) {
+            holder.view.setBackgroundColor(getSelectionBackgroundColor());
+        } else {
+            holder.view.setBackgroundColor(Color.TRANSPARENT);
+        }
+
+        if (isInMoveMode) {
+            if (item.isDir()) {
+                holder.view.setAlpha(1f);
+            } else {
+                holder.view.setAlpha(.5f);
+            }
+        } else if (holder.view.getAlpha() == .5f) {
+            holder.view.setAlpha(1f);
+        }
+
+        if ((isInSelectMode || isInMoveMode) && !optionsDisabled) {
+            holder.fileOptions.setVisibility(View.INVISIBLE);
+        } else if (optionsDisabled) {
+            holder.fileOptions.setVisibility(View.GONE);
+        } else {
+            holder.fileOptions.setVisibility(View.VISIBLE);
+            holder.fileOptions.setOnClickListener(v -> listener.onFileOptionsClicked(v, item));
+        }
+    }
+
     private void onLongClickAction(FileItem item, ViewHolder holder) {
         if (selectedItems.contains(item)) {
             selectedItems.remove(item);
             holder.view.setBackgroundColor(Color.TRANSPARENT);
             if (selectedItems.size() == 0) {
                 isInSelectMode = false;
-                listener.onFileDeselected();
             }
             listener.onFileDeselected();
         } else {
@@ -2140,7 +2174,7 @@ public class FileExplorerRecyclerViewAdapter extends RecyclerView.Adapter<FileEx
             holder.view.setBackgroundColor(getSelectionBackgroundColor());
             listener.onFilesSelected();
         }
-        notifyDataSetChanged();
+        notifySelectionChanged();
     }
 
     private int countThumbnailTargets(@NonNull List<FileItem> items) {

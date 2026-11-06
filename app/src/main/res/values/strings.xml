@@ -76,6 +76,14 @@
     <string name="rename_file">Rename a file</string>
     <string name="type_new_file_name">Enter a new file name</string>
     <string name="select_destination">Select destination</string>
+    <string name="move_here">Move here</string>
+    <string name="copy_here">Copy here</string>
+    <string name="move_navigate_hint">Navigate to the destination folder, then tap Move here</string>
+    <string name="copy_navigate_hint">Navigate to the destination folder, then tap Copy here</string>
+    <string name="already_in_this_folder">Already in this folder</string>
+    <string name="move_overwrite_confirm_title">Overwrite existing items?</string>
+    <string name="move_overwrite_confirm_message">%d item(s) already exist and will be overwritten. Continue?</string>
+    <string name="error_no_items_selected">No items selected</string>
     <string name="create_new_folder">Create a folder</string>
     <string name="hint_new_folder">Foldername</string>
     <string name="type_new_folder_name">Enter a new folder name</string>
@@ -179,6 +187,7 @@
     <string name="background_service_broadcast_data_path2" translatable="false">ca.pkay.rcexplorer.BACKGROUND_SERVICE_BROADCAST_DATA_PATH2</string>
     <string name="sync_service_notification_channel_description">Background service for sync</string>
     <string name="moving_info">Moving…</string>
+    <string name="copying_info">Copying…</string>
     <string name="deleting_info">Deleting…</string>
     <string name="operation_failed">Sync failed</string>
     <string name="operation_failed_unknown">%1$s could not be synchronized due to an unknown error</string>
@@ -471,6 +480,10 @@
         <item quantity="zero">Nothing was moved.</item>
         <item quantity="other">%s was moved!</item>
     </plurals>
+    <plurals name="worker_copy_success_message">
+        <item quantity="zero">Nothing was copied.</item>
+        <item quantity="other">%s was copied!</item>
+    </plurals>
     <plurals name="worker_download_success_message">
         <item quantity="zero">Nothing was downloaded.</item>
         <item quantity="one">%s File was downloaded!</item>
@@ -703,12 +716,17 @@
     <string name="delete_service_notification_description">This notification shows deletions</string>
     <string name="move_service_notification_title">Moves</string>
     <string name="move_service_notification_description">This notification shows moves</string>
+    <string name="copy_service_notification_title">Copies</string>
+    <string name="copy_service_notification_description">This notification shows copies</string>
     <string name="worker_deleting_initialtitle">Deleting…</string>
     <string name="worker_deleting_success">Deleted!</string>
     <string name="worker_deleting_failed">Failed to delete files or folders!</string>
     <string name="worker_move_initialtitle">Moving…</string>
     <string name="worker_move_failed">Move failed!</string>
     <string name="worker_move_success">Move was successful!</string>
+    <string name="worker_copy_initialtitle">Copying…</string>
+    <string name="worker_copy_failed">Copy failed!</string>
+    <string name="worker_copy_success">Copy was successful!</string>
     <string name="worker_download_initialtitle">Downloading…</string>
     <string name="worker_upload_initialtitle">Uploading…</string>
     <string name="appupdate_incompatible">This update is incompatible with your device!</string>
