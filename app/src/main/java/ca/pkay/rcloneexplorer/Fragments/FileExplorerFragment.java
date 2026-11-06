@@ -193,6 +193,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     private boolean isInMoveMode;
     private boolean isCopyMode;
     private SpeedDialView fab;
+    private MenuItem menuCancel;
     private MenuItem menuSelectAll;
     private MenuItem menuGoTo;
     private MenuItem menuLink;
@@ -717,6 +718,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
         super.onCreateOptionsMenu(menu, inflater);
         inflater.inflate(R.menu.file_explorer_folder_menu, menu);
+        menuCancel = menu.findItem(R.id.action_cancel);
         menuSelectAll = menu.findItem(R.id.action_select_all);
         menuGoTo = menu.findItem(R.id.action_go_to);
         menuLink = menu.findItem(R.id.action_link);
@@ -741,6 +743,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         if (isInMoveMode || recyclerViewAdapter.isInSelectMode()) {
             setOptionsMenuVisibility(false);
         }
+        updateCancelActionVisibility();
+        showNavDrawerButtonInToolbar();
     }
 
     private void setOptionsMenuVisibility(boolean setVisible) {
@@ -766,6 +770,16 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         if (remote.isRemoteType(RemoteItem.SFTP)) {
             menuGoTo.setVisible(setVisible);
         }
+        updateCancelActionVisibility();
+    }
+
+    private void updateCancelActionVisibility() {
+        if (menuCancel == null) {
+            return;
+        }
+        boolean show = isInMoveMode
+                || (recyclerViewAdapter != null && recyclerViewAdapter.isInSelectMode());
+        menuCancel.setVisible(show);
     }
 
     @Override
@@ -773,6 +787,14 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         int id = item.getItemId();
 
         switch (id) {
+            case R.id.action_cancel:
+                if (isInMoveMode) {
+                    cancelMoveClicked();
+                } else if (recyclerViewAdapter != null && recyclerViewAdapter.isInSelectMode()) {
+                    recyclerViewAdapter.cancelSelection();
+                    showNavDrawerButtonInToolbar();
+                }
+                return true;
             case R.id.action_toggle_view_mode:
                 isGridMode = !isGridMode;
                 applyViewMode(true);
@@ -799,13 +821,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
                 showSFTPgoToDialog();
                 return true;
             case android.R.id.home:
-                if (isInMoveMode) {
-                    cancelMoveClicked();
-                } else if (recyclerViewAdapter.isInSelectMode()) {
-                    recyclerViewAdapter.cancelSelection();
-                } else {
-                    ((MainActivity)context).openNavigationDrawer();
-                }
+                ((MainActivity) context).openNavigationDrawer();
                 return true;
             default:
                     return super.onOptionsItemSelected(item);
@@ -1393,6 +1409,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         setFabBehaviour(true);
         showNavDrawerButtonInToolbar();
         setOptionsMenuVisibility(true);
+        updateCancelActionVisibility();
         recyclerViewAdapter.refreshData();
 
         if (moveStartPath != null && !moveStartPath.equals(directoryObject.getCurrentPath())) {
@@ -1430,10 +1447,12 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         fab.show();
         fab.setVisibility(View.VISIBLE);
         setFabBehaviour(true);
-        setOptionsMenuVisibility(true);
         recyclerViewAdapter.setMoveMode(false);
         recyclerViewAdapter.refreshData();
+        // Clear move chrome before menu update so Cancel hides; keep isCopyMode for queue branch below.
         isInMoveMode = false;
+        setOptionsMenuVisibility(true);
+        updateCancelActionVisibility();
         showNavDrawerButtonInToolbar();
         if (moveList.size() < 1) {
             Toasty.error(context, getString(R.string.error_moving_file), Toast.LENGTH_SHORT, true).show();
@@ -1545,7 +1564,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         fab.setVisibility(View.INVISIBLE);
         setFabBehaviour(false);
         setOptionsMenuVisibility(false);
-        showCancelButtonInToolbar();
+        showNavDrawerButtonInToolbar();
+        updateCancelActionVisibility();
     }
 
     @NonNull
@@ -1560,14 +1580,6 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             }
         }
         return newName;
-    }
-
-    private void showCancelButtonInToolbar() {
-        ActionBar actionbar = ((AppCompatActivity) context).getSupportActionBar();
-        if (actionbar != null) {
-            actionbar.setDisplayHomeAsUpEnabled(true);
-            actionbar.setHomeAsUpIndicator(R.drawable.ic_cancel_white);
-        }
     }
 
     private void showNavDrawerButtonInToolbar() {
@@ -1744,20 +1756,18 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
     }
 
     public boolean onBackButtonPressed() {
-        if (recyclerViewAdapter.isInSelectMode()) {
-            recyclerViewAdapter.cancelSelection();
-            showNavDrawerButtonInToolbar();
-            return true;
-        } else if (isSearchMode) {
+        if (isSearchMode) {
             searchClicked();
             return true;
         } else if (fab.isOpen()) {
             fab.close(true);
             return true;
-        } else if (isInMoveMode) {
-            cancelMoveClicked();
-            return true;
         } else if (pathStack.isEmpty()) {
+            // At remote root: exit move/copy destination mode instead of leaving the remote.
+            if (isInMoveMode) {
+                cancelMoveClicked();
+                return true;
+            }
             return false;
         }
         if (!isInMoveMode && !recyclerViewAdapter.isInSelectMode()) {
@@ -1869,7 +1879,8 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             fab.setVisibility(View.INVISIBLE);
             setFabBehaviour(false);
             setOptionsMenuVisibility(false);
-            showCancelButtonInToolbar();
+            showNavDrawerButtonInToolbar();
+            updateCancelActionVisibility();
             if (numOfSelected > 1) {
                 ((FragmentActivity) context).findViewById(R.id.file_rename).setAlpha(.5f);
                 ((FragmentActivity) context).findViewById(R.id.file_rename).setClickable(false);
@@ -1905,6 +1916,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             setFabBehaviour(true);
             setOptionsMenuVisibility(true);
             showNavDrawerButtonInToolbar();
+            updateCancelActionVisibility();
         } else {
             handleFilesSelected();
         }
@@ -2241,7 +2253,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
         recyclerViewAdapter.cancelSelection();
         recyclerViewAdapter.setMoveMode(true);
         recyclerViewAdapter.refreshData();
-        showCancelButtonInToolbar();
+        showNavDrawerButtonInToolbar();
         ((FragmentActivity) context).setTitle(getString(R.string.select_destination));
         ((FragmentActivity) context).findViewById(R.id.move_bar).setVisibility(View.VISIBLE);
         TextView selectMove = ((FragmentActivity) context).findViewById(R.id.select_move);
@@ -2249,6 +2261,7 @@ public class FileExplorerFragment extends Fragment implements   FileExplorerRecy
             selectMove.setText(copyMode ? R.string.copy_here : R.string.move_here);
         }
         setOptionsMenuVisibility(false);
+        updateCancelActionVisibility();
         fab.hide();
         fab.setVisibility(View.INVISIBLE);
         setFabBehaviour(false);
